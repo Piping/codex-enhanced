@@ -102,6 +102,14 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install Linux build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libcap-dev pkg-config
+
       - name: Build release binaries
         shell: bash
         run: |
