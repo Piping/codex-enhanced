@@ -1084,13 +1084,12 @@ pub(crate) async fn obtain_api_key(
 }
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::assert_eq;
-
     use super::TokenEndpointErrorDetail;
     use super::parse_token_endpoint_error;
     use super::redact_sensitive_query_value;
     use super::redact_sensitive_url_parts;
     use super::sanitize_url_for_logging;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn parse_token_endpoint_error_prefers_error_description() {

@@ -341,6 +341,14 @@ use crate::streaming::controller::PlanStreamController;
 use crate::streaming::controller::StreamController;
 
 use chrono::Local;
+use chrono::Utc;
+use codex_core::CodexAuth;
+use codex_ext::AccountManagementProfile;
+use codex_ext::AccountPoolStore;
+use codex_ext::AccountRateLimitSnapshot;
+use codex_ext::AccountRateLimitWindow;
+use codex_ext::LimitSignalKind;
+use codex_ext::infer_limit_signal;
 use codex_file_search::FileMatch;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelPreset;
@@ -587,6 +595,47 @@ fn app_server_rate_limit_error_kind(info: &AppServerCodexErrorInfo) -> Option<Ra
     }
 }
 
+fn account_rate_limit_snapshot(snapshot: &RateLimitSnapshot) -> AccountRateLimitSnapshot {
+    AccountRateLimitSnapshot {
+        limit_name: snapshot.limit_name.clone(),
+        primary: snapshot
+            .primary
+            .as_ref()
+            .map(account_rate_limit_window_from_protocol),
+        secondary: snapshot
+            .secondary
+            .as_ref()
+            .map(account_rate_limit_window_from_protocol),
+    }
+}
+
+fn account_rate_limit_snapshot_ref(snapshot: &RateLimitSnapshot) -> AccountRateLimitSnapshot {
+    account_rate_limit_snapshot(snapshot)
+}
+
+fn account_rate_limit_window_from_protocol(
+    window: &codex_protocol::protocol::RateLimitWindow,
+) -> AccountRateLimitWindow {
+    AccountRateLimitWindow {
+        used_percent: window.used_percent,
+        window_minutes: window.window_minutes,
+        resets_at: window.resets_at,
+    }
+}
+
+fn mask_email(email: &str) -> String {
+    let Some((local, domain)) = email.split_once('@') else {
+        return email.to_string();
+    };
+    let visible = local.chars().take(3).collect::<String>();
+    let masked = if local.chars().count() > 3 {
+        format!("{visible}***")
+    } else {
+        format!("{visible}*")
+    };
+    format!("{masked}@{domain}")
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum ExternalEditorState {
     #[default]
@@ -726,6 +775,7 @@ pub(crate) struct ChatWidget {
     status_account_display: Option<StatusAccountDisplay>,
     token_info: Option<TokenUsageInfo>,
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
+    latest_codex_rate_limit_snapshot: Option<RateLimitSnapshot>,
     plan_type: Option<PlanType>,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
@@ -2386,6 +2436,10 @@ impl ChatWidget {
             self.plan_type = snapshot.plan_type.or(self.plan_type);
 
             let is_codex_limit = limit_id.eq_ignore_ascii_case("codex");
+            if is_codex_limit {
+                self.latest_codex_rate_limit_snapshot = Some(snapshot.clone());
+                self.persist_managed_account_rate_limit_snapshot(&snapshot);
+            }
             let warnings = if is_codex_limit {
                 self.rate_limit_warnings.take_warnings(
                     snapshot
@@ -2442,6 +2496,7 @@ impl ChatWidget {
             }
         } else {
             self.rate_limit_snapshots_by_limit_id.clear();
+            self.latest_codex_rate_limit_snapshot = None;
         }
         self.refresh_status_line();
     }
@@ -2506,6 +2561,11 @@ impl ChatWidget {
             match info {
                 RateLimitErrorKind::ServerOverloaded => self.on_server_overloaded_error(message),
                 RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
+                    self.persist_managed_account_limit_signal(match info {
+                        RateLimitErrorKind::UsageLimit => LimitSignalKind::UsageLimit,
+                        RateLimitErrorKind::Generic => LimitSignalKind::RateLimit,
+                        RateLimitErrorKind::ServerOverloaded => unreachable!(),
+                    });
                     self.on_error(message)
                 }
             }
@@ -4201,6 +4261,7 @@ impl ChatWidget {
             status_account_display,
             token_info: None,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
+            latest_codex_rate_limit_snapshot: None,
             plan_type: initial_plan_type,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
@@ -4314,6 +4375,15 @@ impl ChatWidget {
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'p') => {
+                self.app_event_tx.send(AppEvent::OpenControlPanel);
+                return;
+            }
             KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers,
@@ -5034,6 +5104,87 @@ impl ChatWidget {
                 let cell = Self::rename_confirmation_cell(&name, thread_id);
                 tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
                 tx.set_thread_name(name);
+            }),
+        );
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    fn current_managed_account_profile(&self) -> Option<AccountManagementProfile> {
+        let auth = CodexAuth::from_auth_storage(
+            &self.config.codex_home,
+            self.config.cli_auth_credentials_store_mode,
+        )
+        .ok()
+        .flatten()?;
+        if !auth.is_chatgpt_auth() {
+            return None;
+        }
+
+        let id = auth.get_account_id()?;
+        Some(AccountManagementProfile {
+            id: id.clone(),
+            alias: Some(id),
+            masked_email: auth.get_account_email().map(|email| mask_email(&email)),
+            plan_label: auth
+                .account_plan_type()
+                .map(|plan_type| format!("{plan_type:?}").to_ascii_lowercase()),
+            priority: None,
+        })
+    }
+
+    fn persist_managed_account_rate_limit_snapshot(&self, snapshot: &RateLimitSnapshot) {
+        let Some(mut profile) = self.current_managed_account_profile() else {
+            return;
+        };
+        if let Some(plan_type) = snapshot.plan_type {
+            profile.plan_label = Some(format!("{plan_type:?}").to_ascii_lowercase());
+        }
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        let account_id = profile.id.clone();
+        let rate_limit_snapshot = account_rate_limit_snapshot(snapshot);
+        if let Err(err) = store.update(|state| {
+            state.upsert_account(profile);
+            state.apply_rate_limit_snapshot(&account_id, &rate_limit_snapshot);
+        }) {
+            tracing::warn!("failed to persist managed account rate limit snapshot: {err}");
+        }
+    }
+
+    fn persist_managed_account_limit_signal(&self, kind: LimitSignalKind) {
+        let Some(profile) = self.current_managed_account_profile() else {
+            return;
+        };
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        let account_id = profile.id.clone();
+        let snapshot = self
+            .latest_codex_rate_limit_snapshot
+            .as_ref()
+            .map(account_rate_limit_snapshot_ref);
+        let signal = infer_limit_signal(kind, Utc::now().timestamp(), snapshot.as_ref());
+        if let Err(err) = store.update(|state| {
+            state.upsert_account(profile);
+            state.apply_limit_signal(&account_id, &signal);
+        }) {
+            tracing::warn!("failed to persist managed account limit signal: {err}");
+        }
+    }
+
+    pub(crate) fn open_managed_account_alias_prompt(
+        &mut self,
+        account_id: String,
+        current_alias: String,
+    ) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Rename managed account".to_string(),
+            "Type a new alias and press Enter".to_string(),
+            Some(format!("Current alias: {current_alias}")),
+            Box::new(move |alias: String| {
+                tx.send(AppEvent::SaveManagedAccountAlias {
+                    account_id: account_id.clone(),
+                    alias,
+                });
             }),
         );
 
@@ -6418,6 +6569,11 @@ impl ChatWidget {
                             self.on_server_overloaded_error(message)
                         }
                         RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
+                            self.persist_managed_account_limit_signal(match kind {
+                                RateLimitErrorKind::UsageLimit => LimitSignalKind::UsageLimit,
+                                RateLimitErrorKind::Generic => LimitSignalKind::RateLimit,
+                                RateLimitErrorKind::ServerOverloaded => unreachable!(),
+                            });
                             self.on_error(message)
                         }
                     }

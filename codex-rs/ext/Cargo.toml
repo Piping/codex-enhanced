@@ -1,0 +1,23 @@
+[package]
+name = "codex-ext"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_ext"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-core = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+base64 = { workspace = true }
+codex-app-server-protocol = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

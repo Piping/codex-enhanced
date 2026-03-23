@@ -308,9 +308,21 @@ use crate::streaming::controller::PlanStreamController;
 use crate::streaming::controller::StreamController;
 
 use chrono::Local;
+use chrono::Utc;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
+use codex_ext::AccountManagementProfile;
+use codex_ext::AccountPoolStore;
+use codex_ext::AccountRateLimitSnapshot;
+use codex_ext::AccountRateLimitWindow;
+use codex_ext::DefaultAccountRouter;
+use codex_ext::LimitSignalKind;
+use codex_ext::RouteTurnRequest;
+use codex_ext::RoutingTrigger;
+use codex_ext::activate_managed_account;
+use codex_ext::infer_limit_signal;
+use codex_ext::persist_current_managed_account_snapshot;
 use codex_file_search::FileMatch;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelPreset;
@@ -546,6 +558,47 @@ fn rate_limit_error_kind(info: &CodexErrorInfo) -> Option<RateLimitErrorKind> {
     }
 }
 
+fn account_rate_limit_snapshot(snapshot: &RateLimitSnapshot) -> AccountRateLimitSnapshot {
+    AccountRateLimitSnapshot {
+        limit_name: snapshot.limit_name.clone(),
+        primary: snapshot
+            .primary
+            .as_ref()
+            .map(account_rate_limit_window_from_protocol),
+        secondary: snapshot
+            .secondary
+            .as_ref()
+            .map(account_rate_limit_window_from_protocol),
+    }
+}
+
+fn account_rate_limit_snapshot_ref(snapshot: &RateLimitSnapshot) -> AccountRateLimitSnapshot {
+    account_rate_limit_snapshot(snapshot)
+}
+
+fn account_rate_limit_window_from_protocol(
+    window: &codex_protocol::protocol::RateLimitWindow,
+) -> AccountRateLimitWindow {
+    AccountRateLimitWindow {
+        used_percent: window.used_percent,
+        window_minutes: window.window_minutes,
+        resets_at: window.resets_at,
+    }
+}
+
+fn mask_email(email: &str) -> String {
+    let Some((local, domain)) = email.split_once('@') else {
+        return email.to_string();
+    };
+    let visible = local.chars().take(3).collect::<String>();
+    let masked = if local.chars().count() > 3 {
+        format!("{visible}***")
+    } else {
+        format!("{visible}*")
+    };
+    format!("{masked}@{domain}")
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum ExternalEditorState {
     #[default]
@@ -684,6 +737,9 @@ pub(crate) struct ChatWidget {
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
+    latest_codex_rate_limit_snapshot: Option<RateLimitSnapshot>,
+    last_submitted_user_turn: Option<UserMessage>,
+    managed_account_retry_attempted: bool,
     plan_type: Option<PlanType>,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
@@ -889,6 +945,12 @@ pub(crate) struct UserMessage {
     remote_image_urls: Vec<String>,
     text_elements: Vec<TextElement>,
     mention_bindings: Vec<MentionBinding>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UserTurnSubmissionKind {
+    Normal,
+    AutoRetry,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -1749,6 +1811,7 @@ impl ChatWidget {
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
         self.submit_pending_steers_after_interrupt = false;
+        self.managed_account_retry_attempted = false;
         if let Some(message) = last_agent_message.as_ref()
             && !message.trim().is_empty()
         {
@@ -2022,6 +2085,10 @@ impl ChatWidget {
             self.plan_type = snapshot.plan_type.or(self.plan_type);
 
             let is_codex_limit = limit_id.eq_ignore_ascii_case("codex");
+            if is_codex_limit {
+                self.latest_codex_rate_limit_snapshot = Some(snapshot.clone());
+                self.persist_managed_account_rate_limit_snapshot(&snapshot);
+            }
             let warnings = if is_codex_limit {
                 self.rate_limit_warnings.take_warnings(
                     snapshot
@@ -2078,6 +2145,7 @@ impl ChatWidget {
             }
         } else {
             self.rate_limit_snapshots_by_limit_id.clear();
+            self.latest_codex_rate_limit_snapshot = None;
         }
         self.refresh_status_surfaces();
     }
@@ -3647,6 +3715,9 @@ impl ChatWidget {
             initial_user_message,
             token_info: None,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
+            latest_codex_rate_limit_snapshot: None,
+            last_submitted_user_turn: None,
+            managed_account_retry_attempted: false,
             plan_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
@@ -3849,6 +3920,9 @@ impl ChatWidget {
             initial_user_message,
             token_info: None,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
+            latest_codex_rate_limit_snapshot: None,
+            last_submitted_user_turn: None,
+            managed_account_retry_attempted: false,
             plan_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
@@ -4043,6 +4117,9 @@ impl ChatWidget {
             initial_user_message,
             token_info: None,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
+            latest_codex_rate_limit_snapshot: None,
+            last_submitted_user_turn: None,
+            managed_account_retry_attempted: false,
             plan_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
@@ -4164,6 +4241,15 @@ impl ChatWidget {
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'p') => {
+                self.app_event_tx.send(AppEvent::OpenControlPanel);
+                return;
+            }
             KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers,
@@ -4903,6 +4989,250 @@ impl ChatWidget {
         self.bottom_pane.show_view(Box::new(view));
     }
 
+    fn current_managed_account_profile(&self) -> Option<AccountManagementProfile> {
+        let auth = self.auth_manager.auth_cached().or_else(|| {
+            CodexAuth::from_auth_storage(
+                &self.config.codex_home,
+                self.config.cli_auth_credentials_store_mode,
+            )
+            .ok()
+            .flatten()
+        })?;
+        if !auth.is_chatgpt_auth() {
+            return None;
+        }
+
+        let id = auth.get_account_id()?;
+        Some(AccountManagementProfile {
+            id: id.clone(),
+            alias: Some(id),
+            masked_email: auth.get_account_email().map(|email| mask_email(&email)),
+            plan_label: auth
+                .account_plan_type()
+                .map(|plan_type| format!("{plan_type:?}").to_ascii_lowercase()),
+            priority: None,
+        })
+    }
+
+    fn persist_managed_account_rate_limit_snapshot(&self, snapshot: &RateLimitSnapshot) {
+        let Some(mut profile) = self.current_managed_account_profile() else {
+            return;
+        };
+        if let Some(plan_type) = snapshot.plan_type {
+            profile.plan_label = Some(format!("{plan_type:?}").to_ascii_lowercase());
+        }
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        let account_id = profile.id.clone();
+        let rate_limit_snapshot = account_rate_limit_snapshot(snapshot);
+        if let Err(err) = store.update(|state| {
+            state.upsert_account(profile);
+            state.apply_rate_limit_snapshot(&account_id, &rate_limit_snapshot);
+        }) {
+            tracing::warn!("failed to persist managed account rate limit snapshot: {err}");
+        }
+    }
+
+    fn persist_managed_account_limit_signal(&self, kind: LimitSignalKind) {
+        let Some(profile) = self.current_managed_account_profile() else {
+            return;
+        };
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        let account_id = profile.id.clone();
+        let snapshot = self
+            .latest_codex_rate_limit_snapshot
+            .as_ref()
+            .map(account_rate_limit_snapshot_ref);
+        let signal = infer_limit_signal(kind, Utc::now().timestamp(), snapshot.as_ref());
+        if let Err(err) = store.update(|state| {
+            state.upsert_account(profile);
+            state.apply_limit_signal(&account_id, &signal);
+        }) {
+            tracing::warn!("failed to persist managed account limit signal: {err}");
+        }
+    }
+
+    fn prepare_managed_account_for_user_turn(&mut self) -> bool {
+        let current_snapshot = match persist_current_managed_account_snapshot(
+            &self.config.codex_home,
+            self.config.cli_auth_credentials_store_mode,
+        ) {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                self.add_error_message(format!(
+                    "Failed to snapshot the current managed account before sending: {err}"
+                ));
+                return false;
+            }
+        };
+        let Some(current_snapshot) = current_snapshot else {
+            return true;
+        };
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        let mut state = match store.load() {
+            Ok(state) => state,
+            Err(err) => {
+                self.add_error_message(format!("Failed to read managed account pool: {err}"));
+                return false;
+            }
+        };
+        state.upsert_account(current_snapshot.profile.clone());
+        if state.accounts.is_empty() {
+            return true;
+        }
+
+        let now_ts = Utc::now().timestamp();
+        let current_account_id = Some(current_snapshot.profile.id);
+        let decision = DefaultAccountRouter::default().select_account(
+            &state,
+            &RouteTurnRequest {
+                now_ts,
+                trigger: RoutingTrigger::NormalTurn,
+                active_account_id: current_account_id.clone(),
+                preferred_account_id: state.active_account_id.clone(),
+            },
+        );
+        let Some(target_account_id) = decision.account_id else {
+            self.add_error_message(
+                "No healthy managed ChatGPT account is available for the next turn.".to_string(),
+            );
+            return false;
+        };
+
+        if current_account_id.as_deref() == Some(target_account_id.as_str()) {
+            return true;
+        }
+
+        let target_label = state
+            .accounts
+            .iter()
+            .find(|account| account.id == target_account_id)
+            .map(|account| account.display_name().to_string())
+            .unwrap_or_else(|| target_account_id.clone());
+        if let Err(err) = activate_managed_account(
+            &self.config.codex_home,
+            self.config.cli_auth_credentials_store_mode,
+            &target_account_id,
+        ) {
+            self.add_error_message(format!(
+                "Failed to activate managed account {target_label}: {err}"
+            ));
+            return false;
+        }
+        self.auth_manager.reload();
+        if let Err(err) = store.update(|state| {
+            state.set_active_account(&target_account_id, now_ts);
+        }) {
+            tracing::warn!("failed to update managed account selection after activation: {err}");
+        }
+        self.add_info_message(
+            format!("Switched to managed account {target_label} before sending."),
+            /*hint*/ None,
+        );
+        true
+    }
+
+    fn retry_user_turn_with_managed_account(&mut self) -> bool {
+        if self.managed_account_retry_attempted {
+            return false;
+        }
+        let Some(user_message) = self.last_submitted_user_turn.clone() else {
+            return false;
+        };
+
+        let current_snapshot = match persist_current_managed_account_snapshot(
+            &self.config.codex_home,
+            self.config.cli_auth_credentials_store_mode,
+        ) {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                tracing::warn!("failed to snapshot current managed account before retry: {err}");
+                return false;
+            }
+        };
+        let Some(current_snapshot) = current_snapshot else {
+            return false;
+        };
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        let mut state = match store.load() {
+            Ok(state) => state,
+            Err(err) => {
+                tracing::warn!("failed to load managed account pool for retry: {err}");
+                return false;
+            }
+        };
+        state.upsert_account(current_snapshot.profile.clone());
+
+        let now_ts = Utc::now().timestamp();
+        let current_account_id = Some(current_snapshot.profile.id);
+        let decision = DefaultAccountRouter::default().select_account(
+            &state,
+            &RouteTurnRequest {
+                now_ts,
+                trigger: RoutingTrigger::RetryAfterHardError,
+                active_account_id: current_account_id.clone(),
+                preferred_account_id: state.active_account_id.clone(),
+            },
+        );
+        let Some(target_account_id) = decision.account_id else {
+            return false;
+        };
+        if current_account_id.as_deref() == Some(target_account_id.as_str()) {
+            return false;
+        }
+
+        let target_label = state
+            .accounts
+            .iter()
+            .find(|account| account.id == target_account_id)
+            .map(|account| account.display_name().to_string())
+            .unwrap_or_else(|| target_account_id.clone());
+        if let Err(err) = activate_managed_account(
+            &self.config.codex_home,
+            self.config.cli_auth_credentials_store_mode,
+            &target_account_id,
+        ) {
+            tracing::warn!("failed to activate managed account {target_label}: {err}");
+            return false;
+        }
+        self.auth_manager.reload();
+        if let Err(err) = store.update(|state| {
+            state.set_active_account(&target_account_id, now_ts);
+        }) {
+            tracing::warn!("failed to update managed account selection after retry: {err}");
+        }
+
+        self.managed_account_retry_attempted = true;
+        self.submit_pending_steers_after_interrupt = false;
+        self.finalize_turn();
+        self.add_to_history(history_cell::new_info_event(
+            format!("Retrying the last turn with managed account {target_label}."),
+            /*hint*/ None,
+        ));
+        self.submit_user_message_with_kind(user_message, UserTurnSubmissionKind::AutoRetry);
+        true
+    }
+
+    pub(crate) fn open_managed_account_alias_prompt(
+        &mut self,
+        account_id: String,
+        current_alias: String,
+    ) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Rename managed account".to_string(),
+            "Type a new alias and press Enter".to_string(),
+            Some(format!("Current alias: {current_alias}")),
+            Box::new(move |alias: String| {
+                tx.send(AppEvent::SaveManagedAccountAlias {
+                    account_id: account_id.clone(),
+                    alias,
+                });
+            }),
+        );
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
     pub(crate) fn handle_paste(&mut self, text: String) {
         self.bottom_pane.handle_paste(text);
     }
@@ -4966,6 +5296,14 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        self.submit_user_message_with_kind(user_message, UserTurnSubmissionKind::Normal);
+    }
+
+    fn submit_user_message_with_kind(
+        &mut self,
+        user_message: UserMessage,
+        submission_kind: UserTurnSubmissionKind,
+    ) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);
@@ -5001,7 +5339,21 @@ impl ChatWidget {
             return;
         }
 
-        let render_in_history = !self.agent_turn_running;
+        let is_normal_submission = submission_kind == UserTurnSubmissionKind::Normal;
+        let render_in_history = is_normal_submission && !self.agent_turn_running;
+        if is_normal_submission {
+            self.last_submitted_user_turn = Some(UserMessage {
+                text: text.clone(),
+                local_images: local_images.clone(),
+                remote_image_urls: remote_image_urls.clone(),
+                text_elements: text_elements.clone(),
+                mention_bindings: mention_bindings.clone(),
+            });
+            self.managed_account_retry_attempted = false;
+            if !self.prepare_managed_account_for_user_turn() {
+                return;
+            }
+        }
         let mut items: Vec<UserInput> = Vec::new();
 
         // Special-case: "!cmd" executes a local shell command instead of sending to the model.
@@ -5155,7 +5507,7 @@ impl ChatWidget {
         } else {
             None
         };
-        let pending_steer = (!render_in_history).then(|| PendingSteer {
+        let pending_steer = (is_normal_submission && !render_in_history).then(|| PendingSteer {
             user_message: UserMessage {
                 text: text.clone(),
                 local_images: local_images.clone(),
@@ -5190,7 +5542,7 @@ impl ChatWidget {
         }
 
         // Persist the text to cross-session message history.
-        if !text.is_empty() {
+        if is_normal_submission && !text.is_empty() {
             let encoded_mentions = mention_bindings
                 .iter()
                 .map(|binding| LinkedMention {
@@ -5213,7 +5565,7 @@ impl ChatWidget {
         }
 
         // Show replayable user content in conversation history.
-        if render_in_history && !text.is_empty() {
+        if is_normal_submission && render_in_history && !text.is_empty() {
             let local_image_paths = local_images
                 .into_iter()
                 .map(|img| img.path)
@@ -5231,7 +5583,7 @@ impl ChatWidget {
                 local_image_paths,
                 remote_image_urls,
             ));
-        } else if render_in_history && !remote_image_urls.is_empty() {
+        } else if is_normal_submission && render_in_history && !remote_image_urls.is_empty() {
             self.last_rendered_user_message_event =
                 Some(Self::rendered_user_message_event_from_parts(
                     String::new(),
@@ -5402,7 +5754,14 @@ impl ChatWidget {
                             self.on_server_overloaded_error(message)
                         }
                         RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                            self.on_error(message)
+                            self.persist_managed_account_limit_signal(match kind {
+                                RateLimitErrorKind::UsageLimit => LimitSignalKind::UsageLimit,
+                                RateLimitErrorKind::Generic => LimitSignalKind::RateLimit,
+                                RateLimitErrorKind::ServerOverloaded => unreachable!(),
+                            });
+                            if !self.retry_user_turn_with_managed_account() {
+                                self.on_error(message);
+                            }
                         }
                     }
                 } else {

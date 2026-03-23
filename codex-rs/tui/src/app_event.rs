@@ -74,6 +74,24 @@ pub(crate) struct ConnectorsSnapshot {
 #[derive(Debug)]
 pub(crate) enum AppEvent {
     CodexEvent(Event),
+    /// Open the fork-owned control panel.
+    OpenControlPanel,
+    /// Open the account pool panel inside the control panel flow.
+    OpenAccountsPanel,
+    /// Open the managed-account alias rename submenu.
+    OpenManagedAccountRenamePanel,
+    /// Mark a managed account as active in the fork-owned registry.
+    SetManagedAccountActive(String),
+    /// Open an alias editor for a managed account.
+    OpenRenameManagedAccountAliasPrompt {
+        account_id: String,
+        current_alias: String,
+    },
+    /// Persist a new alias for a managed account.
+    SaveManagedAccountAlias {
+        account_id: String,
+        alias: String,
+    },
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
     /// Switch the active thread to the selected agent.
@@ -100,6 +118,8 @@ pub(crate) enum AppEvent {
 
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
+    /// Open the resume picker across all saved sessions, ignoring cwd filtering.
+    OpenResumePickerAll,
 
     /// Fork the current session into a new thread.
     ForkCurrentSession,

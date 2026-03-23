@@ -36,6 +36,7 @@ use codex_core::config_loader::RequirementSource;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::skills::model::SkillMetadata;
+use codex_ext::AccountPoolStore;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_otel::RuntimeMetricsSummary;
@@ -1870,6 +1871,9 @@ async fn make_chatwidget_manual(
         initial_user_message: None,
         token_info: None,
         rate_limit_snapshots_by_limit_id: BTreeMap::new(),
+        latest_codex_rate_limit_snapshot: None,
+        last_submitted_user_turn: None,
+        managed_account_retry_attempted: false,
         plan_type: None,
         rate_limit_warnings: RateLimitWarningState::default(),
         rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
@@ -2468,6 +2472,80 @@ async fn rate_limit_switch_prompt_popup_snapshot() {
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("rate_limit_switch_prompt_popup", popup);
+}
+
+#[tokio::test]
+async fn rate_limit_snapshot_persists_managed_account_pool_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let codex_home = tempdir().expect("tempdir");
+    chat.config.codex_home = codex_home.path().to_path_buf();
+    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    );
+    let future_reset = chrono::Utc::now().timestamp() + 500;
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: Some("codex".to_string()),
+        limit_name: Some("codex".to_string()),
+        primary: Some(RateLimitWindow {
+            used_percent: 87.0,
+            window_minutes: Some(300),
+            resets_at: Some(future_reset),
+        }),
+        secondary: None,
+        credits: None,
+        plan_type: Some(PlanType::Pro),
+    }));
+
+    let state = AccountPoolStore::new(chat.config.codex_home.clone())
+        .load()
+        .expect("load account pool");
+    assert_eq!(state.active_account_id, Some("account_id".to_string()));
+    assert_eq!(state.accounts.len(), 1);
+    assert_eq!(state.accounts[0].plan_label, Some("pro".to_string()));
+    assert_eq!(
+        state.accounts[0].usage_summary(),
+        Some("5h 87/100".to_string())
+    );
+}
+
+#[tokio::test]
+async fn usage_limit_error_persists_managed_account_cooldown() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let codex_home = tempdir().expect("tempdir");
+    chat.config.codex_home = codex_home.path().to_path_buf();
+    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    );
+    let future_reset = chrono::Utc::now().timestamp() + 900;
+    let snapshot = RateLimitSnapshot {
+        limit_id: Some("codex".to_string()),
+        limit_name: Some("codex".to_string()),
+        primary: Some(RateLimitWindow {
+            used_percent: 100.0,
+            window_minutes: Some(300),
+            resets_at: Some(future_reset),
+        }),
+        secondary: None,
+        credits: None,
+        plan_type: Some(PlanType::Pro),
+    };
+    chat.on_rate_limit_snapshot(Some(snapshot));
+
+    chat.dispatch_event_msg(
+        Some("evt-1".to_string()),
+        EventMsg::Error(ErrorEvent {
+            message: "You've hit your usage limit.".to_string(),
+            codex_error_info: Some(CodexErrorInfo::UsageLimitExceeded),
+        }),
+        None,
+    );
+
+    let state = AccountPoolStore::new(chat.config.codex_home.clone())
+        .load()
+        .expect("load account pool");
+    assert!(state.accounts[0].last_limit_error_at.is_some());
+    assert_eq!(state.accounts[0].cooldown_until, Some(future_reset));
 }
 
 #[tokio::test]
@@ -6208,6 +6286,15 @@ async fn slash_fork_requests_current_fork() {
     chat.dispatch_command(SlashCommand::Fork);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::ForkCurrentSession));
+}
+
+#[tokio::test]
+async fn ctrl_p_opens_control_panel() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenControlPanel));
 }
 
 #[tokio::test]
