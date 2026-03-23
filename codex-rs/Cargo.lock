@@ -1660,6 +1660,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "assert_matches",
+ "base64 0.22.1",
  "clap",
  "clap_complete",
  "codex-app-server",
@@ -1672,6 +1673,7 @@ dependencies = [
  "codex-core",
  "codex-exec",
  "codex-execpolicy",
+ "codex-ext",
  "codex-features",
  "codex-login",
  "codex-mcp-server",
@@ -2090,6 +2092,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
+]
+
+[[package]]
+name = "codex-ext"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "codex-app-server-protocol",
+ "codex-core",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -2602,6 +2617,7 @@ dependencies = [
  "codex-client",
  "codex-cloud-requirements",
  "codex-core",
+ "codex-ext",
  "codex-features",
  "codex-feedback",
  "codex-file-search",
@@ -2695,6 +2711,7 @@ dependencies = [
  "codex-client",
  "codex-cloud-requirements",
  "codex-core",
+ "codex-ext",
  "codex-features",
  "codex-feedback",
  "codex-file-search",

@@ -38,6 +38,7 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
+use chrono::Utc;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::InProcessAppServerClient;
@@ -70,6 +71,10 @@ use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_ext::AccountPoolStore;
+use codex_ext::HostCapabilities;
+use codex_ext::activate_managed_account;
+use codex_ext::persist_current_managed_account_snapshot;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
@@ -1916,6 +1921,298 @@ impl App {
         self.sync_active_agent_label();
     }
 
+    fn open_control_panel(&mut self) {
+        let capabilities = HostCapabilities::codex_mvp();
+        let items = vec![
+            SelectionItem {
+                name: "Sessions".to_string(),
+                description: Some("Resume or switch saved chats.".to_string()),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenResumePickerAll))],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Fork Current Session".to_string(),
+                description: Some("Fork the current thread into a new session.".to_string()),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::ForkCurrentSession))],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Accounts".to_string(),
+                description: Some("Inspect the managed multi-account pool.".to_string()),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenAccountsPanel))],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Undo Last User Message".to_string(),
+                description: Some(
+                    "Planned MVP follow-up: restore the last sent input and roll back one turn."
+                        .to_string(),
+                ),
+                is_disabled: true,
+                disabled_reason: Some("Not wired yet.".to_string()),
+                ..Default::default()
+            },
+        ];
+
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            view_id: Some("fork-control-panel"),
+            title: Some("Control Panel".to_string()),
+            subtitle: Some(format!(
+                "Fork extension host: {} negotiated MVP capabilities.",
+                capabilities.capabilities.len()
+            )),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn open_accounts_panel(&mut self) {
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        let path = store.path();
+        let state = self.sync_current_auth_into_account_pool(&store);
+        let mut items = Vec::new();
+        let subtitle = match &state {
+            Ok(state) => Some(format!(
+                "{} account(s) configured. Active: {}.",
+                state.accounts.len(),
+                state.active_account_id.as_deref().unwrap_or("none")
+            )),
+            Err(err) => Some(format!("Failed to read account pool: {err}")),
+        };
+
+        match state {
+            Ok(state) => {
+                for account in &state.accounts {
+                    let mut description_parts = Vec::new();
+                    if let Some(masked_email) = &account.masked_email {
+                        description_parts.push(masked_email.clone());
+                    }
+                    if let Some(plan_label) = &account.plan_label {
+                        description_parts.push(plan_label.clone());
+                    }
+                    if let Some(usage_summary) = account.usage_summary() {
+                        description_parts.push(usage_summary);
+                    }
+                    if let Some(cooldown_until) = account.cooldown_until {
+                        description_parts.push(format!("cooldown until {cooldown_until}"));
+                    }
+
+                    let account_id = account.id.clone();
+                    let search_value = format!(
+                        "{} {} {}",
+                        account.display_name(),
+                        account.id,
+                        account.masked_email.clone().unwrap_or_default()
+                    );
+                    items.push(SelectionItem {
+                        name: account.display_name().to_string(),
+                        description: (!description_parts.is_empty())
+                            .then(|| description_parts.join(" · ")),
+                        is_current: state.active_account_id.as_deref() == Some(account.id.as_str()),
+                        is_disabled: !account.enabled,
+                        disabled_reason: (!account.enabled).then(|| "Disabled".to_string()),
+                        actions: vec![Box::new(move |tx| {
+                            tx.send(AppEvent::SetManagedAccountActive(account_id.clone()));
+                        })],
+                        dismiss_on_select: true,
+                        search_value: Some(search_value),
+                        ..Default::default()
+                    });
+                }
+                if !state.accounts.is_empty() {
+                    items.push(SelectionItem {
+                        name: "Rename".to_string(),
+                        description: Some(
+                            "Open alias rename actions for managed accounts.".to_string(),
+                        ),
+                        actions: vec![Box::new(|tx| {
+                            tx.send(AppEvent::OpenManagedAccountRenamePanel)
+                        })],
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    });
+                }
+            }
+            Err(err) => {
+                items.push(SelectionItem {
+                    name: "Account pool unavailable".to_string(),
+                    description: Some(err.to_string()),
+                    is_disabled: true,
+                    ..Default::default()
+                });
+            }
+        }
+
+        if items.is_empty() {
+            items.push(SelectionItem {
+                name: "No managed accounts yet".to_string(),
+                description: Some(format!(
+                    "Run repeated ChatGPT login flows and persist them into {}.",
+                    path.display()
+                )),
+                is_disabled: true,
+                ..Default::default()
+            });
+        }
+
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            view_id: Some("fork-accounts-panel"),
+            title: Some("Accounts".to_string()),
+            subtitle,
+            footer_hint: Some(standard_popup_hint_line()),
+            footer_note: Some(Line::from(path.display().to_string()).dim()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn open_managed_account_rename_panel(&mut self) {
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        let path = store.path();
+        let state = self.sync_current_auth_into_account_pool(&store);
+        let mut items = Vec::new();
+        let subtitle = match &state {
+            Ok(state) => Some(format!(
+                "Rename aliases for {} managed account(s).",
+                state.accounts.len()
+            )),
+            Err(err) => Some(format!("Failed to read account pool: {err}")),
+        };
+
+        match state {
+            Ok(state) => {
+                for account in &state.accounts {
+                    let account_id = account.id.clone();
+                    let current_alias = account.alias.clone();
+                    let mut description_parts = Vec::new();
+                    if let Some(alias) =
+                        (!current_alias.is_empty()).then_some(current_alias.clone())
+                    {
+                        description_parts.push(format!("alias: {alias}"));
+                    }
+                    description_parts.push(account.id.clone());
+                    if let Some(masked_email) = &account.masked_email {
+                        description_parts.push(masked_email.clone());
+                    }
+                    items.push(SelectionItem {
+                        name: format!("Rename {}", account.display_name()),
+                        description: Some(description_parts.join(" · ")),
+                        actions: vec![Box::new(move |tx| {
+                            tx.send(AppEvent::OpenRenameManagedAccountAliasPrompt {
+                                account_id: account_id.clone(),
+                                current_alias: current_alias.clone(),
+                            });
+                        })],
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    });
+                }
+            }
+            Err(err) => {
+                items.push(SelectionItem {
+                    name: "Account pool unavailable".to_string(),
+                    description: Some(err.to_string()),
+                    is_disabled: true,
+                    ..Default::default()
+                });
+            }
+        }
+
+        if items.is_empty() {
+            items.push(SelectionItem {
+                name: "No managed accounts yet".to_string(),
+                description: Some(format!(
+                    "Run repeated ChatGPT login flows and persist them into {}.",
+                    path.display()
+                )),
+                is_disabled: true,
+                ..Default::default()
+            });
+        }
+
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            view_id: Some("fork-account-rename-panel"),
+            title: Some("Rename".to_string()),
+            subtitle,
+            footer_hint: Some(standard_popup_hint_line()),
+            footer_note: Some(Line::from(path.display().to_string()).dim()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn sync_current_auth_into_account_pool(
+        &self,
+        store: &AccountPoolStore,
+    ) -> std::io::Result<codex_ext::AccountPoolState> {
+        let snapshot = persist_current_managed_account_snapshot(
+            &self.config.codex_home,
+            self.config.cli_auth_credentials_store_mode,
+        )?;
+        store.update(|state| {
+            if let Some(snapshot) = &snapshot {
+                state.upsert_account(snapshot.profile.clone());
+            }
+        })
+    }
+
+    fn set_managed_account_active(&mut self, account_id: String) {
+        if let Err(err) = persist_current_managed_account_snapshot(
+            &self.config.codex_home,
+            self.config.cli_auth_credentials_store_mode,
+        ) {
+            self.chat_widget
+                .add_to_history(history_cell::new_error_event(format!(
+                    "Failed to snapshot current managed account auth: {err}"
+                )));
+            return;
+        }
+        if let Err(err) = activate_managed_account(
+            &self.config.codex_home,
+            self.config.cli_auth_credentials_store_mode,
+            &account_id,
+        ) {
+            self.chat_widget
+                .add_to_history(history_cell::new_error_event(format!(
+                    "Failed to activate managed account auth: {err}"
+                )));
+            return;
+        }
+        self.auth_manager.reload();
+
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        if let Err(err) = store.update(|state| {
+            state.set_active_account(&account_id, Utc::now().timestamp());
+        }) {
+            self.chat_widget
+                .add_to_history(history_cell::new_error_event(format!(
+                    "Failed to update active managed account: {err}"
+                )));
+            return;
+        }
+
+        self.open_accounts_panel();
+    }
+
+    fn save_managed_account_alias(&mut self, account_id: String, alias: String) {
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        if let Err(err) = store.update(|state| {
+            state.rename_account_alias(&account_id, alias.clone());
+        }) {
+            self.chat_widget
+                .add_to_history(history_cell::new_error_event(format!(
+                    "Failed to save managed account alias: {err}"
+                )));
+            return;
+        }
+
+        self.open_managed_account_rename_panel();
+    }
+
     /// Marks a cached picker thread closed and recomputes the contextual footer label.
     ///
     /// Closing a thread is not the same as removing it: users can still inspect finished agent
@@ -2646,6 +2943,28 @@ impl App {
 
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
         match event {
+            AppEvent::OpenControlPanel => {
+                self.open_control_panel();
+            }
+            AppEvent::OpenAccountsPanel => {
+                self.open_accounts_panel();
+            }
+            AppEvent::OpenManagedAccountRenamePanel => {
+                self.open_managed_account_rename_panel();
+            }
+            AppEvent::SetManagedAccountActive(account_id) => {
+                self.set_managed_account_active(account_id);
+            }
+            AppEvent::OpenRenameManagedAccountAliasPrompt {
+                account_id,
+                current_alias,
+            } => {
+                self.chat_widget
+                    .open_managed_account_alias_prompt(account_id, current_alias);
+            }
+            AppEvent::SaveManagedAccountAlias { account_id, alias } => {
+                self.save_managed_account_alias(account_id, alias);
+            }
             AppEvent::NewSession => {
                 self.start_fresh_session_with_summary_hint(tui).await;
             }
@@ -2660,6 +2979,105 @@ impl App {
                     tui,
                     &self.config,
                     /*show_all*/ false,
+                )
+                .await?
+                {
+                    SessionSelection::Resume(target_session) => {
+                        let current_cwd = self.config.cwd.clone();
+                        let resume_cwd = match crate::resolve_cwd_for_resume_or_fork(
+                            tui,
+                            &self.config,
+                            &current_cwd,
+                            target_session.thread_id,
+                            &target_session.path,
+                            CwdPromptAction::Resume,
+                            /*allow_prompt*/ true,
+                        )
+                        .await?
+                        {
+                            crate::ResolveCwdOutcome::Continue(Some(cwd)) => cwd,
+                            crate::ResolveCwdOutcome::Continue(None) => current_cwd.clone(),
+                            crate::ResolveCwdOutcome::Exit => {
+                                return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+                            }
+                        };
+                        let mut resume_config = match self
+                            .rebuild_config_for_resume_or_fallback(&current_cwd, resume_cwd)
+                            .await
+                        {
+                            Ok(cfg) => cfg,
+                            Err(err) => {
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to rebuild configuration for resume: {err}"
+                                ));
+                                return Ok(AppRunControl::Continue);
+                            }
+                        };
+                        self.apply_runtime_policy_overrides(&mut resume_config);
+                        let summary = session_summary(
+                            self.chat_widget.token_usage(),
+                            self.chat_widget.thread_id(),
+                            self.chat_widget.thread_name(),
+                        );
+                        match self
+                            .server
+                            .resume_thread_from_rollout(
+                                resume_config.clone(),
+                                target_session.path.clone(),
+                                self.auth_manager.clone(),
+                                /*parent_trace*/ None,
+                            )
+                            .await
+                        {
+                            Ok(resumed) => {
+                                self.shutdown_current_thread().await;
+                                self.config = resume_config;
+                                tui.set_notification_method(self.config.tui_notification_method);
+                                self.file_search.update_search_dir(self.config.cwd.clone());
+                                let init = self.chatwidget_init_for_forked_or_resumed_thread(
+                                    tui,
+                                    self.config.clone(),
+                                );
+                                self.replace_chat_widget(ChatWidget::new_from_existing(
+                                    init,
+                                    resumed.thread,
+                                    resumed.session_configured,
+                                ));
+                                self.reset_thread_event_state();
+                                if let Some(summary) = summary {
+                                    let mut lines: Vec<Line<'static>> =
+                                        vec![summary.usage_line.clone().into()];
+                                    if let Some(command) = summary.resume_command {
+                                        let spans = vec![
+                                            "To continue this session, run ".into(),
+                                            command.cyan(),
+                                        ];
+                                        lines.push(spans.into());
+                                    }
+                                    self.chat_widget.add_plain_history_lines(lines);
+                                }
+                            }
+                            Err(err) => {
+                                let path_display = target_session.path.display();
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to resume session from {path_display}: {err}"
+                                ));
+                            }
+                        }
+                    }
+                    SessionSelection::Exit
+                    | SessionSelection::StartFresh
+                    | SessionSelection::Fork(_) => {}
+                }
+
+                // Leaving alt-screen may blank the inline viewport; force a redraw either way.
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenResumePickerAll => {
+                match crate::resume_picker::run_resume_picker(
+                    tui,
+                    &self.config,
+                    /*show_all*/ true,
                 )
                 .await?
                 {

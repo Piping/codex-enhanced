@@ -1892,6 +1892,7 @@ async fn make_chatwidget_manual(
         status_account_display: None,
         token_info: None,
         rate_limit_snapshots_by_limit_id: BTreeMap::new(),
+        latest_codex_rate_limit_snapshot: None,
         plan_type: None,
         rate_limit_warnings: RateLimitWarningState::default(),
         rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
@@ -6839,6 +6840,15 @@ async fn slash_fork_requests_current_fork() {
     chat.dispatch_command(SlashCommand::Fork);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::ForkCurrentSession));
+}
+
+#[tokio::test]
+async fn ctrl_p_opens_control_panel() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenControlPanel));
 }
 
 #[tokio::test]
