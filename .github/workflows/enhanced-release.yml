@@ -80,7 +80,7 @@ jobs:
             target: aarch64-apple-darwin
             archive_ext: tar.gz
             archive_kind: tar
-          - runner: macos-13
+          - runner: macos-15-intel
             target: x86_64-apple-darwin
             archive_ext: tar.gz
             archive_kind: tar
