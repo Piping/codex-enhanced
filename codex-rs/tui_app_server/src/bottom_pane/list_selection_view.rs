@@ -31,6 +31,7 @@ use super::selection_popup_common::measure_rows_height_with_col_width_mode;
 use super::selection_popup_common::render_rows;
 use super::selection_popup_common::render_rows_stable_col_widths;
 use super::selection_popup_common::render_rows_with_col_width_mode;
+use crate::text_formatting::center_truncate_path;
 use unicode_width::UnicodeWidthStr;
 
 /// Minimum list width (in content columns) required before the side-by-side
@@ -140,6 +141,7 @@ pub(crate) struct SelectionViewParams {
     pub title: Option<String>,
     pub subtitle: Option<String>,
     pub footer_note: Option<Line<'static>>,
+    pub footer_path: Option<String>,
     pub footer_hint: Option<Line<'static>>,
     pub items: Vec<SelectionItem>,
     pub is_searchable: bool,
@@ -182,6 +184,7 @@ impl Default for SelectionViewParams {
             title: None,
             subtitle: None,
             footer_note: None,
+            footer_path: None,
             footer_hint: None,
             items: Vec::new(),
             is_searchable: false,
@@ -208,6 +211,7 @@ impl Default for SelectionViewParams {
 pub(crate) struct ListSelectionView {
     view_id: Option<&'static str>,
     footer_note: Option<Line<'static>>,
+    footer_path: Option<String>,
     footer_hint: Option<Line<'static>>,
     items: Vec<SelectionItem>,
     state: ScrollState,
@@ -256,6 +260,7 @@ impl ListSelectionView {
         let mut s = Self {
             view_id: params.view_id,
             footer_note: params.footer_note,
+            footer_path: params.footer_path,
             footer_hint: params.footer_hint,
             items: params.items,
             state: ScrollState::new(),
@@ -750,6 +755,9 @@ impl Renderable for ListSelectionView {
             let note_lines = wrap_styled_line(note, note_width);
             height = height.saturating_add(note_lines.len() as u16);
         }
+        if self.footer_path.is_some() {
+            height = height.saturating_add(1);
+        }
         if self.footer_hint.is_some() {
             height = height.saturating_add(1);
         }
@@ -767,7 +775,17 @@ impl Renderable for ListSelectionView {
             .as_ref()
             .map(|note| wrap_styled_line(note, note_width));
         let note_height = note_lines.as_ref().map_or(0, |lines| lines.len() as u16);
-        let footer_rows = note_height + u16::from(self.footer_hint.is_some());
+        let footer_path_line = self.footer_path.as_ref().map(|path| {
+            let truncated = if note_width == 0 {
+                String::new()
+            } else {
+                center_truncate_path(path, note_width as usize)
+            };
+            Line::from(truncated).dim()
+        });
+        let footer_rows = note_height
+            + u16::from(footer_path_line.is_some())
+            + u16::from(self.footer_hint.is_some());
         let [content_area, footer_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_rows)]).areas(area);
 
@@ -942,8 +960,9 @@ impl Renderable for ListSelectionView {
         }
 
         if footer_area.height > 0 {
-            let [note_area, hint_area] = Layout::vertical([
+            let [note_area, path_area, hint_area] = Layout::vertical([
                 Constraint::Length(note_height),
+                Constraint::Length(u16::from(footer_path_line.is_some())),
                 Constraint::Length(if self.footer_hint.is_some() { 1 } else { 0 }),
             ])
             .areas(footer_area);
@@ -967,6 +986,16 @@ impl Renderable for ListSelectionView {
                     };
                     line.clone().render(line_area, buf);
                 }
+            }
+
+            if let Some(path_line) = footer_path_line {
+                let path_area = Rect {
+                    x: path_area.x + 2,
+                    y: path_area.y,
+                    width: path_area.width.saturating_sub(2),
+                    height: path_area.height,
+                };
+                path_line.render(path_area, buf);
             }
 
             if let Some(hint) = &self.footer_hint {
@@ -1070,6 +1099,254 @@ mod tests {
         )
     }
 
+    fn make_accounts_delete_view() -> ListSelectionView {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Delete".to_string()),
+                subtitle: Some("Delete saved snapshots for 2 managed account(s).".to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
+                footer_note: Some("/tmp/codex-home/accounts.json".dim().into()),
+                items: vec![
+                    SelectionItem {
+                        name: "Delete Primary".to_string(),
+                        description: Some("workspace-1 · pri***@example.com · active".to_string()),
+                        is_disabled: true,
+                        disabled_reason: Some("Switch away before deleting".to_string()),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Delete Backup".to_string(),
+                        description: Some("workspace-2 · bac***@example.com".to_string()),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            tx,
+        )
+    }
+
+    fn make_accounts_delete_confirmation_view() -> ListSelectionView {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Delete Account".to_string()),
+                subtitle: Some("Delete saved managed-account data for Backup?".to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
+                footer_note: Some(
+                    "/tmp/codex-home/accounts/workspace-2/auth.json"
+                        .dim()
+                        .into(),
+                ),
+                items: vec![
+                    SelectionItem {
+                        name: "Delete Backup".to_string(),
+                        description: Some(
+                            "Remove its saved auth snapshot and alias from the managed pool."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Cancel".to_string(),
+                        description: Some("Return to the delete menu.".to_string()),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            tx,
+        )
+    }
+
+    fn make_jump_to_message_view() -> ListSelectionView {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Jump To Message".to_string()),
+                subtitle: Some("3 committed transcript entries are available.".to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
+                items: vec![
+                    SelectionItem {
+                        name: "User Message 1".to_string(),
+                        description: Some("Please inspect the flaky test output.".to_string()),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Agent Message 2".to_string(),
+                        description: Some(
+                            "I found two likely races in the worker startup path.".to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Tool Call 3".to_string(),
+                        description: Some("shell ls -la /workspace/project".to_string()),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            tx,
+        )
+    }
+
+    fn make_control_panel_view() -> ListSelectionView {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Control Panel".to_string()),
+                subtitle: Some("4 features available.".to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
+                items: vec![
+                    SelectionItem {
+                        name: "Sessions".to_string(),
+                        description: None,
+                        selected_description: Some("Resume or switch saved chats.".to_string()),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Fork Current Session".to_string(),
+                        description: None,
+                        selected_description: Some(
+                            "Fork the current thread into a new session.".to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Accounts".to_string(),
+                        description: None,
+                        selected_description: Some(
+                            "Inspect the managed multi-account pool.".to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Jump To Message".to_string(),
+                        description: None,
+                        selected_description: Some(
+                            "Search committed transcript entries and open the transcript overlay."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Show / Hide UI".to_string(),
+                        description: None,
+                        selected_description: Some(
+                            "Toggle local TUI-only transcript and UI visibility settings."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Undo Last User Message".to_string(),
+                        description: None,
+                        selected_description: Some(
+                            "Restore the last sent input and roll back one turn.".to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            tx,
+        )
+    }
+
+    fn make_display_preferences_view() -> ListSelectionView {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Show / Hide UI".to_string()),
+                subtitle: Some("These toggles only affect this TUI session.".to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
+                footer_note: Some(
+                    "Model context and persisted rollout history are unchanged."
+                        .dim()
+                        .into(),
+                ),
+                items: vec![
+                    SelectionItem {
+                        name: "Show Raw Thinking".to_string(),
+                        description: Some(
+                            "Currently hidden. Reveal raw reasoning text in this TUI only."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Hide Startup Tooltips".to_string(),
+                        description: Some(
+                            "Currently visible. Hide welcome and session tooltip hints."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Hide Tool Results".to_string(),
+                        description: Some(
+                            "Currently visible. Keep tool invocations but collapse result details."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Hide Command Execution".to_string(),
+                        description: Some(
+                            "Currently visible. Hide command execution cells and keep model replies."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Hide Waited Messages".to_string(),
+                        description: Some(
+                            "Currently visible. Hide 'Waited for ...' background terminal messages."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Hide Patch / Edit Diff".to_string(),
+                        description: Some(
+                            "Currently visible. Collapse patch and edit diff summaries."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            tx,
+        )
+    }
+
     fn render_lines(view: &ListSelectionView) -> String {
         render_lines_with_width(view, 48)
     }
@@ -1156,6 +1433,36 @@ mod tests {
             "list_selection_spacing_without_subtitle",
             render_lines(&view)
         );
+    }
+
+    #[test]
+    fn accounts_delete_menu_snapshot() {
+        let view = make_accounts_delete_view();
+        assert_snapshot!("accounts_delete_menu", render_lines(&view));
+    }
+
+    #[test]
+    fn accounts_delete_confirmation_snapshot() {
+        let view = make_accounts_delete_confirmation_view();
+        assert_snapshot!("accounts_delete_confirmation", render_lines(&view));
+    }
+
+    #[test]
+    fn jump_to_message_menu_snapshot() {
+        let view = make_jump_to_message_view();
+        assert_snapshot!("jump_to_message_menu", render_lines(&view));
+    }
+
+    #[test]
+    fn control_panel_menu_snapshot() {
+        let view = make_control_panel_view();
+        assert_snapshot!("control_panel_menu", render_lines(&view));
+    }
+
+    #[test]
+    fn show_hide_menu_snapshot() {
+        let view = make_display_preferences_view();
+        assert_snapshot!("show_hide_menu", render_lines(&view));
     }
 
     #[test]
@@ -1258,6 +1565,35 @@ mod tests {
         );
         assert_snapshot!(
             "list_selection_footer_note_wraps",
+            render_lines_with_width(&view, 40)
+        );
+    }
+
+    #[test]
+    fn snapshot_footer_path_truncates_to_available_width() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let items = vec![SelectionItem {
+            name: "Delete Backup".to_string(),
+            description: Some("Remove the saved account snapshot.".to_string()),
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Delete".to_string()),
+                footer_path: Some(
+                    "/Users/bytedance/.codex/managed/accounts/very/long/path/token.json"
+                        .to_string(),
+                ),
+                footer_hint: Some(standard_popup_hint_line()),
+                items,
+                ..Default::default()
+            },
+            tx,
+        );
+        assert_snapshot!(
+            "list_selection_footer_path_truncates",
             render_lines_with_width(&view, 40)
         );
     }

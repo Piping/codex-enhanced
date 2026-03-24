@@ -19,6 +19,8 @@ use std::io::Result;
 use std::sync::Arc;
 
 use crate::chatwidget::ActiveCellTranscriptKey;
+#[cfg(test)]
+use crate::display_preferences::DisplayPreferences;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
@@ -986,7 +988,11 @@ mod tests {
                 content: "hello\nworld\n".to_string(),
             },
         );
-        let approval_cell: Arc<dyn HistoryCell> = Arc::new(new_patch_event(approval_changes, &cwd));
+        let approval_cell: Arc<dyn HistoryCell> = Arc::new(new_patch_event(
+            approval_changes,
+            &cwd,
+            DisplayPreferences::default(),
+        ));
         cells.push(approval_cell);
 
         let mut apply_changes = HashMap::new();
@@ -996,7 +1002,11 @@ mod tests {
                 content: "hello\nworld\n".to_string(),
             },
         );
-        let apply_begin_cell: Arc<dyn HistoryCell> = Arc::new(new_patch_event(apply_changes, &cwd));
+        let apply_begin_cell: Arc<dyn HistoryCell> = Arc::new(new_patch_event(
+            apply_changes,
+            &cwd,
+            DisplayPreferences::default(),
+        ));
         cells.push(apply_begin_cell);
 
         let apply_end_cell: Arc<dyn HistoryCell> = history_cell::new_approval_decision_cell(
@@ -1014,6 +1024,7 @@ mod tests {
             ExecCommandSource::Agent,
             None,
             true,
+            DisplayPreferences::default(),
         );
         exec_cell.complete_call(
             "exec-1",

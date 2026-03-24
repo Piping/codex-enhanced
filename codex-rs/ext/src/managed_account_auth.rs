@@ -67,6 +67,15 @@ impl ManagedAccountAuthStore {
         file.write_all(contents.as_bytes())?;
         file.flush()
     }
+
+    pub fn delete_account_auth(&self, account_id: &str) -> io::Result<()> {
+        let account_dir = self.account_dir(account_id);
+        match fs::remove_dir_all(account_dir) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err),
+        }
+    }
 }
 
 pub fn activate_managed_account(
@@ -280,5 +289,21 @@ mod tests {
                 .expect("root auth"),
             backup
         );
+    }
+
+    #[test]
+    fn delete_account_auth_removes_saved_snapshot() {
+        let tempdir = tempdir().expect("tempdir");
+        let primary = chatgpt_auth("workspace-1", "primary@example.com");
+        let store = ManagedAccountAuthStore::new(tempdir.path().to_path_buf());
+        store
+            .save_account_auth("workspace-1", &primary)
+            .expect("save primary");
+
+        store
+            .delete_account_auth("workspace-1")
+            .expect("delete account auth");
+
+        assert!(!store.account_dir("workspace-1").exists());
     }
 }

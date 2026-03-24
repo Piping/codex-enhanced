@@ -244,6 +244,73 @@ async fn spawn_agent_includes_task_name_key_when_not_named() {
 }
 
 #[tokio::test]
+async fn spawn_agent_applies_requested_cwd() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        agent_id: String,
+    }
+
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let child_workspace = temp_dir.path().join("worker-a");
+    std::fs::create_dir(&child_workspace).expect("create child workspace");
+    turn.cwd = temp_dir.path().to_path_buf();
+
+    let output = SpawnAgentHandler
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "cwd": "worker-a"
+            })),
+        ))
+        .await
+        .expect("spawn_agent should succeed");
+    let (content, _) = expect_text_output(output);
+    let result: SpawnAgentResult =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+
+    let snapshot = manager
+        .get_thread(parse_agent_id(&result.agent_id))
+        .await
+        .expect("spawned agent thread should exist")
+        .config_snapshot()
+        .await;
+    assert_eq!(snapshot.cwd, child_workspace);
+}
+
+#[tokio::test]
+async fn spawn_agent_rejects_missing_requested_cwd() {
+    let (session, mut turn) = make_session_and_context().await;
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    turn.cwd = temp_dir.path().to_path_buf();
+
+    let invocation = invocation(
+        Arc::new(session),
+        Arc::new(turn),
+        "spawn_agent",
+        function_payload(json!({
+            "message": "inspect this repo",
+            "cwd": "missing"
+        })),
+    );
+    let Err(err) = SpawnAgentHandler.handle(invocation).await else {
+        panic!("missing cwd should be rejected");
+    };
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(format!(
+            "spawn_agent cwd {} does not exist",
+            temp_dir.path().join("missing").display()
+        ))
+    );
+}
+
+#[tokio::test]
 async fn spawn_agent_errors_when_manager_dropped() {
     let (session, turn) = make_session_and_context().await;
     let invocation = invocation(
@@ -1594,6 +1661,19 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     expected.permissions.file_system_sandbox_policy = file_system_sandbox_policy;
     expected.permissions.network_sandbox_policy = network_sandbox_policy;
     assert_eq!(config, expected);
+}
+
+#[test]
+fn resolve_requested_agent_cwd_resolves_relative_path() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let child_workspace = temp_dir.path().join("worker-a");
+    std::fs::create_dir(&child_workspace).expect("create child workspace");
+
+    let resolved = resolve_requested_agent_cwd(temp_dir.path(), Some("worker-a"))
+        .expect("cwd should resolve")
+        .expect("cwd should be present");
+
+    assert_eq!(resolved, child_workspace);
 }
 
 #[tokio::test]

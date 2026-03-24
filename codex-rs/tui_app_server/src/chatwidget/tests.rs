@@ -1796,6 +1796,7 @@ async fn helpers_are_available_and_do_not_panic() {
         initial_plan_type: None,
         model: Some(resolved_model),
         startup_tooltip_override: None,
+        display_preferences: DisplayPreferences::default(),
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
     };
@@ -1922,6 +1923,8 @@ async fn make_chatwidget_manual(
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
+        raw_reasoning_buffer: String::new(),
+        full_raw_reasoning_buffer: String::new(),
         current_status: StatusIndicatorState::working(),
         retry_status_header: None,
         pending_status_indicator_restore: false,
@@ -1932,6 +1935,7 @@ async fn make_chatwidget_manual(
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         startup_tooltip_override: None,
+        display_preferences: DisplayPreferences::default(),
         queued_user_messages: VecDeque::new(),
         pending_steers: VecDeque::new(),
         submit_pending_steers_after_interrupt: false,
@@ -6338,6 +6342,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         initial_plan_type: None,
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
+        display_preferences: DisplayPreferences::default(),
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
     };
@@ -6382,6 +6387,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         initial_plan_type: None,
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
+        display_preferences: DisplayPreferences::default(),
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
     };

@@ -17,6 +17,7 @@ You can also install via Homebrew (`brew install --cask codex`) or download a pl
 
 - First run with Codex? Start with [`docs/getting-started.md`](../docs/getting-started.md) (links to the walkthrough for prompts, keyboard shortcuts, and session management).
 - Want deeper control? See [`docs/config.md`](../docs/config.md) and [`docs/install.md`](../docs/install.md).
+- Looking for Rust-workspace design notes? See [`docs/codex_mcp_interface.md`](./docs/codex_mcp_interface.md), [`docs/codex_tool_design_principles.md`](./docs/codex_tool_design_principles.md), and the component evolution diagram in [`docs/codex_component_evolution.drawio`](./docs/codex_component_evolution.drawio).
 
 ## What's new in the Rust CLI
 

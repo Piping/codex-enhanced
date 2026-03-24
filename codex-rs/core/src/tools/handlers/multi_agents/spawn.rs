@@ -72,6 +72,9 @@ impl ToolHandler for Handler {
             .await
             .map_err(FunctionCallError::RespondToModel)?;
         apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
+        if let Some(cwd) = resolve_requested_agent_cwd(&turn.cwd, args.cwd.as_deref())? {
+            config.cwd = cwd;
+        }
         apply_spawn_agent_overrides(&mut config, child_depth);
 
         let result = session
@@ -176,6 +179,7 @@ struct SpawnAgentArgs {
     agent_type: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
+    cwd: Option<String>,
     #[serde(default)]
     fork_context: bool,
 }

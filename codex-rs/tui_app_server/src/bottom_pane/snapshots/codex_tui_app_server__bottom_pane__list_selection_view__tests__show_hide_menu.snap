@@ -1,0 +1,41 @@
+---
+source: tui_app_server/src/bottom_pane/list_selection_view.rs
+expression: render_lines(&view)
+---
+                                                
+  Show / Hide UI                                
+  These toggles only affect this TUI session.   
+                                                
+› 1. Show Raw Thinking       Currently hidden.  
+                             Reveal raw         
+                             reasoning text in  
+                             this TUI only.     
+  2. Hide Startup Tooltips   Currently          
+                             visible. Hide      
+                             welcome and        
+                             session tooltip    
+                             hints.             
+  3. Hide Tool Results       Currently          
+                             visible. Keep      
+                             tool invocations   
+                             but collapse       
+                             result details.    
+  4. Hide Command Execution  Currently          
+                             visible. Hide      
+                             command execution  
+                             cells and keep     
+                             model replies.     
+  5. Hide Waited Messages    Currently          
+                             visible. Hide      
+                             'Waited for ...'   
+                             background         
+                             terminal           
+                             messages.          
+  6. Hide Patch / Edit Diff  Currently          
+                             visible. Collapse  
+                             patch and edit     
+                             diff summaries.    
+                                                
+  Model context and persisted rollout history   
+  are unchanged.                                
+  Press enter to confirm or esc to go back

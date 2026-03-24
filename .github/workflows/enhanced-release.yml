@@ -71,7 +71,7 @@ jobs:
         working-directory: codex-rs
     env:
       CARGO_INCREMENTAL: "0"
-      CARGO_PROFILE_RELEASE_LTO: thin
+      CARGO_PROFILE_RELEASE_LTO: fat
     strategy:
       fail-fast: false
       matrix:
@@ -158,6 +158,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout release ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+
       - name: Download packaged artifacts
         uses: actions/download-artifact@v4
         with:
@@ -165,28 +170,13 @@ jobs:
           path: release-artifacts
           merge-multiple: true
 
-      - name: Write release notes
+      - name: Write release notes from tag commit message
         shell: bash
         run: |
           set -euo pipefail
-          cat > release-notes.md <<EOF_NOTES
-          Codex Enhanced ${{ needs.prepare.outputs.release_version }}
-
-          This is the lightweight multi-platform binary release for Codex Enhanced.
-
-          Included platforms:
-          - macOS Apple Silicon
-          - macOS Intel
-          - Linux x86_64
-          - Windows x86_64
-
-          Included binaries in each archive:
-          - codex
-          - codex-responses-api-proxy
-
-          Build source:
-          - tag: ${{ needs.prepare.outputs.release_tag }}
-          EOF_NOTES
+          commit="$(git rev-parse "${{ needs.prepare.outputs.checkout_ref }}^{commit}")"
+          git log -1 --format=%B "${commit}" > release-notes.md
+          echo >> release-notes.md
 
       - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@v2

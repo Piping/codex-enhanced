@@ -34,6 +34,20 @@ fn request_user_input_unavailable_messages_respect_default_mode_feature_flag() {
 }
 
 #[test]
+fn question_unavailable_messages_allow_default_mode() {
+    assert_eq!(question_unavailable_message(ModeKind::Plan), None);
+    assert_eq!(question_unavailable_message(ModeKind::Default), None);
+    assert_eq!(
+        question_unavailable_message(ModeKind::Execute),
+        Some("question is unavailable in Execute mode".to_string())
+    );
+    assert_eq!(
+        question_unavailable_message(ModeKind::PairProgramming),
+        Some("question is unavailable in Pair Programming mode".to_string())
+    );
+}
+
+#[test]
 fn request_user_input_tool_description_mentions_available_modes() {
     assert_eq!(
             request_user_input_tool_description(false),
@@ -43,4 +57,16 @@ fn request_user_input_tool_description_mentions_available_modes() {
             request_user_input_tool_description(true),
             "Request user input for one to three short questions and wait for the response. This tool is only available in Default or Plan mode.".to_string()
         );
+}
+
+#[test]
+fn question_tool_description_mentions_available_modes() {
+    assert_eq!(
+        question_tool_description(false),
+        "Ask the user a structured form with as many questions as needed and wait for the response. The client will render choices and/or text fields automatically. This tool is only available in Default or Plan mode.".to_string()
+    );
+    assert_eq!(
+        question_tool_description(true),
+        "Ask the user a structured form with as many questions as needed and wait for the response. The client will render choices and/or text fields automatically. This tool is only available in Default or Plan mode.".to_string()
+    );
 }

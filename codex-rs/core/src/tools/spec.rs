@@ -26,6 +26,7 @@ use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::handlers::multi_agents::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents::MIN_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::question_tool_description;
 use crate::tools::handlers::request_permissions_tool_description;
 use crate::tools::handlers::request_user_input_tool_description;
 use crate::tools::registry::ToolRegistryBuilder;
@@ -1132,6 +1133,15 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
                 ),
             },
         ),
+        (
+            "cwd".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional working directory for the new agent. Defaults to inheriting the parent cwd. Relative paths resolve against the parent cwd."
+                        .to_string(),
+                ),
+            },
+        ),
     ]);
     properties.insert(
         "task_name".to_string(),
@@ -1513,7 +1523,9 @@ fn create_request_user_input_tool(
     question_props.insert("options".to_string(), options_schema);
 
     let questions_schema = JsonSchema::Array {
-        description: Some("Questions to show the user. Prefer 1 and do not exceed 3".to_string()),
+        description: Some(
+            "Questions to show the user. Use as many as needed for the form.".to_string(),
+        ),
         items: Box::new(JsonSchema::Object {
             properties: question_props,
             required: Some(vec![
@@ -1532,6 +1544,93 @@ fn create_request_user_input_tool(
     ToolSpec::Function(ResponsesApiTool {
         name: "request_user_input".to_string(),
         description: request_user_input_tool_description(
+            collaboration_modes_config.default_mode_request_user_input,
+        ),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["questions".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: None,
+    })
+}
+
+fn create_question_tool(collaboration_modes_config: CollaborationModesConfig) -> ToolSpec {
+    let mut option_props = BTreeMap::new();
+    option_props.insert(
+        "label".to_string(),
+        JsonSchema::String {
+            description: Some("User-facing label (1-5 words).".to_string()),
+        },
+    );
+    option_props.insert(
+        "description".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "One short sentence explaining impact/tradeoff if selected.".to_string(),
+            ),
+        },
+    );
+
+    let options_schema = JsonSchema::Array {
+        description: Some(
+            "Optional mutually exclusive choices for this question. Omit this field for a freeform text answer. When provided, put the recommended option first and do not include an \"Other\" option; the client can collect additional notes separately."
+                .to_string(),
+        ),
+        items: Box::new(JsonSchema::Object {
+            properties: option_props,
+            required: Some(vec!["label".to_string(), "description".to_string()]),
+            additional_properties: Some(false.into()),
+        }),
+    };
+
+    let mut question_props = BTreeMap::new();
+    question_props.insert(
+        "id".to_string(),
+        JsonSchema::String {
+            description: Some("Stable identifier for mapping answers (snake_case).".to_string()),
+        },
+    );
+    question_props.insert(
+        "header".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Short header label shown in the UI (12 or fewer chars).".to_string(),
+            ),
+        },
+    );
+    question_props.insert(
+        "question".to_string(),
+        JsonSchema::String {
+            description: Some("Prompt shown to the user for this field.".to_string()),
+        },
+    );
+    question_props.insert("options".to_string(), options_schema);
+
+    let questions_schema = JsonSchema::Array {
+        description: Some(
+            "Questions to show the user. There is no fixed maximum; use as many as needed for the form."
+                .to_string(),
+        ),
+        items: Box::new(JsonSchema::Object {
+            properties: question_props,
+            required: Some(vec![
+                "id".to_string(),
+                "header".to_string(),
+                "question".to_string(),
+            ]),
+            additional_properties: Some(false.into()),
+        }),
+    };
+
+    let mut properties = BTreeMap::new();
+    properties.insert("questions".to_string(), questions_schema);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "question".to_string(),
+        description: question_tool_description(
             collaboration_modes_config.default_mode_request_user_input,
         ),
         strict: false,
@@ -2780,12 +2879,21 @@ pub(crate) fn build_specs_with_discoverable_tools(
     if config.request_user_input {
         push_tool_spec(
             &mut builder,
+            create_question_tool(CollaborationModesConfig {
+                default_mode_request_user_input: config.default_mode_request_user_input,
+            }),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
             create_request_user_input_tool(CollaborationModesConfig {
                 default_mode_request_user_input: config.default_mode_request_user_input,
             }),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
+        builder.register_handler("question", request_user_input_handler.clone());
         builder.register_handler("request_user_input", request_user_input_handler);
     }
 

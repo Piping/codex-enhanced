@@ -16,6 +16,9 @@ use crate::chatwidget::ExternalEditorState;
 use crate::chatwidget::ThreadInputState;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
+use crate::display_preferences::DisplayPreferences;
+use crate::display_preferences::display_preference_edit;
+use crate::display_preferences::set_display_preference_in_config;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::external_editor;
 use crate::file_search::FileSearchManager;
@@ -73,6 +76,7 @@ use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONF
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_ext::AccountPoolStore;
 use codex_ext::HostCapabilities;
+use codex_ext::ManagedAccountAuthStore;
 use codex_ext::activate_managed_account;
 use codex_ext::persist_current_managed_account_snapshot;
 use codex_features::Feature;
@@ -133,10 +137,15 @@ use toml::Value as TomlValue;
 use uuid::Uuid;
 
 mod agent_navigation;
+mod display_preferences_menu;
+mod jump_navigation;
 mod pending_interactive_replay;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
+use self::display_preferences_menu::control_panel_show_hide_item;
+use self::display_preferences_menu::display_preferences_items;
+use self::jump_navigation::build_jump_catalog;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
@@ -839,6 +848,7 @@ pub(crate) struct App {
     harness_overrides: ConfigOverrides,
     runtime_approval_policy_override: Option<AskForApproval>,
     runtime_sandbox_policy_override: Option<SandboxPolicy>,
+    display_preferences: DisplayPreferences,
 
     pub(crate) file_search: FileSearchManager,
 
@@ -942,6 +952,7 @@ impl App {
             feedback_audience: self.feedback_audience,
             model: Some(self.chat_widget.current_model().to_string()),
             startup_tooltip_override: None,
+            display_preferences: self.display_preferences.clone(),
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
             session_telemetry: self.session_telemetry.clone(),
             terminal_title_invalid_items_warned: self.terminal_title_invalid_items_warned.clone(),
@@ -967,6 +978,7 @@ impl App {
             .await?;
         self.apply_runtime_policy_overrides(&mut config);
         self.config = config;
+        self.display_preferences.sync_from_config(&self.config);
         Ok(())
     }
 
@@ -1926,33 +1938,50 @@ impl App {
         let items = vec![
             SelectionItem {
                 name: "Sessions".to_string(),
-                description: Some("Resume or switch saved chats.".to_string()),
+                description: None,
+                selected_description: Some("Resume or switch saved chats.".to_string()),
                 actions: vec![Box::new(|tx| tx.send(AppEvent::OpenResumePickerAll))],
                 dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
                 name: "Fork Current Session".to_string(),
-                description: Some("Fork the current thread into a new session.".to_string()),
+                description: None,
+                selected_description: Some(
+                    "Fork the current thread into a new session.".to_string(),
+                ),
                 actions: vec![Box::new(|tx| tx.send(AppEvent::ForkCurrentSession))],
                 dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
                 name: "Accounts".to_string(),
-                description: Some("Inspect the managed multi-account pool.".to_string()),
+                description: None,
+                selected_description: Some("Inspect the managed multi-account pool.".to_string()),
                 actions: vec![Box::new(|tx| tx.send(AppEvent::OpenAccountsPanel))],
                 dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
-                name: "Undo Last User Message".to_string(),
-                description: Some(
-                    "Planned MVP follow-up: restore the last sent input and roll back one turn."
+                name: "Jump To Message".to_string(),
+                description: None,
+                selected_description: Some(
+                    "Search committed transcript entries and open the transcript overlay."
                         .to_string(),
                 ),
-                is_disabled: true,
-                disabled_reason: Some("Not wired yet.".to_string()),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenJumpToMessagePanel))],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            control_panel_show_hide_item(),
+            SelectionItem {
+                name: "Undo Last User Message".to_string(),
+                description: None,
+                selected_description: Some(
+                    "Restore the last sent input and roll back one turn.".to_string(),
+                ),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::UndoLastUserMessage))],
+                dismiss_on_select: true,
                 ..Default::default()
             },
         ];
@@ -1961,9 +1990,96 @@ impl App {
             view_id: Some("fork-control-panel"),
             title: Some("Control Panel".to_string()),
             subtitle: Some(format!(
-                "Fork extension host: {} negotiated MVP capabilities.",
+                "{} features available.",
                 capabilities.capabilities.len()
             )),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn display_preferences_panel_params(
+        &self,
+        initial_selected_idx: Option<usize>,
+    ) -> SelectionViewParams {
+        SelectionViewParams {
+            view_id: Some("fork-display-preferences-panel"),
+            title: Some("Show / Hide UI".to_string()),
+            subtitle: Some("These toggles only affect this TUI session.".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            footer_note: Some(
+                "Model context and persisted rollout history are unchanged."
+                    .dim()
+                    .into(),
+            ),
+            items: display_preferences_items(&self.display_preferences),
+            initial_selected_idx,
+            ..Default::default()
+        }
+    }
+
+    fn open_display_preferences_panel(&mut self) {
+        let view_id = "fork-display-preferences-panel";
+        let initial_selected_idx = self.chat_widget.selected_index_for_active_view(view_id);
+        if !self.chat_widget.replace_selection_view_if_active(
+            view_id,
+            self.display_preferences_panel_params(initial_selected_idx),
+        ) {
+            self.chat_widget
+                .show_selection_view(self.display_preferences_panel_params(initial_selected_idx));
+        }
+    }
+
+    fn open_jump_to_message_panel(&mut self) {
+        let catalog = build_jump_catalog(&self.transcript_cells);
+        let subtitle = if catalog.is_empty() {
+            Some("No committed transcript entries are available yet.".to_string())
+        } else {
+            Some(format!(
+                "{} committed transcript entr{} available.",
+                catalog.len(),
+                if catalog.len() == 1 {
+                    "y is"
+                } else {
+                    "ies are"
+                }
+            ))
+        };
+        let items = if catalog.is_empty() {
+            vec![SelectionItem {
+                name: "Nothing to jump to yet".to_string(),
+                description: Some(
+                    "Send a message or wait for a response before using Jump To Message."
+                        .to_string(),
+                ),
+                is_disabled: true,
+                ..Default::default()
+            }]
+        } else {
+            catalog
+                .targets
+                .iter()
+                .map(|target| {
+                    let cell_index = target.cell_index;
+                    SelectionItem {
+                        name: target.title.clone(),
+                        description: Some(target.preview.clone()),
+                        actions: vec![Box::new(move |tx| {
+                            tx.send(AppEvent::JumpToTranscriptCell(cell_index));
+                        })],
+                        dismiss_on_select: true,
+                        search_value: Some(target.search_value()),
+                        ..Default::default()
+                    }
+                })
+                .collect()
+        };
+
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            view_id: Some("fork-jump-to-message-panel"),
+            title: Some("Jump To Message".to_string()),
+            subtitle,
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
@@ -2035,6 +2151,17 @@ impl App {
                         dismiss_on_select: true,
                         ..Default::default()
                     });
+                    items.push(SelectionItem {
+                        name: "Delete".to_string(),
+                        description: Some(
+                            "Open deletion actions for managed accounts.".to_string(),
+                        ),
+                        actions: vec![Box::new(|tx| {
+                            tx.send(AppEvent::OpenManagedAccountDeletePanel)
+                        })],
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    });
                 }
             }
             Err(err) => {
@@ -2064,7 +2191,7 @@ impl App {
             title: Some("Accounts".to_string()),
             subtitle,
             footer_hint: Some(standard_popup_hint_line()),
-            footer_note: Some(Line::from(path.display().to_string()).dim()),
+            footer_path: Some(path.display().to_string()),
             items,
             ..Default::default()
         });
@@ -2139,7 +2266,84 @@ impl App {
             title: Some("Rename".to_string()),
             subtitle,
             footer_hint: Some(standard_popup_hint_line()),
-            footer_note: Some(Line::from(path.display().to_string()).dim()),
+            footer_path: Some(path.display().to_string()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn open_managed_account_delete_panel(&mut self) {
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        let path = store.path();
+        let state = self.sync_current_auth_into_account_pool(&store);
+        let mut items = Vec::new();
+        let subtitle = match &state {
+            Ok(state) => Some(format!(
+                "Delete saved snapshots for {} managed account(s).",
+                state.accounts.len()
+            )),
+            Err(err) => Some(format!("Failed to read account pool: {err}")),
+        };
+
+        match state {
+            Ok(state) => {
+                for account in &state.accounts {
+                    let account_id = account.id.clone();
+                    let display_name = account.display_name().to_string();
+                    let is_active = state.active_account_id.as_deref() == Some(account.id.as_str());
+                    let mut description_parts = Vec::new();
+                    description_parts.push(account.id.clone());
+                    if let Some(masked_email) = &account.masked_email {
+                        description_parts.push(masked_email.clone());
+                    }
+                    if is_active {
+                        description_parts.push("active".to_string());
+                    }
+                    items.push(SelectionItem {
+                        name: format!("Delete {display_name}"),
+                        description: Some(description_parts.join(" · ")),
+                        is_disabled: is_active,
+                        disabled_reason: is_active
+                            .then(|| "Switch away before deleting".to_string()),
+                        actions: vec![Box::new(move |tx| {
+                            tx.send(AppEvent::OpenDeleteManagedAccountConfirmation {
+                                account_id: account_id.clone(),
+                                display_name: display_name.clone(),
+                            });
+                        })],
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    });
+                }
+            }
+            Err(err) => {
+                items.push(SelectionItem {
+                    name: "Account pool unavailable".to_string(),
+                    description: Some(err.to_string()),
+                    is_disabled: true,
+                    ..Default::default()
+                });
+            }
+        }
+
+        if items.is_empty() {
+            items.push(SelectionItem {
+                name: "No managed accounts yet".to_string(),
+                description: Some(format!(
+                    "Run repeated ChatGPT login flows and persist them into {}.",
+                    path.display()
+                )),
+                is_disabled: true,
+                ..Default::default()
+            });
+        }
+
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            view_id: Some("fork-account-delete-panel"),
+            title: Some("Delete".to_string()),
+            subtitle,
+            footer_hint: Some(standard_popup_hint_line()),
+            footer_path: Some(path.display().to_string()),
             items,
             ..Default::default()
         });
@@ -2211,6 +2415,130 @@ impl App {
         }
 
         self.open_managed_account_rename_panel();
+    }
+
+    fn open_managed_account_delete_confirmation(
+        &mut self,
+        account_id: String,
+        display_name: String,
+    ) {
+        let auth_store = ManagedAccountAuthStore::new(self.config.codex_home.clone());
+        let auth_path = auth_store.account_auth_path(&account_id);
+        let confirm_account_id = account_id;
+
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            view_id: Some("fork-account-delete-confirm-panel"),
+            title: Some("Delete Account".to_string()),
+            subtitle: Some(format!(
+                "Delete saved managed-account data for {display_name}?"
+            )),
+            footer_hint: Some(standard_popup_hint_line()),
+            footer_path: Some(auth_path.display().to_string()),
+            items: vec![
+                SelectionItem {
+                    name: format!("Delete {display_name}"),
+                    description: Some(
+                        "Remove its saved auth snapshot and alias from the managed pool."
+                            .to_string(),
+                    ),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::DeleteManagedAccount(confirm_account_id.clone()));
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: "Cancel".to_string(),
+                    description: Some("Return to the delete menu.".to_string()),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::OpenManagedAccountDeletePanel);
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+    }
+
+    fn delete_managed_account(&mut self, account_id: String) {
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        let state = match store.load() {
+            Ok(state) => state,
+            Err(err) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(format!(
+                        "Failed to load managed account pool: {err}"
+                    )));
+                return;
+            }
+        };
+
+        if state.active_account_id.as_deref() == Some(account_id.as_str()) {
+            self.chat_widget
+                .add_to_history(history_cell::new_error_event(
+                    "Switch to another managed account before deleting the active one.".to_string(),
+                ));
+            self.open_managed_account_delete_panel();
+            return;
+        }
+
+        let Some(display_name) = state
+            .accounts
+            .iter()
+            .find(|account| account.id == account_id)
+            .map(|account| account.display_name().to_string())
+        else {
+            self.chat_widget
+                .add_to_history(history_cell::new_error_event(format!(
+                    "Managed account {account_id} was not found."
+                )));
+            self.open_managed_account_delete_panel();
+            return;
+        };
+
+        let auth_store = ManagedAccountAuthStore::new(self.config.codex_home.clone());
+        if let Err(err) = auth_store.delete_account_auth(&account_id) {
+            self.chat_widget
+                .add_to_history(history_cell::new_error_event(format!(
+                    "Failed to remove managed account auth snapshot: {err}"
+                )));
+            return;
+        }
+
+        if let Err(err) = store.update(|state| {
+            state.remove_account(&account_id);
+        }) {
+            self.chat_widget
+                .add_to_history(history_cell::new_error_event(format!(
+                    "Failed to delete managed account: {err}"
+                )));
+            return;
+        }
+
+        self.chat_widget
+            .add_to_history(history_cell::new_info_event(
+                format!("Deleted managed account {display_name}."),
+                None,
+            ));
+        self.open_managed_account_delete_panel();
+    }
+
+    fn jump_to_transcript_cell(&mut self, tui: &mut tui::Tui, cell_index: usize) {
+        if cell_index >= self.transcript_cells.len() {
+            self.chat_widget.add_error_message(format!(
+                "Transcript entry {cell_index} is no longer available."
+            ));
+            return;
+        }
+
+        let _ = tui.enter_alt_screen();
+        let mut overlay = Overlay::new_transcript(self.transcript_cells.clone());
+        if let Overlay::Transcript(transcript) = &mut overlay {
+            transcript.set_highlight_cell(Some(cell_index));
+        }
+        self.overlay = Some(overlay);
+        tui.frame_requester().schedule_frame();
     }
 
     /// Marks a cached picker thread closed and recomputes the contextual footer label.
@@ -2353,6 +2681,7 @@ impl App {
             feedback_audience: self.feedback_audience,
             model: Some(model),
             startup_tooltip_override: None,
+            display_preferences: self.display_preferences.clone(),
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
             session_telemetry: self.session_telemetry.clone(),
             terminal_title_invalid_items_warned: self.terminal_title_invalid_items_warned.clone(),
@@ -2570,6 +2899,7 @@ impl App {
 
         let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
         let terminal_title_invalid_items_warned = Arc::new(AtomicBool::new(false));
+        let display_preferences = DisplayPreferences::from_config(&config);
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =
@@ -2597,6 +2927,7 @@ impl App {
                     feedback_audience,
                     model: Some(model.clone()),
                     startup_tooltip_override,
+                    display_preferences: display_preferences.clone(),
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
                     terminal_title_invalid_items_warned: terminal_title_invalid_items_warned
@@ -2635,6 +2966,7 @@ impl App {
                     feedback_audience,
                     model: config.model.clone(),
                     startup_tooltip_override: None,
+                    display_preferences: display_preferences.clone(),
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
                     terminal_title_invalid_items_warned: terminal_title_invalid_items_warned
@@ -2679,6 +3011,7 @@ impl App {
                     feedback_audience,
                     model: config.model.clone(),
                     startup_tooltip_override: None,
+                    display_preferences: display_preferences.clone(),
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
                     terminal_title_invalid_items_warned: terminal_title_invalid_items_warned
@@ -2710,6 +3043,7 @@ impl App {
             harness_overrides,
             runtime_approval_policy_override: None,
             runtime_sandbox_policy_override: None,
+            display_preferences,
             file_search,
             enhanced_keys_supported,
             transcript_cells: Vec::new(),
@@ -2946,11 +3280,24 @@ impl App {
             AppEvent::OpenControlPanel => {
                 self.open_control_panel();
             }
+            AppEvent::OpenDisplayPreferencesPanel => {
+                self.open_display_preferences_panel();
+            }
             AppEvent::OpenAccountsPanel => {
                 self.open_accounts_panel();
             }
+            AppEvent::OpenJumpToMessagePanel => {
+                self.open_jump_to_message_panel();
+            }
+            AppEvent::UndoLastUserMessage => {
+                self.undo_last_user_message();
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::OpenManagedAccountRenamePanel => {
                 self.open_managed_account_rename_panel();
+            }
+            AppEvent::OpenManagedAccountDeletePanel => {
+                self.open_managed_account_delete_panel();
             }
             AppEvent::SetManagedAccountActive(account_id) => {
                 self.set_managed_account_active(account_id);
@@ -2962,8 +3309,17 @@ impl App {
                 self.chat_widget
                     .open_managed_account_alias_prompt(account_id, current_alias);
             }
+            AppEvent::OpenDeleteManagedAccountConfirmation {
+                account_id,
+                display_name,
+            } => {
+                self.open_managed_account_delete_confirmation(account_id, display_name);
+            }
             AppEvent::SaveManagedAccountAlias { account_id, alias } => {
                 self.save_managed_account_alias(account_id, alias);
+            }
+            AppEvent::DeleteManagedAccount(account_id) => {
+                self.delete_managed_account(account_id);
             }
             AppEvent::NewSession => {
                 self.start_fresh_session_with_summary_hint(tui).await;
@@ -4169,8 +4525,32 @@ impl App {
             AppEvent::OpenAgentPicker => {
                 self.open_agent_picker().await;
             }
+            AppEvent::ToggleDisplayPreference(key) => {
+                let enabled = !self.display_preferences.is_enabled(key);
+                let edit = display_preference_edit(key, enabled);
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits([edit])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        self.display_preferences.set_enabled(key, enabled);
+                        set_display_preference_in_config(&mut self.config, key, enabled);
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist display preference");
+                        self.chat_widget
+                            .add_error_message(format!("Failed to save display preference: {err}"));
+                    }
+                }
+                self.open_display_preferences_panel();
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::SelectAgentThread(thread_id) => {
                 self.select_agent_thread(tui, thread_id).await?;
+            }
+            AppEvent::JumpToTranscriptCell(cell_index) => {
+                self.jump_to_transcript_cell(tui, cell_index);
             }
             AppEvent::OpenSkillsList => {
                 self.chat_widget.open_skills_list();
@@ -4910,6 +5290,8 @@ mod tests {
     use crate::bottom_pane::TerminalTitleItem;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
     use crate::chatwidget::tests::set_chatgpt_auth;
+    use crate::display_preferences::DisplayPreferenceKey;
+    use crate::display_preferences::display_preference_edit;
     use crate::file_search::FileSearchManager;
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
@@ -7066,6 +7448,7 @@ guardian_approval = true
                 event,
                 is_first,
                 None,
+                app.display_preferences.clone(),
                 None,
                 false,
             )) as Arc<dyn HistoryCell>
@@ -7147,6 +7530,62 @@ guardian_approval = true
         assert_snapshot!("clear_ui_header_fast_status_gpt54_only", rendered);
     }
 
+    #[tokio::test]
+    async fn display_preferences_panel_toggle_replaces_active_view_so_esc_closes_it() {
+        let mut app = make_test_app().await;
+        app.open_display_preferences_panel();
+        assert!(app.chat_widget.has_active_view());
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(
+            app.chat_widget
+                .selected_index_for_active_view("fork-display-preferences-panel"),
+            Some(2)
+        );
+
+        app.display_preferences.set_enabled(
+            crate::display_preferences::DisplayPreferenceKey::ToolResults,
+            false,
+        );
+        app.open_display_preferences_panel();
+        assert_eq!(
+            app.chat_widget
+                .selected_index_for_active_view("fork-display-preferences-panel"),
+            Some(2)
+        );
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.chat_widget.has_active_view());
+    }
+
+    #[tokio::test]
+    async fn display_preferences_panel_esc_returns_to_control_panel() {
+        let mut app = make_test_app().await;
+        app.open_control_panel();
+        app.open_display_preferences_panel();
+        assert_eq!(
+            app.chat_widget
+                .selected_index_for_active_view("fork-display-preferences-panel"),
+            Some(0)
+        );
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(
+            app.chat_widget
+                .selected_index_for_active_view("fork-control-panel"),
+            Some(0)
+        );
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.chat_widget.has_active_view());
+    }
+
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
@@ -7178,6 +7617,7 @@ guardian_approval = true
             harness_overrides: ConfigOverrides::default(),
             runtime_approval_policy_override: None,
             runtime_sandbox_policy_override: None,
+            display_preferences: DisplayPreferences::default(),
             file_search,
             transcript_cells: Vec::new(),
             overlay: None,
@@ -7242,6 +7682,7 @@ guardian_approval = true
                 harness_overrides: ConfigOverrides::default(),
                 runtime_approval_policy_override: None,
                 runtime_sandbox_policy_override: None,
+                display_preferences: DisplayPreferences::default(),
                 file_search,
                 transcript_cells: Vec::new(),
                 overlay: None,
@@ -7677,6 +8118,33 @@ guardian_approval = true
     }
 
     #[tokio::test]
+    async fn refresh_in_memory_config_from_disk_loads_latest_display_preferences() -> Result<()> {
+        let mut app = make_test_app().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+
+        assert!(app.display_preferences.show_tool_results());
+        assert!(app.display_preferences.show_exec_commands());
+
+        ConfigEditsBuilder::new(&app.config.codex_home)
+            .with_edits([
+                display_preference_edit(DisplayPreferenceKey::ToolResults, false),
+                display_preference_edit(DisplayPreferenceKey::ExecCommands, false),
+            ])
+            .apply()
+            .await
+            .expect("persist display preferences");
+
+        app.refresh_in_memory_config_from_disk().await?;
+
+        assert!(!app.display_preferences.show_tool_results());
+        assert!(!app.display_preferences.show_exec_commands());
+        assert!(!app.config.tui_display_preferences.show_tool_results);
+        assert!(!app.config.tui_display_preferences.show_exec_commands);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn refresh_in_memory_config_from_disk_best_effort_keeps_current_config_on_error()
     -> Result<()> {
         let mut app = make_test_app().await;
@@ -7841,6 +8309,7 @@ guardian_approval = true
                 event,
                 is_first,
                 None,
+                app.display_preferences.clone(),
                 None,
                 false,
             )) as Arc<dyn HistoryCell>
@@ -7960,6 +8429,45 @@ guardian_approval = true
                 rollback_turns = Some(num_turns);
             }
         }
+        assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn undo_last_user_message_restores_latest_user_input_and_rolls_back_one_turn() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+
+        let remote_image_url = "https://example.com/latest.png".to_string();
+        app.transcript_cells = vec![
+            Arc::new(UserHistoryCell {
+                message: "first".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "latest".to_string(),
+                text_elements: vec![TextElement::new(
+                    codex_protocol::user_input::ByteRange { start: 0, end: 6 },
+                    Some("latest".to_string()),
+                )],
+                local_image_paths: Vec::new(),
+                remote_image_urls: vec![remote_image_url.clone()],
+            }) as Arc<dyn HistoryCell>,
+        ];
+        app.chat_widget
+            .set_composer_text("stale draft".to_string(), Vec::new(), Vec::new());
+
+        assert!(app.undo_last_user_message());
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "latest");
+        assert_eq!(app.chat_widget.remote_image_urls(), vec![remote_image_url]);
+
+        let mut rollback_turns = None;
+        while let Ok(op) = op_rx.try_recv() {
+            if let Op::ThreadRollback { num_turns } = op {
+                rollback_turns = Some(num_turns);
+            }
+        }
+
         assert_eq!(rollback_turns, Some(1));
     }
 

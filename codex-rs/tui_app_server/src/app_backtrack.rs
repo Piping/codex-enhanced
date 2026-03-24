@@ -459,6 +459,25 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
+    pub(crate) fn undo_last_user_message(&mut self) -> bool {
+        self.reset_backtrack_state();
+
+        let Some(nth_user_message) = user_count(&self.transcript_cells).checked_sub(1) else {
+            self.chat_widget
+                .add_error_message("No prior user message to restore.".to_string());
+            return false;
+        };
+
+        let Some(selection) = self.selection_for_user_message(nth_user_message) else {
+            self.chat_widget
+                .add_error_message("Failed to restore the last user message.".to_string());
+            return false;
+        };
+
+        self.apply_backtrack_rollback(selection);
+        true
+    }
+
     pub(crate) fn handle_backtrack_rollback_succeeded(&mut self, num_turns: u32) {
         if self.backtrack.pending_rollback.is_some() {
             self.finish_pending_backtrack();
@@ -512,6 +531,10 @@ impl App {
             return None;
         }
 
+        self.selection_for_user_message(nth_user_message)
+    }
+
+    fn selection_for_user_message(&self, nth_user_message: usize) -> Option<BacktrackSelection> {
         let (prefill, text_elements, local_image_paths, remote_image_urls) =
             nth_user_position(&self.transcript_cells, nth_user_message)
                 .and_then(|idx| self.transcript_cells.get(idx))

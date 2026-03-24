@@ -10,15 +10,36 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::TUI_VISIBLE_COLLABORATION_MODES;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QuestionOptionsPolicy {
+    RequireOptions,
+    AllowFreeform,
+}
+
+fn question_is_available(mode: ModeKind) -> bool {
+    mode.allows_request_user_input() || mode == ModeKind::Default
+}
+
 fn request_user_input_is_available(mode: ModeKind, default_mode_request_user_input: bool) -> bool {
     mode.allows_request_user_input()
         || (default_mode_request_user_input && mode == ModeKind::Default)
 }
 
-fn format_allowed_modes(default_mode_request_user_input: bool) -> String {
+fn tool_is_available(
+    tool_name: &str,
+    mode: ModeKind,
+    default_mode_request_user_input: bool,
+) -> bool {
+    match tool_name {
+        "question" => question_is_available(mode),
+        _ => request_user_input_is_available(mode, default_mode_request_user_input),
+    }
+}
+
+fn format_allowed_modes(tool_name: &str, default_mode_request_user_input: bool) -> String {
     let mode_names: Vec<&str> = TUI_VISIBLE_COLLABORATION_MODES
         .into_iter()
-        .filter(|mode| request_user_input_is_available(*mode, default_mode_request_user_input))
+        .filter(|mode| tool_is_available(tool_name, *mode, default_mode_request_user_input))
         .map(ModeKind::display_name)
         .collect();
 
@@ -28,6 +49,15 @@ fn format_allowed_modes(default_mode_request_user_input: bool) -> String {
         [first, second] => format!("{first} or {second} mode"),
         [..] => format!("modes: {}", mode_names.join(",")),
     }
+}
+
+fn interactive_question_tool_description(
+    tool_name: &str,
+    tool_description: &str,
+    default_mode_request_user_input: bool,
+) -> String {
+    let allowed_modes = format_allowed_modes(tool_name, default_mode_request_user_input);
+    format!("{tool_description} This tool is only available in {allowed_modes}.")
 }
 
 pub(crate) fn request_user_input_unavailable_message(
@@ -44,11 +74,67 @@ pub(crate) fn request_user_input_unavailable_message(
     }
 }
 
+pub(crate) fn question_unavailable_message(mode: ModeKind) -> Option<String> {
+    if question_is_available(mode) {
+        None
+    } else {
+        let mode_name = mode.display_name();
+        Some(format!("question is unavailable in {mode_name} mode"))
+    }
+}
+
 pub(crate) fn request_user_input_tool_description(default_mode_request_user_input: bool) -> String {
-    let allowed_modes = format_allowed_modes(default_mode_request_user_input);
-    format!(
-        "Request user input for one to three short questions and wait for the response. This tool is only available in {allowed_modes}."
+    interactive_question_tool_description(
+        "request_user_input",
+        "Request user input for one to three short questions and wait for the response.",
+        default_mode_request_user_input,
     )
+}
+
+pub(crate) fn question_tool_description(default_mode_request_user_input: bool) -> String {
+    interactive_question_tool_description(
+        "question",
+        "Ask the user a structured form with as many questions as needed and wait for the response. The client will render choices and/or text fields automatically.",
+        default_mode_request_user_input,
+    )
+}
+
+fn question_options_policy(tool_name: &str) -> QuestionOptionsPolicy {
+    match tool_name {
+        "question" => QuestionOptionsPolicy::AllowFreeform,
+        _ => QuestionOptionsPolicy::RequireOptions,
+    }
+}
+
+fn normalize_question_args(
+    args: &mut RequestUserInputArgs,
+    options_policy: QuestionOptionsPolicy,
+) -> Result<(), FunctionCallError> {
+    for question in &mut args.questions {
+        if question.options.as_ref().is_some_and(Vec::is_empty) {
+            question.options = None;
+        }
+        if question
+            .options
+            .as_ref()
+            .is_some_and(|options| !options.is_empty())
+        {
+            question.is_other = true;
+        }
+    }
+
+    if options_policy == QuestionOptionsPolicy::RequireOptions
+        && args
+            .questions
+            .iter()
+            .any(|question| question.options.as_ref().is_none_or(Vec::is_empty))
+    {
+        return Err(FunctionCallError::RespondToModel(
+            "request_user_input requires non-empty options for every question".to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 pub struct RequestUserInputHandler {
@@ -68,6 +154,7 @@ impl ToolHandler for RequestUserInputHandler {
             session,
             turn,
             call_id,
+            tool_name,
             payload,
             ..
         } = invocation;
@@ -75,32 +162,23 @@ impl ToolHandler for RequestUserInputHandler {
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
             _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "request_user_input handler received unsupported payload".to_string(),
-                ));
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "{tool_name} handler received unsupported payload"
+                )));
             }
         };
 
         let mode = session.collaboration_mode().await.mode;
-        if let Some(message) =
-            request_user_input_unavailable_message(mode, self.default_mode_request_user_input)
-        {
+        let unavailable_message = match tool_name.as_str() {
+            "question" => question_unavailable_message(mode),
+            _ => request_user_input_unavailable_message(mode, self.default_mode_request_user_input),
+        };
+        if let Some(message) = unavailable_message {
             return Err(FunctionCallError::RespondToModel(message));
         }
 
         let mut args: RequestUserInputArgs = parse_arguments(&arguments)?;
-        let missing_options = args
-            .questions
-            .iter()
-            .any(|question| question.options.as_ref().is_none_or(Vec::is_empty));
-        if missing_options {
-            return Err(FunctionCallError::RespondToModel(
-                "request_user_input requires non-empty options for every question".to_string(),
-            ));
-        }
-        for question in &mut args.questions {
-            question.is_other = true;
-        }
+        normalize_question_args(&mut args, question_options_policy(&tool_name))?;
         let response = session
             .request_user_input(turn.as_ref(), call_id, args)
             .await

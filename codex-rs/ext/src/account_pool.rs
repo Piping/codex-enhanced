@@ -228,6 +228,20 @@ impl AccountPoolState {
         }
     }
 
+    pub fn remove_account(&mut self, account_id: &str) -> bool {
+        let original_len = self.accounts.len();
+        self.accounts.retain(|account| account.id != account_id);
+        if self.accounts.len() == original_len {
+            return false;
+        }
+
+        if self.active_account_id.as_deref() == Some(account_id) {
+            self.active_account_id = self.accounts.first().map(|account| account.id.clone());
+        }
+
+        true
+    }
+
     pub fn apply_rate_limit_snapshot(
         &mut self,
         account_id: &str,
@@ -500,5 +514,45 @@ mod tests {
 
         assert_eq!(state.accounts[0].last_limit_error_at, Some(100));
         assert_eq!(state.accounts[0].cooldown_until, Some(500));
+    }
+
+    #[test]
+    fn remove_account_updates_active_selection() {
+        let mut state = AccountPoolState {
+            version: 1,
+            active_account_id: Some("acc-primary".to_string()),
+            accounts: vec![
+                AccountRecord {
+                    id: "acc-primary".to_string(),
+                    alias: "Primary".to_string(),
+                    masked_email: None,
+                    plan_label: None,
+                    priority: 0,
+                    enabled: true,
+                    cooldown_until: None,
+                    last_limit_error_at: None,
+                    last_selected_at: None,
+                    usage_windows: Vec::new(),
+                },
+                AccountRecord {
+                    id: "acc-backup".to_string(),
+                    alias: "Backup".to_string(),
+                    masked_email: None,
+                    plan_label: None,
+                    priority: 1,
+                    enabled: true,
+                    cooldown_until: None,
+                    last_limit_error_at: None,
+                    last_selected_at: None,
+                    usage_windows: Vec::new(),
+                },
+            ],
+        };
+
+        assert!(state.remove_account("acc-primary"));
+
+        assert_eq!(state.active_account_id, Some("acc-backup".to_string()));
+        assert_eq!(state.accounts.len(), 1);
+        assert_eq!(state.accounts[0].id, "acc-backup");
     }
 }

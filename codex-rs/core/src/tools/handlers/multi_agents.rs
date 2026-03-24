@@ -49,6 +49,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub(crate) use close_agent::Handler as CloseAgentHandler;
@@ -246,6 +248,44 @@ fn input_preview(items: &[UserInput]) -> String {
         .collect();
 
     parts.join("\n")
+}
+
+pub(crate) fn resolve_requested_agent_cwd(
+    parent_cwd: &Path,
+    requested_cwd: Option<&str>,
+) -> Result<Option<PathBuf>, FunctionCallError> {
+    let Some(requested_cwd) = requested_cwd else {
+        return Ok(None);
+    };
+
+    let requested_cwd = requested_cwd.trim();
+    if requested_cwd.is_empty() {
+        return Err(FunctionCallError::RespondToModel(
+            "spawn_agent cwd cannot be empty".to_string(),
+        ));
+    }
+
+    let requested_path = PathBuf::from(requested_cwd);
+    let resolved = if requested_path.is_absolute() {
+        requested_path
+    } else {
+        parent_cwd.join(requested_path)
+    };
+
+    if !resolved.exists() {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "spawn_agent cwd {} does not exist",
+            resolved.display()
+        )));
+    }
+    if !resolved.is_dir() {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "spawn_agent cwd {} is not a directory",
+            resolved.display()
+        )));
+    }
+
+    Ok(Some(resolved))
 }
 
 /// Builds the base config snapshot for a newly spawned sub-agent.

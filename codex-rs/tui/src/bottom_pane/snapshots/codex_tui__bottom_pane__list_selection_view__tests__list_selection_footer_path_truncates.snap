@@ -1,0 +1,13 @@
+---
+source: tui/src/bottom_pane/list_selection_view.rs
+assertion_line: 1570
+expression: "render_lines_with_width(&view, 40)"
+---
+                                        
+  Delete                                
+                                        
+› 1. Delete Backup  Remove the saved    
+                    account snapshot.   
+                                        
+  /Users/bytedance/…/path/token.json    
+  Press enter to confirm or esc to go ba

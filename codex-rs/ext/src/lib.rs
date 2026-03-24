@@ -1,8 +1,10 @@
 pub mod account_pool;
 pub mod account_signal;
 pub mod host_api;
+pub mod jump;
 pub mod managed_account_auth;
 pub mod router;
+pub mod workspace_spawn;
 
 pub use account_pool::AccountManagementProfile;
 pub use account_pool::AccountPoolState;
@@ -20,6 +22,9 @@ pub use host_api::CapabilityRequirement;
 pub use host_api::HostCapabilities;
 pub use host_api::HostCapability;
 pub use host_api::PluginNegotiation;
+pub use jump::JumpCatalog;
+pub use jump::JumpTarget;
+pub use jump::JumpTargetKind;
 pub use managed_account_auth::MANAGED_ACCOUNTS_RELATIVE_DIR;
 pub use managed_account_auth::ManagedAccountAuthStore;
 pub use managed_account_auth::ManagedAccountSnapshot;
@@ -32,3 +37,7 @@ pub use router::AccountRouterDecisionReason;
 pub use router::DefaultAccountRouter;
 pub use router::RouteTurnRequest;
 pub use router::RoutingTrigger;
+pub use workspace_spawn::WorkspaceSpawnError;
+pub use workspace_spawn::WorkspaceSpawnRequest;
+pub use workspace_spawn::WorkspaceSpawnResolution;
+pub use workspace_spawn::resolve_workspace_spawn;

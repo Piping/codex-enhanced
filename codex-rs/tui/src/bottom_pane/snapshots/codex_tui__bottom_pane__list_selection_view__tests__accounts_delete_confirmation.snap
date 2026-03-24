@@ -1,0 +1,15 @@
+---
+source: tui/src/bottom_pane/list_selection_view.rs
+expression: render_lines(&view)
+---
+                                                
+  Delete Account                                
+  Delete saved managed-account data for Backup  
+                                                
+› 1. Delete Backup  Remove its saved auth       
+                    snapshot and alias from     
+                    the managed pool.           
+  2. Cancel         Return to the delete menu.  
+                                                
+  /tmp/codex-home/accounts/workspace-2/auth.json
+  Press enter to confirm or esc to go back

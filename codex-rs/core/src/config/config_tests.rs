@@ -12,6 +12,7 @@ use crate::config::types::ModelAvailabilityNuxConfig;
 use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
 use crate::config::types::ToolSuggestDiscoverableType;
+use crate::config::types::TuiDisplayPreferences;
 use crate::config_loader::RequirementSource;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
@@ -246,6 +247,7 @@ fn config_toml_deserializes_model_availability_nux() {
                     ("gpt-foo".to_string(), 2),
                 ]),
             },
+            display_preferences: TuiDisplayPreferences::default(),
         }
     );
 }
@@ -262,6 +264,37 @@ fn runtime_config_defaults_model_availability_nux() {
     assert_eq!(
         cfg.model_availability_nux,
         ModelAvailabilityNuxConfig::default()
+    );
+}
+
+#[test]
+fn runtime_config_loads_tui_display_preferences() {
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            tui: Some(Tui {
+                display_preferences: TuiDisplayPreferences {
+                    show_tool_results: false,
+                    show_exec_commands: false,
+                    show_waited_messages: false,
+                    show_patch_diffs: true,
+                },
+                ..Tui::default()
+            }),
+            ..ConfigToml::default()
+        },
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").path().to_path_buf(),
+    )
+    .expect("load config");
+
+    assert_eq!(
+        cfg.tui_display_preferences,
+        TuiDisplayPreferences {
+            show_tool_results: false,
+            show_exec_commands: false,
+            show_waited_messages: false,
+            show_patch_diffs: true,
+        }
     );
 }
 
@@ -926,6 +959,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             terminal_title: None,
             theme: None,
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
+            display_preferences: TuiDisplayPreferences::default(),
         }
     );
 }
@@ -4347,6 +4381,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             animations: true,
             show_tooltips: true,
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
+            tui_display_preferences: TuiDisplayPreferences::default(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tool_suggest: ToolSuggestConfig::default(),
@@ -4490,6 +4525,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
+        tui_display_preferences: TuiDisplayPreferences::default(),
         analytics_enabled: Some(true),
         feedback_enabled: true,
         tool_suggest: ToolSuggestConfig::default(),
@@ -4631,6 +4667,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
+        tui_display_preferences: TuiDisplayPreferences::default(),
         analytics_enabled: Some(false),
         feedback_enabled: true,
         tool_suggest: ToolSuggestConfig::default(),
@@ -4758,6 +4795,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
+        tui_display_preferences: TuiDisplayPreferences::default(),
         analytics_enabled: Some(true),
         feedback_enabled: true,
         tool_suggest: ToolSuggestConfig::default(),
@@ -6097,6 +6135,8 @@ struct TuiTomlTest {
     notifications: Notifications,
     #[serde(default)]
     notification_method: NotificationMethod,
+    #[serde(default)]
+    display_preferences: TuiDisplayPreferences,
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -6136,4 +6176,25 @@ fn test_tui_notification_method() {
     let parsed: RootTomlTest =
         toml::from_str(toml).expect("deserialize notification_method=\"bel\"");
     assert_eq!(parsed.tui.notification_method, NotificationMethod::Bel);
+}
+
+#[test]
+fn test_tui_display_preferences() {
+    let toml = r#"
+            [tui.display_preferences]
+            show_tool_results = false
+            show_exec_commands = false
+            show_waited_messages = false
+            show_patch_diffs = true
+        "#;
+    let parsed: RootTomlTest = toml::from_str(toml).expect("deserialize tui.display_preferences");
+    assert_eq!(
+        parsed.tui.display_preferences,
+        TuiDisplayPreferences {
+            show_tool_results: false,
+            show_exec_commands: false,
+            show_waited_messages: false,
+            show_patch_diffs: true,
+        }
+    );
 }

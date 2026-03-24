@@ -49,6 +49,7 @@ pub use read_file::ReadFileHandler;
 pub use request_permissions::RequestPermissionsHandler;
 pub(crate) use request_permissions::request_permissions_tool_description;
 pub use request_user_input::RequestUserInputHandler;
+pub(crate) use request_user_input::question_tool_description;
 pub(crate) use request_user_input::request_user_input_tool_description;
 pub use shell::ShellCommandHandler;
 pub use shell::ShellHandler;

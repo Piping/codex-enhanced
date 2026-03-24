@@ -293,6 +293,7 @@ use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::clipboard_text;
 use crate::collaboration_modes;
 use crate::diff_render::display_path_for;
+use crate::display_preferences::DisplayPreferences;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
 use crate::exec_cell::new_active_exec_command;
@@ -537,6 +538,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) initial_plan_type: Option<PlanType>,
     pub(crate) model: Option<String>,
     pub(crate) startup_tooltip_override: Option<String>,
+    pub(crate) display_preferences: DisplayPreferences,
     // Shared latch so we only warn once about invalid status-line item IDs.
     pub(crate) status_line_invalid_items_warned: Arc<AtomicBool>,
     pub(crate) session_telemetry: SessionTelemetry,
@@ -819,6 +821,9 @@ pub(crate) struct ChatWidget {
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
     full_reasoning_buffer: String,
+    raw_reasoning_buffer: String,
+    full_raw_reasoning_buffer: String,
+    display_preferences: DisplayPreferences,
     // The currently rendered footer state. We keep the already-formatted
     // details here so transient stream interruptions can restore the footer
     // exactly as it was shown.
@@ -1544,7 +1549,11 @@ impl ChatWidget {
             return;
         };
         self.needs_final_message_separator = true;
-        let cell = history_cell::new_unified_exec_interaction(wait.command_display, String::new());
+        let cell = history_cell::new_unified_exec_interaction(
+            wait.command_display,
+            String::new(),
+            self.display_preferences.clone(),
+        );
         self.app_event_tx
             .send(AppEvent::InsertHistoryCell(Box::new(cell)));
         self.restore_reasoning_status_header();
@@ -1853,6 +1862,7 @@ impl ChatWidget {
             event,
             self.show_welcome_banner,
             startup_tooltip_override,
+            self.display_preferences.clone(),
             self.plan_type,
             show_fast_status,
         );
@@ -2109,9 +2119,15 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    fn on_raw_reasoning_delta(&mut self, delta: String) {
+        self.raw_reasoning_buffer.push_str(&delta);
+    }
+
     fn on_agent_reasoning_final(&mut self) {
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
+        self.full_raw_reasoning_buffer
+            .push_str(&self.raw_reasoning_buffer);
         if !self.full_reasoning_buffer.is_empty() {
             let cell = history_cell::new_reasoning_summary_block(
                 self.full_reasoning_buffer.clone(),
@@ -2119,8 +2135,18 @@ impl ChatWidget {
             );
             self.add_boxed_history(cell);
         }
+        if !self.full_raw_reasoning_buffer.is_empty() {
+            let cell = history_cell::new_reasoning_raw_block(
+                self.full_raw_reasoning_buffer.clone(),
+                &self.config.cwd,
+                self.display_preferences.clone(),
+            );
+            self.add_boxed_history(cell);
+        }
         self.reasoning_buffer.clear();
         self.full_reasoning_buffer.clear();
+        self.raw_reasoning_buffer.clear();
+        self.full_raw_reasoning_buffer.clear();
         self.request_redraw();
     }
 
@@ -2129,9 +2155,11 @@ impl ChatWidget {
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
         self.full_reasoning_buffer.push_str("\n\n");
         self.reasoning_buffer.clear();
+        self.full_raw_reasoning_buffer
+            .push_str(&self.raw_reasoning_buffer);
+        self.full_raw_reasoning_buffer.push_str("\n\n");
+        self.raw_reasoning_buffer.clear();
     }
-
-    // Raw reasoning uses the same flow as summarized reasoning
 
     fn on_task_started(&mut self) {
         self.agent_turn_running = true;
@@ -2156,6 +2184,8 @@ impl ChatWidget {
         self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
+        self.full_raw_reasoning_buffer.clear();
+        self.raw_reasoning_buffer.clear();
         self.request_redraw();
     }
 
@@ -3033,7 +3063,11 @@ impl ChatWidget {
                         .and_then(serde_json::Value::as_u64)
                         .and_then(|count| usize::try_from(count).ok())
                         .unwrap_or(files.len());
-                    history_cell::new_guardian_denied_patch_request(files, change_count)
+                    history_cell::new_guardian_denied_patch_request(
+                        files,
+                        change_count,
+                        self.display_preferences.clone(),
+                    )
                 }
                 Some("mcp_tool_call") => {
                     let server = action
@@ -3180,6 +3214,7 @@ impl ChatWidget {
             self.add_to_history(history_cell::new_unified_exec_interaction(
                 command_display,
                 ev.stdin,
+                self.display_preferences.clone(),
             ));
         }
     }
@@ -3188,6 +3223,7 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_patch_event(
             event.changes,
             &self.config.cwd,
+            self.display_preferences.clone(),
         ));
     }
 
@@ -3900,6 +3936,7 @@ impl ChatWidget {
                     source,
                     ev.interaction_input.clone(),
                     self.config.animations,
+                    self.display_preferences.clone(),
                 );
                 let completed = orphan.complete_call(&ev.call_id, output, ev.duration);
                 debug_assert!(
@@ -3921,6 +3958,7 @@ impl ChatWidget {
                     source,
                     ev.interaction_input.clone(),
                     self.config.animations,
+                    self.display_preferences.clone(),
                 );
                 let completed = cell.complete_call(&ev.call_id, output, ev.duration);
                 debug_assert!(completed, "new exec cell should contain {}", ev.call_id);
@@ -4113,6 +4151,7 @@ impl ChatWidget {
                 ev.source,
                 interaction_input,
                 self.config.animations,
+                self.display_preferences.clone(),
             )));
             self.bump_active_cell_revision();
         }
@@ -4127,6 +4166,7 @@ impl ChatWidget {
             ev.call_id,
             ev.invocation,
             self.config.animations,
+            self.display_preferences.clone(),
         )));
         self.bump_active_cell_revision();
         self.request_redraw();
@@ -4153,6 +4193,7 @@ impl ChatWidget {
                     call_id,
                     invocation,
                     self.config.animations,
+                    self.display_preferences.clone(),
                 );
                 let extra_cell = cell.complete(duration, result);
                 self.active_cell = Some(Box::new(cell));
@@ -4196,6 +4237,7 @@ impl ChatWidget {
             initial_plan_type,
             model,
             startup_tooltip_override,
+            display_preferences,
             status_line_invalid_items_warned,
             session_telemetry,
         } = common;
@@ -4288,6 +4330,9 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
+            raw_reasoning_buffer: String::new(),
+            full_raw_reasoning_buffer: String::new(),
+            display_preferences,
             current_status: StatusIndicatorState::working(),
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
             retry_status_header: None,
@@ -4513,6 +4558,8 @@ impl ChatWidget {
                         // Reset any reasoning header only when we are actually submitting a turn.
                         self.reasoning_buffer.clear();
                         self.full_reasoning_buffer.clear();
+                        self.raw_reasoning_buffer.clear();
+                        self.full_raw_reasoning_buffer.clear();
                         self.set_status_header(String::from("Working"));
                         self.submit_user_message(user_message);
                     } else {
@@ -4595,6 +4642,24 @@ impl ChatWidget {
     pub(crate) fn show_selection_view(&mut self, params: SelectionViewParams) {
         self.bottom_pane.show_selection_view(params);
         self.request_redraw();
+    }
+
+    pub(crate) fn replace_selection_view_if_active(
+        &mut self,
+        view_id: &'static str,
+        params: SelectionViewParams,
+    ) -> bool {
+        let replaced = self
+            .bottom_pane
+            .replace_selection_view_if_active(view_id, params);
+        if replaced {
+            self.request_redraw();
+        }
+        replaced
+    }
+
+    pub(crate) fn selected_index_for_active_view(&self, view_id: &'static str) -> Option<usize> {
+        self.bottom_pane.selected_index_for_active_view(view_id)
     }
 
     pub(crate) fn no_modal_or_popup_active(&self) -> bool {
@@ -5040,6 +5105,8 @@ impl ChatWidget {
                 if self.is_session_configured() {
                     self.reasoning_buffer.clear();
                     self.full_reasoning_buffer.clear();
+                    self.raw_reasoning_buffer.clear();
+                    self.full_raw_reasoning_buffer.clear();
                     self.set_status_header(String::from("Working"));
                     self.submit_user_message(user_message);
                 } else {
@@ -6037,9 +6104,7 @@ impl ChatWidget {
                 self.on_agent_reasoning_delta(notification.delta);
             }
             ServerNotification::ReasoningTextDelta(notification) => {
-                if self.config.show_raw_agent_reasoning {
-                    self.on_agent_reasoning_delta(notification.delta);
-                }
+                self.on_raw_reasoning_delta(notification.delta);
             }
             ServerNotification::ReasoningSummaryPartAdded(_) => self.on_reasoning_section_break(),
             ServerNotification::TerminalInteraction(notification) => {
@@ -6531,13 +6596,15 @@ impl ChatWidget {
                 self.on_agent_message_delta(delta)
             }
             EventMsg::PlanDelta(event) => self.on_plan_delta(event.delta),
-            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta })
-            | EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
+            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }) => {
+                self.on_agent_reasoning_delta(delta)
+            }
+            EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
                 delta,
-            }) => self.on_agent_reasoning_delta(delta),
+            }) => self.on_raw_reasoning_delta(delta),
             EventMsg::AgentReasoning(AgentReasoningEvent { .. }) => self.on_agent_reasoning_final(),
             EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
-                self.on_agent_reasoning_delta(text);
+                self.on_raw_reasoning_delta(text);
                 self.on_agent_reasoning_final();
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),

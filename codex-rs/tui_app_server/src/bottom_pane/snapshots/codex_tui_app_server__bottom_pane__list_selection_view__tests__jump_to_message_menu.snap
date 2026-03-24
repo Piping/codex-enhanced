@@ -1,0 +1,17 @@
+---
+source: tui_app_server/src/bottom_pane/list_selection_view.rs
+expression: render_lines(&view)
+---
+                                                
+  Jump To Message                               
+  3 committed transcript entries are available  
+                                                
+› 1. User Message 1   Please inspect the flaky  
+                      test output.              
+  2. Agent Message 2  I found two likely races  
+                      in the worker startup     
+                      path.                     
+  3. Tool Call 3      shell ls -la /workspace/  
+                      project                   
+                                                
+  Press enter to confirm or esc to go back
