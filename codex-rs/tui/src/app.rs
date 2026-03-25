@@ -34,6 +34,7 @@ use crate::multi_agents::format_agent_picker_item_name;
 use crate::multi_agents::next_agent_shortcut_matches;
 use crate::multi_agents::previous_agent_shortcut_matches;
 use crate::pager_overlay::Overlay;
+use crate::rate_limits::fetch_rate_limits;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
@@ -97,6 +98,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FinalOutput;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
@@ -137,6 +139,7 @@ use toml::Value as TomlValue;
 use uuid::Uuid;
 
 mod agent_navigation;
+mod btw;
 mod display_preferences_menu;
 mod jump_navigation;
 mod key_chord;
@@ -144,6 +147,7 @@ mod pending_interactive_replay;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
+use self::btw::BtwSessionState;
 use self::display_preferences_menu::control_panel_show_hide_item;
 use self::display_preferences_menu::display_preferences_items;
 use self::jump_navigation::build_jump_catalog;
@@ -902,6 +906,7 @@ pub(crate) struct App {
     pending_shutdown_exit_thread_id: Option<ThreadId>,
 
     windows_sandbox: WindowsSandboxState,
+    btw_session: Option<BtwSessionState>,
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
@@ -2092,6 +2097,8 @@ impl App {
     }
 
     fn open_accounts_panel(&mut self) {
+        let view_id = "fork-accounts-panel";
+        let initial_selected_idx = self.chat_widget.selected_index_for_active_view(view_id);
         let store = AccountPoolStore::new(self.config.codex_home.clone());
         let path = store.path();
         let state = self.sync_current_auth_into_account_pool(&store);
@@ -2146,6 +2153,15 @@ impl App {
                 }
                 if !state.accounts.is_empty() {
                     items.push(SelectionItem {
+                        name: "Refresh Quota".to_string(),
+                        description: Some(
+                            "Fetch the latest quota for the active ChatGPT account.".to_string(),
+                        ),
+                        actions: vec![Box::new(|tx| tx.send(AppEvent::RefreshManagedAccountQuota))],
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    });
+                    items.push(SelectionItem {
                         name: "Rename".to_string(),
                         description: Some(
                             "Open alias rename actions for managed accounts.".to_string(),
@@ -2192,11 +2208,12 @@ impl App {
         }
 
         self.chat_widget.show_selection_view(SelectionViewParams {
-            view_id: Some("fork-accounts-panel"),
+            view_id: Some(view_id),
             title: Some("Accounts".to_string()),
             subtitle,
             footer_hint: Some(standard_popup_hint_line()),
             footer_path: Some(path.display().to_string()),
+            initial_selected_idx,
             items,
             ..Default::default()
         });
@@ -2367,6 +2384,54 @@ impl App {
                 state.upsert_account(snapshot.profile.clone());
             }
         })
+    }
+
+    fn accounts_panel_is_active(&self) -> bool {
+        self.chat_widget
+            .selected_index_for_active_view("fork-accounts-panel")
+            .is_some()
+    }
+
+    fn apply_rate_limit_snapshot_to_accounts(&mut self, snapshot: RateLimitSnapshot) {
+        self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+        if self.accounts_panel_is_active() {
+            self.open_accounts_panel();
+        }
+    }
+
+    fn refresh_managed_account_quota(&mut self) {
+        let app_event_tx = self.app_event_tx.clone();
+        let auth_manager = Arc::clone(&self.auth_manager);
+        let base_url = self.config.chatgpt_base_url.clone();
+
+        tokio::spawn(async move {
+            let result = match auth_manager.auth().await {
+                Some(auth) if auth.is_chatgpt_auth() => Ok(fetch_rate_limits(base_url, auth).await),
+                Some(_) => Err("The active managed account does not use ChatGPT auth.".to_string()),
+                None => Err("No active managed account is available to refresh.".to_string()),
+            };
+            app_event_tx.send(AppEvent::ManagedAccountQuotaRefreshed(result));
+        });
+    }
+
+    fn finish_managed_account_quota_refresh(
+        &mut self,
+        result: Result<Vec<RateLimitSnapshot>, String>,
+    ) {
+        match result {
+            Ok(snapshots) => {
+                for snapshot in snapshots {
+                    self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+                }
+            }
+            Err(err) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(format!(
+                        "Failed to refresh managed account quota: {err}"
+                    )));
+            }
+        }
+        self.open_accounts_panel();
     }
 
     fn set_managed_account_active(&mut self, account_id: String) {
@@ -3067,6 +3132,7 @@ impl App {
             suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
+            btw_session: None,
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -3289,6 +3355,21 @@ impl App {
             AppEvent::OpenDisplayPreferencesPanel => {
                 self.open_display_preferences_panel();
             }
+            AppEvent::StartBtwDiscussion { prompt } => {
+                self.start_btw_discussion(prompt).await;
+            }
+            AppEvent::BtwCompleted { thread_id, result } => {
+                self.finish_btw_discussion(thread_id, result);
+            }
+            AppEvent::BtwInsertSummary => {
+                self.insert_btw_summary();
+            }
+            AppEvent::BtwInsertFull => {
+                self.insert_btw_full();
+            }
+            AppEvent::BtwDiscard => {
+                self.discard_btw_session();
+            }
             AppEvent::OpenAccountsPanel => {
                 self.open_accounts_panel();
             }
@@ -3304,6 +3385,9 @@ impl App {
             }
             AppEvent::OpenManagedAccountDeletePanel => {
                 self.open_managed_account_delete_panel();
+            }
+            AppEvent::RefreshManagedAccountQuota => {
+                self.refresh_managed_account_quota();
             }
             AppEvent::SetManagedAccountActive(account_id) => {
                 self.set_managed_account_active(account_id);
@@ -3749,7 +3833,10 @@ impl App {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
             AppEvent::RateLimitSnapshotFetched(snapshot) => {
-                self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+                self.apply_rate_limit_snapshot_to_accounts(snapshot);
+            }
+            AppEvent::ManagedAccountQuotaRefreshed(result) => {
+                self.finish_managed_account_quota_refresh(result);
             }
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
@@ -7675,6 +7762,7 @@ guardian_approval = true
             suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
+            btw_session: None,
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -7741,6 +7829,7 @@ guardian_approval = true
                 suppress_shutdown_complete: false,
                 pending_shutdown_exit_thread_id: None,
                 windows_sandbox: WindowsSandboxState::default(),
+                btw_session: None,
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
                 agent_navigation: AgentNavigationState::default(),

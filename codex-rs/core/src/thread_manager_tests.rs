@@ -157,6 +157,38 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
 }
 
 #[tokio::test]
+async fn start_thread_with_history_and_source_uses_requested_session_source() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config();
+    config.codex_home = temp_dir.path().join("codex-home");
+    config.cwd = config.codex_home.clone();
+    config.ephemeral = true;
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.clone(),
+    );
+
+    let thread = manager
+        .start_thread_with_history_and_source(
+            config,
+            InitialHistory::New,
+            SessionSource::Custom("btw".to_string()),
+        )
+        .await
+        .expect("start btw thread");
+
+    let snapshot = thread.thread.config_snapshot().await;
+    assert_eq!(
+        snapshot.session_source,
+        SessionSource::Custom("btw".to_string())
+    );
+    assert!(snapshot.ephemeral);
+}
+
+#[tokio::test]
 async fn new_uses_configured_openai_provider_for_model_refresh() {
     let server = MockServer::start().await;
     let models_mock = mount_models_once(&server, ModelsResponse { models: vec![] }).await;

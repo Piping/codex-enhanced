@@ -6,6 +6,7 @@ Current MVP scope:
 
 - stable capability-negotiation shapes for future plugin runtimes
 - jump-target and workspace-spawn models for fork-owned host extensions
+- hidden ephemeral-discussion capability models for fork-owned `/btw`-style flows
 - persisted multi-account pool state
 - default account router model for threshold-based fallback
 - data structures intentionally decoupled from current TUI/core internals

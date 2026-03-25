@@ -400,6 +400,29 @@ impl ThreadManager {
         .await
     }
 
+    pub async fn start_thread_with_history_and_source(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        session_source: SessionSource,
+    ) -> CodexResult<NewThread> {
+        Box::pin(self.state.spawn_thread_with_source(
+            config,
+            initial_history,
+            Arc::clone(&self.state.auth_manager),
+            self.agent_control(),
+            session_source,
+            Vec::new(),
+            /*persist_extended_history*/ false,
+            /*metrics_service_name*/ None,
+            /*inherited_shell_snapshot*/ None,
+            /*inherited_exec_policy*/ None,
+            /*parent_trace*/ None,
+            /*user_shell_override*/ None,
+        ))
+        .await
+    }
+
     pub async fn resume_thread_from_rollout(
         &self,
         config: Config,

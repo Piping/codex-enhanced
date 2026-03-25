@@ -83,9 +83,9 @@ fn request_user_input_availability_message(
     default_mode_request_user_input: bool,
 ) -> String {
     let mode_name = mode.display_name();
-    if mode.allows_request_user_input() {
-        format!("The `question` and `request_user_input` tools are available in {mode_name} mode.")
-    } else if mode == ModeKind::Default && default_mode_request_user_input {
+    if mode.allows_request_user_input()
+        || (mode == ModeKind::Default && default_mode_request_user_input)
+    {
         format!("The `question` and `request_user_input` tools are available in {mode_name} mode.")
     } else if mode == ModeKind::Default {
         "The `question` tool is available in Default mode. The legacy `request_user_input` tool is unavailable in Default mode and will return an error.".to_string()

@@ -6409,6 +6409,35 @@ async fn slash_fork_requests_current_fork() {
 }
 
 #[tokio::test]
+async fn slash_btw_without_args_reports_usage() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Btw);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert_snapshot!("slash_btw_usage_error", rendered);
+}
+
+#[tokio::test]
+async fn slash_btw_with_args_requests_temporary_discussion() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane.set_composer_text(
+        "/btw compare these options".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::StartBtwDiscussion { prompt }) if prompt == "compare these options"
+    );
+}
+
+#[tokio::test]
 async fn ctrl_p_opens_control_panel() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 

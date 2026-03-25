@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: rendered
+---
+■ Usage: /btw <temporary discussion prompt>

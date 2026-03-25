@@ -83,12 +83,29 @@ pub(crate) enum AppEvent {
     OpenJumpToMessagePanel,
     /// Open the show/hide settings panel inside the control panel flow.
     OpenDisplayPreferencesPanel,
+    /// Start a hidden ephemeral `/btw` discussion.
+    StartBtwDiscussion {
+        prompt: String,
+    },
+    /// Final result for a hidden `/btw` discussion.
+    BtwCompleted {
+        thread_id: ThreadId,
+        result: Result<String, String>,
+    },
+    /// Insert a concise summary from the completed `/btw` answer into the composer.
+    BtwInsertSummary,
+    /// Insert the full completed `/btw` answer into the composer.
+    BtwInsertFull,
+    /// Discard and destroy the active `/btw` discussion.
+    BtwDiscard,
     /// Restore the latest committed user message into the composer and rollback one turn.
     UndoLastUserMessage,
     /// Open the managed-account alias rename submenu.
     OpenManagedAccountRenamePanel,
     /// Open the managed-account delete submenu.
     OpenManagedAccountDeletePanel,
+    /// Refresh cached quota for the current managed ChatGPT account.
+    RefreshManagedAccountQuota,
     /// Mark a managed account as active in the fork-owned registry.
     SetManagedAccountActive(String),
     /// Open an alias editor for a managed account.
@@ -174,6 +191,8 @@ pub(crate) enum AppEvent {
 
     /// Result of refreshing rate limits
     RateLimitSnapshotFetched(RateLimitSnapshot),
+    /// Result of explicitly refreshing managed-account quota from the Accounts panel.
+    ManagedAccountQuotaRefreshed(Result<Vec<RateLimitSnapshot>, String>),
 
     /// Result of prefetching connectors.
     ConnectorsLoaded {

@@ -53,6 +53,7 @@ impl HostCapabilities {
                 HostCapability::new("after-tool-call", /*version*/ 1),
                 HostCapability::new("account-routing", /*version*/ 1),
                 HostCapability::new("control-panel", /*version*/ 1),
+                HostCapability::new("ephemeral-discussion", /*version*/ 1),
                 HostCapability::new("jump-to-message", /*version*/ 1),
                 HostCapability::new("spawn-with-workspace", /*version*/ 1),
             ],
@@ -106,12 +107,13 @@ mod tests {
         let negotiation = capabilities.negotiate(&[
             CapabilityRequirement::new("account-routing", 1),
             CapabilityRequirement::new("control-panel", 1),
+            CapabilityRequirement::new("ephemeral-discussion", 1),
             CapabilityRequirement::new("jump-to-message", 1),
             CapabilityRequirement::new("spawn-with-workspace", 1),
         ]);
 
         assert!(negotiation.is_compatible());
-        assert_eq!(negotiation.accepted.len(), 4);
+        assert_eq!(negotiation.accepted.len(), 5);
         assert_eq!(negotiation.missing.len(), 0);
     }
 

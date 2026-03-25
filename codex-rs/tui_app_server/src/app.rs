@@ -41,6 +41,7 @@ use crate::multi_agents::format_agent_picker_item_name;
 use crate::multi_agents::next_agent_shortcut_matches;
 use crate::multi_agents::previous_agent_shortcut_matches;
 use crate::pager_overlay::Overlay;
+use crate::rate_limits::fetch_rate_limits;
 use crate::read_session_model;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
@@ -68,6 +69,7 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
+use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -105,6 +107,7 @@ use codex_protocol::protocol::ListSkillsResponseEvent;
 #[cfg(test)]
 use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
@@ -2676,6 +2679,8 @@ impl App {
     }
 
     fn open_accounts_panel(&mut self) {
+        let view_id = "fork-accounts-panel";
+        let initial_selected_idx = self.chat_widget.selected_index_for_active_view(view_id);
         let store = AccountPoolStore::new(self.config.codex_home.clone());
         let path = store.path();
         let state = self.sync_current_auth_into_account_pool(&store);
@@ -2730,6 +2735,15 @@ impl App {
                 }
                 if !state.accounts.is_empty() {
                     items.push(SelectionItem {
+                        name: "Refresh Quota".to_string(),
+                        description: Some(
+                            "Fetch the latest quota for the active ChatGPT account.".to_string(),
+                        ),
+                        actions: vec![Box::new(|tx| tx.send(AppEvent::RefreshManagedAccountQuota))],
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    });
+                    items.push(SelectionItem {
                         name: "Rename".to_string(),
                         description: Some(
                             "Open alias rename actions for managed accounts.".to_string(),
@@ -2776,11 +2790,12 @@ impl App {
         }
 
         self.chat_widget.show_selection_view(SelectionViewParams {
-            view_id: Some("fork-accounts-panel"),
+            view_id: Some(view_id),
             title: Some("Accounts".to_string()),
             subtitle,
             footer_hint: Some(standard_popup_hint_line()),
             footer_path: Some(path.display().to_string()),
+            initial_selected_idx,
             items,
             ..Default::default()
         });
@@ -2951,6 +2966,62 @@ impl App {
                 state.upsert_account(snapshot.profile.clone());
             }
         })
+    }
+
+    fn accounts_panel_is_active(&self) -> bool {
+        self.chat_widget
+            .selected_index_for_active_view("fork-accounts-panel")
+            .is_some()
+    }
+
+    fn apply_rate_limit_snapshot_to_accounts(&mut self, snapshot: RateLimitSnapshot) {
+        self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+        if self.accounts_panel_is_active() {
+            self.open_accounts_panel();
+        }
+    }
+
+    fn refresh_managed_account_quota(&mut self) {
+        let app_event_tx = self.app_event_tx.clone();
+        let base_url = self.config.chatgpt_base_url.clone();
+        let codex_home = self.config.codex_home.clone();
+        let store_mode = self.config.cli_auth_credentials_store_mode;
+
+        tokio::spawn(async move {
+            let result = match CodexAuth::from_auth_storage(&codex_home, store_mode) {
+                Ok(Some(auth)) if auth.is_chatgpt_auth() => {
+                    Ok(fetch_rate_limits(base_url, auth).await)
+                }
+                Ok(Some(_)) => {
+                    Err("The active managed account does not use ChatGPT auth.".to_string())
+                }
+                Ok(None) => Err("No active managed account is available to refresh.".to_string()),
+                Err(err) => Err(format!(
+                    "Failed to load the active managed account auth: {err}"
+                )),
+            };
+            app_event_tx.send(AppEvent::ManagedAccountQuotaRefreshed(result));
+        });
+    }
+
+    fn finish_managed_account_quota_refresh(
+        &mut self,
+        result: Result<Vec<RateLimitSnapshot>, String>,
+    ) {
+        match result {
+            Ok(snapshots) => {
+                for snapshot in snapshots {
+                    self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+                }
+            }
+            Err(err) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(format!(
+                        "Failed to refresh managed account quota: {err}"
+                    )));
+            }
+        }
+        self.open_accounts_panel();
     }
 
     fn set_managed_account_active(&mut self, account_id: String) {
@@ -3883,6 +3954,9 @@ impl App {
             AppEvent::OpenManagedAccountDeletePanel => {
                 self.open_managed_account_delete_panel();
             }
+            AppEvent::RefreshManagedAccountQuota => {
+                self.refresh_managed_account_quota();
+            }
             AppEvent::SetManagedAccountActive(account_id) => {
                 self.set_managed_account_active(account_id);
             }
@@ -4355,7 +4429,10 @@ impl App {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
             AppEvent::RateLimitSnapshotFetched(snapshot) => {
-                self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+                self.apply_rate_limit_snapshot_to_accounts(snapshot);
+            }
+            AppEvent::ManagedAccountQuotaRefreshed(result) => {
+                self.finish_managed_account_quota_refresh(result);
             }
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);

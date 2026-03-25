@@ -1130,6 +1130,62 @@ mod tests {
         )
     }
 
+    fn make_accounts_view() -> ListSelectionView {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Accounts".to_string()),
+                subtitle: Some("2 account(s) configured. Active: workspace-1.".to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
+                footer_note: Some("/tmp/codex-home/accounts.json".dim().into()),
+                items: vec![
+                    SelectionItem {
+                        name: "Primary".to_string(),
+                        description: Some(
+                            "pri***@example.com · plus · 5h 12/80 · week 34/240".to_string(),
+                        ),
+                        is_current: true,
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Backup".to_string(),
+                        description: Some("bac***@example.com · pro · 5h 4/80".to_string()),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Refresh Quota".to_string(),
+                        description: Some(
+                            "Fetch the latest quota for the active ChatGPT account.".to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Rename".to_string(),
+                        description: Some(
+                            "Open alias rename actions for managed accounts.".to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Delete".to_string(),
+                        description: Some(
+                            "Open deletion actions for managed accounts.".to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            tx,
+        )
+    }
+
     fn make_accounts_delete_confirmation_view() -> ListSelectionView {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -1439,6 +1495,12 @@ mod tests {
     fn accounts_delete_menu_snapshot() {
         let view = make_accounts_delete_view();
         assert_snapshot!("accounts_delete_menu", render_lines(&view));
+    }
+
+    #[test]
+    fn accounts_menu_snapshot() {
+        let view = make_accounts_view();
+        assert_snapshot!("accounts_menu", render_lines(&view));
     }
 
     #[test]

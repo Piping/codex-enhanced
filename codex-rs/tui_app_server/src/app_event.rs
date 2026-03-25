@@ -89,6 +89,8 @@ pub(crate) enum AppEvent {
     OpenManagedAccountRenamePanel,
     /// Open the managed-account delete submenu.
     OpenManagedAccountDeletePanel,
+    /// Refresh cached quota for the current managed ChatGPT account.
+    RefreshManagedAccountQuota,
     /// Mark a managed account as active in the fork-owned registry.
     SetManagedAccountActive(String),
     /// Open an alias editor for a managed account.
@@ -176,6 +178,8 @@ pub(crate) enum AppEvent {
     /// Result of refreshing rate limits
     #[allow(dead_code)]
     RateLimitSnapshotFetched(RateLimitSnapshot),
+    /// Result of explicitly refreshing managed-account quota from the Accounts panel.
+    ManagedAccountQuotaRefreshed(Result<Vec<RateLimitSnapshot>, String>),
 
     /// Result of prefetching connectors.
     ConnectorsLoaded {
