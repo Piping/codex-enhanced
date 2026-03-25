@@ -107,10 +107,18 @@ the input starts with `!` (shell command).
 
 1. Expands any pending paste placeholders so element ranges align with the final text.
 2. Trims whitespace and rebases element ranges to the trimmed buffer.
-3. Expands `/prompts:` custom prompts:
+3. Expands `/prompts:` custom prompts with arguments:
    - Named args use key=value parsing.
    - Numeric args use positional parsing for `$1..$9` and `$ARGUMENTS`.
      The expansion preserves text elements and yields the final submission payload.
+  - Bare no-arg prompts do not submit directly; they replace the draft with the saved prompt
+    body so the user can edit before sending.
+  - Bare positional prompts with no provided args also expand into the composer for editing rather
+    than submitting immediately. The raw saved prompt body is inserted so the user can edit it.
+   - For no-arg prompts selected from the slash popup with `Tab`, the first `Tab` canonicalizes
+     the draft to `/prompts:name ` and the next `Tab` expands the saved body into the composer.
+     Follow-on `Tab` repeat/release events from that same keypress are swallowed so the expansion
+     cannot immediately fall through into submit.
 4. Prunes attachments so only placeholders that survive expansion are sent.
 5. Clears pending pastes on success and suppresses submission if the final text is empty and there
    are no attachments.

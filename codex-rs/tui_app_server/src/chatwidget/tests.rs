@@ -70,6 +70,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
+use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::PlanItem;
@@ -3869,6 +3870,119 @@ async fn enqueueing_history_prompt_multiple_times_is_stable() {
     for message in chat.queued_user_messages.iter() {
         assert_eq!(message.text, "repeat me");
     }
+}
+
+#[tokio::test]
+async fn tab_completing_custom_prompt_does_not_submit_user_turn() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane.set_custom_prompts(vec![CustomPrompt {
+        name: "my-prompt".to_string(),
+        path: "/tmp/my-prompt.md".to_string().into(),
+        content: "Hello from saved prompt".to_string(),
+        description: None,
+        argument_hint: None,
+    }]);
+
+    for c in "/prompts:my-prompt".chars() {
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+    assert_eq!(chat.bottom_pane.composer_text(), "Hello from saved prompt");
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn tab_then_tab_on_fuzzy_custom_prompt_expands_without_submitting() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane.set_custom_prompts(vec![CustomPrompt {
+        name: "my-prompt".to_string(),
+        path: "/tmp/my-prompt.md".to_string().into(),
+        content: "Hello from saved prompt".to_string(),
+        description: None,
+        argument_hint: None,
+    }]);
+
+    for c in "/my".chars() {
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(chat.bottom_pane.composer_text(), "/prompts:my-prompt ");
+    assert_no_submit_op(&mut op_rx);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(chat.bottom_pane.composer_text(), "Hello from saved prompt");
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn repeated_tab_after_prompt_expansion_does_not_submit() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane.set_custom_prompts(vec![CustomPrompt {
+        name: "my-prompt".to_string(),
+        path: "/tmp/my-prompt.md".to_string().into(),
+        content: "Hello from saved prompt".to_string(),
+        description: None,
+        argument_hint: None,
+    }]);
+
+    for c in "/my".chars() {
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(chat.bottom_pane.composer_text(), "Hello from saved prompt");
+    assert_no_submit_op(&mut op_rx);
+
+    chat.handle_key_event(KeyEvent::new_with_kind(
+        KeyCode::Tab,
+        KeyModifiers::NONE,
+        crossterm::event::KeyEventKind::Repeat,
+    ));
+    assert_eq!(chat.bottom_pane.composer_text(), "Hello from saved prompt");
+    assert_no_submit_op(&mut op_rx);
+
+    chat.handle_key_event(KeyEvent::new_with_kind(
+        KeyCode::Tab,
+        KeyModifiers::NONE,
+        crossterm::event::KeyEventKind::Release,
+    ));
+    assert_eq!(chat.bottom_pane.composer_text(), "Hello from saved prompt");
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn tab_then_tab_on_fuzzy_numeric_custom_prompt_expands_without_submitting() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane.set_custom_prompts(vec![CustomPrompt {
+        name: "star-batch-iterplan".to_string(),
+        path: "/tmp/star-batch-iterplan.md".to_string().into(),
+        content: "$ARGUMENTS\nPrompt body".to_string(),
+        description: None,
+        argument_hint: None,
+    }]);
+
+    for c in "/star".chars() {
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "/prompts:star-batch-iterplan "
+    );
+    assert_no_submit_op(&mut op_rx);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(chat.bottom_pane.composer_text(), "$ARGUMENTS\nPrompt body");
+    assert_no_submit_op(&mut op_rx);
 }
 
 #[tokio::test]

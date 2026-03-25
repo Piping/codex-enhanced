@@ -136,14 +136,12 @@ fn managed_account_snapshot_from_auth(
         .account_id
         .clone()
         .or_else(|| tokens.id_token.chatgpt_account_id.clone())?;
-    let alias = alias_override
-        .map(str::trim)
-        .filter(|alias| !alias.is_empty())
-        .map(ToString::to_string)
-        .unwrap_or_else(|| id.clone());
     let profile = AccountManagementProfile {
         id,
-        alias: Some(alias),
+        alias: alias_override
+            .map(str::trim)
+            .filter(|alias| !alias.is_empty())
+            .map(ToString::to_string),
         masked_email: tokens.id_token.email.as_deref().map(mask_email),
         plan_label: tokens
             .id_token
@@ -234,6 +232,7 @@ mod tests {
         .expect("snapshot");
 
         assert_eq!(snapshot.profile.id, "workspace-1");
+        assert_eq!(snapshot.profile.alias, None);
         assert_eq!(
             ManagedAccountAuthStore::new(tempdir.path().to_path_buf())
                 .load_account_auth("workspace-1")

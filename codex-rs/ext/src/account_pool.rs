@@ -440,6 +440,41 @@ mod tests {
     }
 
     #[test]
+    fn upsert_without_alias_preserves_existing_alias() {
+        let mut state = AccountPoolState {
+            version: 1,
+            active_account_id: Some("acc-primary".to_string()),
+            accounts: vec![AccountRecord {
+                id: "acc-primary".to_string(),
+                alias: "Primary".to_string(),
+                masked_email: Some("pri***@example.com".to_string()),
+                plan_label: Some("pro".to_string()),
+                priority: 0,
+                enabled: true,
+                cooldown_until: None,
+                last_limit_error_at: None,
+                last_selected_at: None,
+                usage_windows: Vec::new(),
+            }],
+        };
+
+        assert!(state.upsert_account(AccountManagementProfile {
+            id: "acc-primary".to_string(),
+            alias: None,
+            masked_email: Some("new***@example.com".to_string()),
+            plan_label: Some("plus".to_string()),
+            priority: None,
+        }));
+
+        assert_eq!(state.accounts[0].alias, "Primary");
+        assert_eq!(
+            state.accounts[0].masked_email,
+            Some("new***@example.com".to_string())
+        );
+        assert_eq!(state.accounts[0].plan_label, Some("plus".to_string()));
+    }
+
+    #[test]
     fn applying_rate_limit_snapshot_replaces_usage_windows() {
         let mut state = AccountPoolState {
             version: 1,

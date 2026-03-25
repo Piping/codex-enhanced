@@ -39,7 +39,11 @@
 //!
 //! - Expands pending paste placeholders so element ranges align with the final text.
 //! - Trims whitespace and rebases text elements accordingly.
-//! - Expands `/prompts:` custom prompts (named or numeric args), preserving text elements.
+//! - Expands `/prompts:` custom prompts with args, preserving text elements.
+//! - Replaces bare no-arg `/prompts:name` invocations with the saved prompt body for editing
+//!   instead of submitting immediately.
+//! - Uses a two-step `Tab` flow for no-arg saved prompts selected from the slash popup:
+//!   first canonicalize to `/prompts:name `, then expand the saved body on the next `Tab`.
 //! - Prunes local attached images so only placeholders that survive expansion are sent.
 //! - Preserves remote image URLs as separate attachments even when text is empty.
 //!
@@ -272,6 +276,18 @@ enum PromptSelectionMode {
     Submit,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum SubmissionTrigger {
+    Enter,
+    Tab,
+}
+
+impl SubmissionTrigger {
+    fn should_queue(self, is_task_running: bool) -> bool {
+        matches!(self, Self::Tab) && is_task_running
+    }
+}
+
 enum PromptSelectionAction {
     Insert {
         text: String,
@@ -384,6 +400,7 @@ pub(crate) struct ChatComposer {
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
     remote_image_urls: Vec<String>,
+    suppress_tab_submit_until_release: bool,
     /// Tracks keyboard selection for the remote-image rows so Up/Down + Delete/Backspace
     /// can highlight and remove remote attachments from the composer UI.
     selected_remote_image_index: Option<usize>,
@@ -511,6 +528,7 @@ impl ChatComposer {
             footer_mode: FooterMode::ComposerEmpty,
             footer_hint_override: None,
             remote_image_urls: Vec::new(),
+            suppress_tab_submit_until_release: false,
             selected_remote_image_index: None,
             footer_flash: None,
             context_window_percent: None,
@@ -1227,6 +1245,15 @@ impl ChatComposer {
         self.paste_burst.is_active()
     }
 
+    pub(crate) fn flush_paste_burst_before_modified_input(&mut self) -> bool {
+        if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
+            self.handle_paste(pasted);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Returns a delay that reliably exceeds the paste-burst timing threshold.
     ///
     /// Use this in tests to avoid boundary flakiness around the `PasteBurst` timeout.
@@ -1322,6 +1349,31 @@ impl ChatComposer {
             && !matches!(key_event.code, KeyCode::Char(' '))
         {
             return (InputResult::None, false);
+        }
+
+        if self.suppress_tab_submit_until_release {
+            match key_event {
+                KeyEvent {
+                    code: KeyCode::Tab,
+                    kind: KeyEventKind::Release,
+                    ..
+                } => {
+                    self.suppress_tab_submit_until_release = false;
+                    return (InputResult::None, false);
+                }
+                KeyEvent {
+                    code: KeyCode::Tab,
+                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    ..
+                } => return (InputResult::None, false),
+                KeyEvent {
+                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    ..
+                } => {
+                    self.suppress_tab_submit_until_release = false;
+                }
+                _ => {}
+            }
         }
 
         // If a space hold is pending and another non-space key is pressed, cancel the hold
@@ -1438,6 +1490,7 @@ impl ChatComposer {
                             if let Some(prompt) = popup.prompt(idx) {
                                 match prompt_selection_action(
                                     prompt,
+                                    self.textarea.text(),
                                     first_line,
                                     PromptSelectionMode::Completion,
                                     &self.textarea.text_elements(),
@@ -1456,6 +1509,7 @@ impl ChatComposer {
                     if let Some(pos) = cursor_target {
                         self.textarea.set_cursor(pos);
                     }
+                    self.active_popup = ActivePopup::None;
                 }
                 (InputResult::None, true)
             }
@@ -1507,6 +1561,7 @@ impl ChatComposer {
                             if let Some(prompt) = popup.prompt(idx) {
                                 match prompt_selection_action(
                                     prompt,
+                                    self.textarea.text(),
                                     first_line,
                                     PromptSelectionMode::Submit,
                                     &self.textarea.text_elements(),
@@ -1537,6 +1592,7 @@ impl ChatComposer {
                                     }
                                 }
                             }
+                            self.active_popup = ActivePopup::None;
                             return (InputResult::None, true);
                         }
                     }
@@ -2441,16 +2497,16 @@ impl ChatComposer {
     }
 
     /// Common logic for handling message submission/queuing.
-    /// Returns the appropriate InputResult based on `should_queue`.
-    fn handle_submission(&mut self, should_queue: bool) -> (InputResult, bool) {
-        self.handle_submission_with_time(should_queue, Instant::now())
+    fn handle_submission(&mut self, trigger: SubmissionTrigger) -> (InputResult, bool) {
+        self.handle_submission_with_time(trigger, Instant::now())
     }
 
     fn handle_submission_with_time(
         &mut self,
-        should_queue: bool,
+        trigger: SubmissionTrigger,
         now: Instant,
     ) -> (InputResult, bool) {
+        let should_queue = trigger.should_queue(self.is_task_running);
         // If the first line is a bare built-in slash command (no args),
         // dispatch it even when the slash popup isn't visible. This preserves
         // the workflow: type a prefix ("/di"), press Tab to complete to
@@ -2460,6 +2516,10 @@ impl ChatComposer {
         // literal text.
         if let Some(result) = self.try_dispatch_bare_slash_command() {
             return (result, true);
+        }
+
+        if self.try_insert_bare_custom_prompt_for_editing(trigger) {
+            return (InputResult::None, true);
         }
 
         // If we're in a paste-like burst capture, treat Enter/Ctrl+Shift+Q as part of the burst
@@ -2561,6 +2621,44 @@ impl ChatComposer {
         } else {
             None
         }
+    }
+
+    pub(crate) fn try_insert_bare_custom_prompt_for_editing(
+        &mut self,
+        trigger: SubmissionTrigger,
+    ) -> bool {
+        if !self.slash_commands_enabled() {
+            return false;
+        }
+
+        let composer_text = self.textarea.text().to_string();
+        let first_line = composer_text.lines().next().unwrap_or("");
+        if composer_text.trim() != first_line.trim() {
+            return false;
+        }
+
+        let Some((name, rest, _rest_offset)) = parse_slash_name(first_line) else {
+            return false;
+        };
+        if !rest.is_empty() {
+            return false;
+        }
+
+        let Some(prompt_name) = name.strip_prefix(&format!("{PROMPTS_CMD_PREFIX}:")) else {
+            return false;
+        };
+        let Some(prompt) = self.custom_prompts.iter().find(|p| p.name == prompt_name) else {
+            return false;
+        };
+        if !prompt_argument_names(&prompt.content).is_empty() {
+            return false;
+        }
+
+        self.textarea.set_text_clearing_elements(&prompt.content);
+        self.textarea.set_cursor(prompt.content.len());
+        self.suppress_tab_submit_until_release = matches!(trigger, SubmissionTrigger::Tab);
+        self.active_popup = ActivePopup::None;
+        true
     }
 
     /// Check if the input is a slash command with args (e.g., /review args) and dispatch it.
@@ -2811,12 +2909,12 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
                 ..
-            } if !self.is_bang_shell_command() => self.handle_submission(self.is_task_running),
+            } if !self.is_bang_shell_command() => self.handle_submission(SubmissionTrigger::Tab),
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
                 ..
-            } => self.handle_submission(/*should_queue*/ false),
+            } => self.handle_submission(SubmissionTrigger::Enter),
             input => self.handle_input_basic(input),
         }
     }
@@ -4462,6 +4560,7 @@ impl ChatComposer {
 
 fn prompt_selection_action(
     prompt: &CustomPrompt,
+    composer_text: &str,
     first_line: &str,
     mode: PromptSelectionMode,
     text_elements: &[TextElement],
@@ -4481,10 +4580,17 @@ fn prompt_selection_action(
             }
             if has_numeric {
                 let text = format!("/{PROMPTS_CMD_PREFIX}:{} ", prompt.name);
-                return PromptSelectionAction::Insert { text, cursor: None };
+                return PromptSelectionAction::Insert {
+                    cursor: Some(text.len()),
+                    text,
+                };
             }
-            let text = format!("/{PROMPTS_CMD_PREFIX}:{}", prompt.name);
-            PromptSelectionAction::Insert { text, cursor: None }
+            let text = format!("/{PROMPTS_CMD_PREFIX}:{} ", prompt.name);
+            let _ = (composer_text, first_line);
+            PromptSelectionAction::Insert {
+                cursor: Some(text.len()),
+                text,
+            }
         }
         PromptSelectionMode::Submit => {
             if !named_args.is_empty() {
@@ -4507,10 +4613,9 @@ fn prompt_selection_action(
                 let text = format!("/{PROMPTS_CMD_PREFIX}:{} ", prompt.name);
                 return PromptSelectionAction::Insert { text, cursor: None };
             }
-            PromptSelectionAction::Submit {
+            PromptSelectionAction::Insert {
                 text: prompt.content.clone(),
-                // By now we know this custom prompt has no args, so no text elements to preserve.
-                text_elements: Vec::new(),
+                cursor: Some(prompt.content.len()),
             }
         }
     }
@@ -5995,7 +6100,7 @@ mod tests {
         );
         now += step;
 
-        let (result, _) = composer.handle_submission_with_time(false, now);
+        let (result, _) = composer.handle_submission_with_time(SubmissionTrigger::Enter, now);
         assert!(
             matches!(result, InputResult::None),
             "Enter during a burst should insert newline, not submit"
@@ -8280,7 +8385,7 @@ mod tests {
     }
 
     #[test]
-    fn selecting_custom_prompt_without_args_submits_content() {
+    fn selecting_custom_prompt_without_args_inserts_content_for_editing() {
         let prompt_text = "Hello from saved prompt";
 
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -8313,11 +8418,117 @@ mod tests {
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-        assert!(matches!(
-            result,
-            InputResult::Submitted { text, .. } if text == prompt_text
-        ));
-        assert!(composer.textarea.is_empty());
+        assert_eq!(InputResult::None, result);
+        assert_eq!(prompt_text, composer.textarea.text());
+        assert_eq!(prompt_text.len(), composer.textarea.cursor());
+    }
+
+    #[test]
+    fn tab_completion_on_prompt_match_canonicalizes_no_arg_prompt_before_expansion() {
+        let prompt_text = "Hello from saved prompt";
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: prompt_text.to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        type_chars_humanlike(
+            &mut composer,
+            &[
+                '/', 'p', 'r', 'o', 'm', 'p', 't', 's', ':', 'm', 'y', '-', 'p', 'r', 'o', 'm',
+                'p', 't',
+            ],
+        );
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!("/prompts:my-prompt ", composer.textarea.text());
+        assert_eq!("/prompts:my-prompt ".len(), composer.textarea.cursor());
+    }
+
+    #[test]
+    fn tab_on_canonicalized_custom_prompt_without_args_inserts_content_even_without_popup() {
+        let prompt_text = "Hello from saved prompt";
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: prompt_text.to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+        composer
+            .textarea
+            .set_text_clearing_elements("/prompts:my-prompt ");
+
+        assert!(!composer.popup_active());
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!(prompt_text, composer.textarea.text());
+        assert_eq!(prompt_text.len(), composer.textarea.cursor());
+    }
+
+    #[test]
+    fn enter_on_bare_custom_prompt_without_args_inserts_content_even_without_popup() {
+        let prompt_text = "Hello from saved prompt";
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: prompt_text.to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+        composer
+            .textarea
+            .set_text_clearing_elements("/prompts:my-prompt");
+
+        assert!(!composer.popup_active());
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!(prompt_text, composer.textarea.text());
+        assert_eq!(prompt_text.len(), composer.textarea.cursor());
     }
 
     #[test]
@@ -9148,6 +9359,7 @@ mod tests {
 
         let action = prompt_selection_action(
             &prompt,
+            "/prompts:my-prompt foo bar",
             "/prompts:my-prompt foo bar",
             PromptSelectionMode::Submit,
             &[],

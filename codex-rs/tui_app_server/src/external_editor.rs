@@ -8,9 +8,11 @@ use tempfile::Builder;
 use thiserror::Error;
 use tokio::process::Command;
 
+const FALLBACK_EDITOR: &str = "vim";
+
 #[derive(Debug, Error)]
 pub(crate) enum EditorError {
-    #[error("neither VISUAL nor EDITOR is set")]
+    #[error("neither VISUAL nor EDITOR is set, and vim was not found on PATH")]
     MissingEditor,
     #[cfg(not(windows))]
     #[error("failed to parse editor command")]
@@ -29,11 +31,17 @@ fn resolve_windows_program(program: &str) -> std::path::PathBuf {
 }
 
 /// Resolve the editor command from environment variables.
-/// Prefers `VISUAL` over `EDITOR`.
+/// Prefers `VISUAL` over `EDITOR`, then falls back to `vim` when unset.
 pub(crate) fn resolve_editor_command() -> std::result::Result<Vec<String>, EditorError> {
-    let raw = env::var("VISUAL")
-        .or_else(|_| env::var("EDITOR"))
-        .map_err(|_| EditorError::MissingEditor)?;
+    let raw = if let Ok(visual) = env::var("VISUAL") {
+        visual
+    } else if let Ok(editor) = env::var("EDITOR") {
+        editor
+    } else if which::which(FALLBACK_EDITOR).is_ok() {
+        return Ok(vec![FALLBACK_EDITOR.to_string()]);
+    } else {
+        return Err(EditorError::MissingEditor);
+    };
     let parts = {
         #[cfg(windows)]
         {
@@ -101,6 +109,7 @@ mod tests {
     struct EnvGuard {
         visual: Option<String>,
         editor: Option<String>,
+        path: Option<String>,
     }
 
     impl EnvGuard {
@@ -108,6 +117,7 @@ mod tests {
             Self {
                 visual: env::var("VISUAL").ok(),
                 editor: env::var("EDITOR").ok(),
+                path: env::var("PATH").ok(),
             }
         }
     }
@@ -116,6 +126,7 @@ mod tests {
         fn drop(&mut self) {
             restore_env("VISUAL", self.visual.take());
             restore_env("EDITOR", self.editor.take());
+            restore_env("PATH", self.path.take());
         }
     }
 
@@ -145,11 +156,35 @@ mod tests {
         unsafe {
             env::remove_var("VISUAL");
             env::remove_var("EDITOR");
+            env::set_var("PATH", "");
         }
         assert!(matches!(
             resolve_editor_command(),
             Err(EditorError::MissingEditor)
         ));
+    }
+
+    #[test]
+    #[serial]
+    #[cfg(unix)]
+    fn resolve_editor_falls_back_to_vim_when_env_is_unset() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = EnvGuard::new();
+        let dir = tempdir().unwrap();
+        let script_path = dir.path().join(FALLBACK_EDITOR);
+        fs::write(&script_path, "#!/bin/sh\nexit 0\n").unwrap();
+        let mut perms = fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).unwrap();
+        unsafe {
+            env::remove_var("VISUAL");
+            env::remove_var("EDITOR");
+            env::set_var("PATH", dir.path());
+        }
+
+        let cmd = resolve_editor_command().unwrap();
+        assert_eq!(cmd, vec![FALLBACK_EDITOR.to_string()]);
     }
 
     #[tokio::test]

@@ -139,6 +139,7 @@ use uuid::Uuid;
 mod agent_navigation;
 mod display_preferences_menu;
 mod jump_navigation;
+mod key_chord;
 mod pending_interactive_replay;
 
 use self::agent_navigation::AgentNavigationDirection;
@@ -146,6 +147,9 @@ use self::agent_navigation::AgentNavigationState;
 use self::display_preferences_menu::control_panel_show_hide_item;
 use self::display_preferences_menu::display_preferences_items;
 use self::jump_navigation::build_jump_catalog;
+use self::key_chord::KeyChordAction;
+use self::key_chord::KeyChordResolution;
+use self::key_chord::KeyChordState;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
@@ -870,6 +874,7 @@ pub(crate) struct App {
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
+    key_chord: KeyChordState,
     /// When set, the next draw re-renders the transcript into terminal scrollback once.
     ///
     /// This is used after a confirmed thread rollback to ensure scrollback reflects the trimmed
@@ -3054,6 +3059,7 @@ impl App {
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
             terminal_title_invalid_items_warned: terminal_title_invalid_items_warned.clone(),
             backtrack: BacktrackState::default(),
+            key_chord: KeyChordState::default(),
             backtrack_render_pending: false,
             feedback: feedback.clone(),
             feedback_audience,
@@ -5050,9 +5056,9 @@ impl App {
             Err(external_editor::EditorError::MissingEditor) => {
                 self.chat_widget
                     .add_to_history(history_cell::new_error_event(
-                    "Cannot open external editor: set $VISUAL or $EDITOR before starting Codex."
-                        .to_string(),
-                ));
+                        "Cannot open external editor: set $VISUAL or $EDITOR, or install `vim`."
+                            .to_string(),
+                    ));
                 self.reset_external_editor_state(tui);
                 return;
             }
@@ -5107,7 +5113,46 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
+    fn handle_key_chord_key_event(&mut self, key_event: KeyEvent) -> Option<KeyEvent> {
+        if self.overlay.is_some()
+            || !self.chat_widget.no_modal_or_popup_active()
+            || self.chat_widget.external_editor_state() != ExternalEditorState::Closed
+        {
+            self.key_chord.clear();
+            return Some(key_event);
+        }
+
+        match self.key_chord.handle_key_event(key_event) {
+            KeyChordResolution::NoMatch => Some(key_event),
+            KeyChordResolution::AwaitingSecondKey | KeyChordResolution::Cancelled => None,
+            KeyChordResolution::Forward(forwarded_key_event) => Some(forwarded_key_event),
+            KeyChordResolution::Matched(action) => {
+                match action {
+                    KeyChordAction::UndoLastUserMessage => {
+                        self.undo_last_user_message();
+                    }
+                    KeyChordAction::CopyLatestOutput => {
+                        self.chat_widget.copy_latest_output_to_clipboard();
+                    }
+                }
+                None
+            }
+        }
+    }
+
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
+        let mut key_event = key_event;
+        if matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && key_event.code != KeyCode::Esc
+            && self.backtrack.primed
+        {
+            self.reset_backtrack_state();
+        }
+        let Some(forwarded_key_event) = self.handle_key_chord_key_event(key_event) else {
+            return;
+        };
+        key_event = forwarded_key_event;
+
         // Some terminals, especially on macOS, encode Option+Left/Right as Option+b/f unless
         // enhanced keyboard reporting is available. We only treat those word-motion fallbacks as
         // agent-switch shortcuts when the composer is empty so we never steal the expected
@@ -5226,12 +5271,6 @@ impl App {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
-                // Any non-Esc key press should cancel a primed backtrack.
-                // This avoids stale "Esc-primed" state after the user starts typing
-                // (even if they later backspace to empty).
-                if key_event.code != KeyCode::Esc && self.backtrack.primed {
-                    self.reset_backtrack_state();
-                }
                 self.chat_widget.handle_key_event(key_event);
             }
             _ => {
@@ -7628,6 +7667,7 @@ guardian_approval = true
             status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            key_chord: KeyChordState::default(),
             backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
             feedback_audience: FeedbackAudience::External,
@@ -7693,6 +7733,7 @@ guardian_approval = true
                 status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
                 terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
                 backtrack: BacktrackState::default(),
+                key_chord: KeyChordState::default(),
                 backtrack_render_pending: false,
                 feedback: codex_feedback::CodexFeedback::new(),
                 feedback_audience: FeedbackAudience::External,
@@ -8469,6 +8510,77 @@ guardian_approval = true
         }
 
         assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn ctrl_x_u_triggers_undo_last_user_message() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+
+        app.transcript_cells = vec![Arc::new(UserHistoryCell {
+            message: "latest".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>];
+
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('x'),
+                KeyModifiers::CONTROL,
+            )),
+            None
+        );
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE)),
+            None
+        );
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "latest");
+
+        let mut rollback_turns = None;
+        while let Ok(op) = op_rx.try_recv() {
+            if let Op::ThreadRollback { num_turns } = op {
+                rollback_turns = Some(num_turns);
+            }
+        }
+
+        assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn ctrl_x_unknown_second_key_falls_through_to_composer_input() {
+        let mut app = make_test_app().await;
+
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('x'),
+                KeyModifiers::CONTROL,
+            )),
+            None
+        );
+        let forwarded =
+            app.handle_key_chord_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert_eq!(
+            forwarded,
+            Some(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE))
+        );
+    }
+
+    #[tokio::test]
+    async fn ctrl_x_y_runs_copy_action_without_inserting_y_into_the_composer() {
+        let mut app = make_test_app().await;
+
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('x'),
+                KeyModifiers::CONTROL,
+            )),
+            None
+        );
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)),
+            None
+        );
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "");
     }
 
     #[tokio::test]

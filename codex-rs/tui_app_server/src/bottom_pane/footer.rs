@@ -756,6 +756,8 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut paste_image = Line::from("");
     let mut external_editor = Line::from("");
     let mut edit_previous = Line::from("");
+    let mut undo_last_message = Line::from("");
+    let mut copy_latest_output = Line::from("");
     let mut quit = Line::from("");
     let mut show_transcript = Line::from("");
     let mut change_mode = Line::from("");
@@ -771,6 +773,8 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::PasteImage => paste_image = text,
                 ShortcutId::ExternalEditor => external_editor = text,
                 ShortcutId::EditPrevious => edit_previous = text,
+                ShortcutId::UndoLastMessage => undo_last_message = text,
+                ShortcutId::CopyLatestOutput => copy_latest_output = text,
                 ShortcutId::Quit => quit = text,
                 ShortcutId::ShowTranscript => show_transcript = text,
                 ShortcutId::ChangeMode => change_mode = text,
@@ -787,6 +791,8 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         paste_image,
         external_editor,
         edit_previous,
+        undo_last_message,
+        copy_latest_output,
         quit,
     ];
     if change_mode.width() > 0 {
@@ -869,6 +875,8 @@ enum ShortcutId {
     PasteImage,
     ExternalEditor,
     EditPrevious,
+    UndoLastMessage,
+    CopyLatestOutput,
     Quit,
     ShowTranscript,
     ChangeMode,
@@ -878,11 +886,18 @@ enum ShortcutId {
 struct ShortcutBinding {
     key: KeyBinding,
     condition: DisplayCondition,
+    display_label: Option<&'static str>,
 }
 
 impl ShortcutBinding {
     fn matches(&self, state: ShortcutsState) -> bool {
         self.condition.matches(state)
+    }
+
+    fn overlay_key_span(&self) -> Span<'static> {
+        self.display_label
+            .map(Span::from)
+            .unwrap_or_else(|| self.key.into())
     }
 }
 
@@ -921,7 +936,7 @@ impl ShortcutDescriptor {
 
     fn overlay_entry(&self, state: ShortcutsState) -> Option<Line<'static>> {
         let binding = self.binding_for(state)?;
-        let mut line = Line::from(vec![self.prefix.into(), binding.key.into()]);
+        let mut line = Line::from(vec![self.prefix.into(), binding.overlay_key_span()]);
         match self.id {
             ShortcutId::EditPrevious => {
                 if state.esc_backtrack_hint {
@@ -946,6 +961,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         bindings: &[ShortcutBinding {
             key: key_hint::plain(KeyCode::Char('/')),
             condition: DisplayCondition::Always,
+            display_label: None,
         }],
         prefix: "",
         label: " for commands",
@@ -955,6 +971,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         bindings: &[ShortcutBinding {
             key: key_hint::plain(KeyCode::Char('!')),
             condition: DisplayCondition::Always,
+            display_label: None,
         }],
         prefix: "",
         label: " for shell commands",
@@ -965,10 +982,12 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
             ShortcutBinding {
                 key: key_hint::shift(KeyCode::Enter),
                 condition: DisplayCondition::WhenShiftEnterHint,
+                display_label: None,
             },
             ShortcutBinding {
                 key: key_hint::ctrl(KeyCode::Char('j')),
                 condition: DisplayCondition::WhenNotShiftEnterHint,
+                display_label: None,
             },
         ],
         prefix: "",
@@ -979,6 +998,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         bindings: &[ShortcutBinding {
             key: key_hint::plain(KeyCode::Tab),
             condition: DisplayCondition::Always,
+            display_label: None,
         }],
         prefix: "",
         label: " to queue message",
@@ -988,6 +1008,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         bindings: &[ShortcutBinding {
             key: key_hint::plain(KeyCode::Char('@')),
             condition: DisplayCondition::Always,
+            display_label: None,
         }],
         prefix: "",
         label: " for file paths",
@@ -1000,10 +1021,12 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
             ShortcutBinding {
                 key: key_hint::ctrl_alt(KeyCode::Char('v')),
                 condition: DisplayCondition::WhenUnderWSL,
+                display_label: None,
             },
             ShortcutBinding {
                 key: key_hint::ctrl(KeyCode::Char('v')),
                 condition: DisplayCondition::Always,
+                display_label: None,
             },
         ],
         prefix: "",
@@ -1014,6 +1037,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         bindings: &[ShortcutBinding {
             key: key_hint::ctrl(KeyCode::Char('g')),
             condition: DisplayCondition::Always,
+            display_label: None,
         }],
         prefix: "",
         label: " to edit in external editor",
@@ -1023,15 +1047,37 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         bindings: &[ShortcutBinding {
             key: key_hint::plain(KeyCode::Esc),
             condition: DisplayCondition::Always,
+            display_label: None,
         }],
         prefix: "",
         label: "",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::UndoLastMessage,
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl(KeyCode::Char('x')),
+            condition: DisplayCondition::Always,
+            display_label: Some("ctrl + x then u"),
+        }],
+        prefix: "",
+        label: " to undo last message",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::CopyLatestOutput,
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl(KeyCode::Char('x')),
+            condition: DisplayCondition::Always,
+            display_label: Some("ctrl + x then y"),
+        }],
+        prefix: "",
+        label: " to copy last output",
     },
     ShortcutDescriptor {
         id: ShortcutId::Quit,
         bindings: &[ShortcutBinding {
             key: key_hint::ctrl(KeyCode::Char('c')),
             condition: DisplayCondition::Always,
+            display_label: None,
         }],
         prefix: "",
         label: " to exit",
@@ -1041,6 +1087,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         bindings: &[ShortcutBinding {
             key: key_hint::ctrl(KeyCode::Char('t')),
             condition: DisplayCondition::Always,
+            display_label: None,
         }],
         prefix: "",
         label: " to view transcript",
@@ -1050,6 +1097,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         bindings: &[ShortcutBinding {
             key: key_hint::shift(KeyCode::Tab),
             condition: DisplayCondition::WhenCollaborationModesEnabled,
+            display_label: None,
         }],
         prefix: "",
         label: " to change mode",
