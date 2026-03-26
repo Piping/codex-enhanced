@@ -41,6 +41,8 @@ just fix -p <crate-you-touched>
 
 # For the default lightweight verification pass (tui, ext, cli):
 just verify-fast
+# For `/loop`-focused TUI edits, use the narrower loop path:
+just verify-tui-loop
 # Or target a specific crate/target explicitly:
 just verify-fast-crate -p <crate-you-touched>
 

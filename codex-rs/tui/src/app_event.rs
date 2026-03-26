@@ -21,6 +21,7 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_utils_approval_presets::ApprovalPreset;
 
+use crate::app::loop_timer_command::LoopDeliveryMode;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
@@ -71,6 +72,12 @@ pub(crate) struct ConnectorsSnapshot {
     pub(crate) connectors: Vec<AppInfo>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LoopTimerTriggerSource {
+    Scheduled,
+    Manual,
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
@@ -97,10 +104,47 @@ pub(crate) enum AppEvent {
     TriggerLoopTimer {
         timer_id: String,
         scheduled_for_unix_seconds: i64,
+        source: LoopTimerTriggerSource,
     },
     /// Open the actions view for a specific loop timer.
     OpenLoopTimerActions {
         timer_id: String,
+    },
+    /// Open a prompt editor for a loop timer.
+    OpenEditLoopTimerPrompt {
+        timer_id: String,
+    },
+    /// Open a schedule editor for a loop timer.
+    OpenEditLoopTimerSchedule {
+        timer_id: String,
+    },
+    /// Open an action editor for a loop timer.
+    OpenEditLoopTimerAction {
+        timer_id: String,
+    },
+    /// Open a delivery-mode picker for a loop timer.
+    OpenEditLoopTimerDeliveryMode {
+        timer_id: String,
+    },
+    /// Persist an updated prompt for a loop timer.
+    SaveLoopTimerPrompt {
+        timer_id: String,
+        prompt: String,
+    },
+    /// Persist an updated schedule for a loop timer.
+    SaveLoopTimerSchedule {
+        timer_id: String,
+        schedule: String,
+    },
+    /// Persist an updated action for a loop timer.
+    SaveLoopTimerAction {
+        timer_id: String,
+        action: String,
+    },
+    /// Persist an updated delivery mode override for a loop timer.
+    SaveLoopTimerDeliveryMode {
+        timer_id: String,
+        delivery_mode: Option<LoopDeliveryMode>,
     },
     /// Enable a disabled loop timer.
     EnableLoopTimer {

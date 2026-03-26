@@ -54,6 +54,12 @@ impl CustomPromptView {
             complete: false,
         }
     }
+
+    pub(crate) fn with_initial_text(mut self, initial_text: String) -> Self {
+        self.textarea.set_text_clearing_elements(&initial_text);
+        self.textarea.set_cursor(self.textarea.text().len());
+        self
+    }
 }
 
 impl BottomPaneView for CustomPromptView {

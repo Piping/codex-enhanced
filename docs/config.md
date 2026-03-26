@@ -80,8 +80,8 @@ backend prompt settings or the realtime end/inactive message.
 
 ## Loop timers
 
-`[tui.loop]` controls what a completed `/loop` run mirrors back into the main
-thread.
+`[tui.loop]` controls what a completed `/loop` run mirrors back into the
+main thread.
 
 ```toml
 [tui.loop]
@@ -92,5 +92,7 @@ Supported values:
 
 - `prompt-and-response` (default): mirror `/loop <prompt>` and the latest assistant reply.
 - `response-only`: mirror only the latest assistant reply.
+
+Follow-up delivery is configured per loop in `Ctrl-P -> Loop Manager -> Delivery Mode`.
 
 Ctrl+C/Ctrl+D quitting uses a ~1 second double-press hint (`ctrl + c again to quit`).

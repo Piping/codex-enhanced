@@ -1,5 +1,12 @@
 use super::App;
+use super::loop_timer_command::LoopCommand;
+use super::loop_timer_command::LoopDeliveryMode;
+use super::loop_timer_command::LoopMode;
+use super::loop_timer_command::LoopSchedule;
+use super::loop_timer_command::parse_loop_command;
+use super::loop_timer_command::parse_loop_schedule;
 use crate::app_event::AppEvent;
+use crate::app_event::LoopTimerTriggerSource;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
@@ -14,9 +21,11 @@ use chrono::Utc;
 use codex_core::CodexThread;
 use codex_core::RolloutRecorder;
 use codex_core::config::types::TuiLoopCompletionMirrorMode;
+use codex_core::content_items_to_text;
 use codex_protocol::ThreadId;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
@@ -26,7 +35,6 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use cron::Schedule;
 use ratatui::text::Line;
 use serde::Deserialize;
 use serde::Serialize;
@@ -35,7 +43,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
@@ -74,70 +81,30 @@ struct PersistedLoopTimersFile {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct PersistedLoopTimer {
     id: String,
+    #[serde(default)]
+    mode: LoopMode,
     prompt: String,
+    #[serde(default)]
+    action: Option<String>,
+    #[serde(default)]
+    delivery_mode: Option<LoopDeliveryMode>,
     schedule: LoopSchedule,
     enabled: bool,
+    #[serde(default)]
+    rollout_path: Option<PathBuf>,
     created_at_unix_seconds: i64,
     last_scheduled_at_unix_seconds: Option<i64>,
     last_completed_at_unix_seconds: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum LoopSchedule {
-    Interval { display: String, seconds: u64 },
-    Cron { display: String, normalized: String },
-}
-
-impl LoopSchedule {
-    fn display(&self) -> &str {
-        match self {
-            Self::Interval { display, .. } | Self::Cron { display, .. } => display,
-        }
-    }
-
-    fn next_due_after(
-        &self,
-        last_scheduled_at_unix_seconds: i64,
-        now: DateTime<Utc>,
-    ) -> DateTime<Utc> {
-        match self {
-            Self::Interval { seconds, .. } => {
-                let interval = i64::try_from(*seconds).unwrap_or(i64::MAX).max(1);
-                let next = if last_scheduled_at_unix_seconds >= now.timestamp() {
-                    last_scheduled_at_unix_seconds.saturating_add(interval)
-                } else {
-                    let elapsed = now
-                        .timestamp()
-                        .saturating_sub(last_scheduled_at_unix_seconds);
-                    let skipped_intervals = elapsed / interval;
-                    last_scheduled_at_unix_seconds.saturating_add(
-                        skipped_intervals.saturating_add(1).saturating_mul(interval),
-                    )
-                };
-                unix_seconds_to_utc(next).unwrap_or(now)
-            }
-            Self::Cron { normalized, .. } => Schedule::from_str(normalized)
-                .ok()
-                .and_then(|schedule| {
-                    unix_seconds_to_utc(last_scheduled_at_unix_seconds)
-                        .and_then(|last| schedule.after(&last).next())
-                })
-                .map(|next| next.with_timezone(&Utc))
-                .filter(|next| *next > now)
-                .unwrap_or(now),
-        }
-    }
+pub(crate) struct LoopTimerCompletion {
+    pub(crate) cells: Vec<Arc<dyn HistoryCell>>,
+    pub(crate) followup_user_message: Option<String>,
 }
 
 impl App {
-    pub(crate) fn open_loop_timers_panel(&mut self) {
-        self.ensure_loop_timers_loaded();
-
+    fn loop_timers_panel_params(&self, initial_selected_idx: Option<usize>) -> SelectionViewParams {
         let path = loop_timers_path(self.config.cwd.as_path());
-        let initial_selected_idx = self
-            .chat_widget
-            .selected_index_for_active_view(LOOP_TIMERS_VIEW_ID);
         let subtitle = Some(format!(
             "{} timer(s) configured for {}.",
             self.loop_timers.timers.len(),
@@ -148,36 +115,66 @@ impl App {
             .loop_timers
             .timers
             .values()
-            .map(loop_timer_selection_item)
+            .map(|timer| {
+                loop_timer_selection_item(
+                    timer,
+                    self.loop_timers.active_runs.contains_key(&timer.id),
+                )
+            })
             .collect::<Vec<_>>();
 
         if items.is_empty() {
             items.push(SelectionItem {
                 name: "No loop timers yet".to_string(),
                 description: Some(
-                    "Create one with `/loop 5m <prompt>` or `/loop <cron> <prompt>`.".to_string(),
+                    "Create one with `/loop 5m <prompt>` or `/loop <id> 30m <prompt>`.".to_string(),
                 ),
                 is_disabled: true,
                 ..Default::default()
             });
         }
 
-        self.chat_widget.show_selection_view(SelectionViewParams {
+        SelectionViewParams {
             view_id: Some(LOOP_TIMERS_VIEW_ID),
-            title: Some("Loop Timers".to_string()),
+            title: Some("Loop Manager".to_string()),
             subtitle,
             footer_hint: Some(standard_popup_hint_line()),
             footer_path: Some(path.display().to_string()),
             initial_selected_idx,
             items,
             ..Default::default()
-        });
+        }
+    }
+
+    pub(crate) fn open_loop_timers_panel(&mut self) {
+        self.ensure_loop_timers_loaded();
+
+        let initial_selected_idx = self
+            .chat_widget
+            .selected_index_for_active_view(LOOP_TIMERS_VIEW_ID);
+        if !self.chat_widget.replace_selection_view_if_active(
+            LOOP_TIMERS_VIEW_ID,
+            self.loop_timers_panel_params(initial_selected_idx),
+        ) {
+            self.chat_widget
+                .show_selection_view(self.loop_timers_panel_params(initial_selected_idx));
+        }
+    }
+
+    fn refresh_loop_timers_panel_if_active(&mut self) {
+        let initial_selected_idx = self
+            .chat_widget
+            .selected_index_for_active_view(LOOP_TIMERS_VIEW_ID);
+        let _ = self.chat_widget.replace_selection_view_if_active(
+            LOOP_TIMERS_VIEW_ID,
+            self.loop_timers_panel_params(initial_selected_idx),
+        );
     }
 
     pub(crate) fn create_loop_timer(&mut self, spec: String) {
         self.ensure_loop_timers_loaded();
 
-        let parsed = match parse_loop_spec(spec.trim()) {
+        let parsed = match parse_loop_command(spec.trim()) {
             Ok(parsed) => parsed,
             Err(err) => {
                 self.chat_widget
@@ -187,20 +184,78 @@ impl App {
         };
 
         let now = Utc::now();
-        let timer = PersistedLoopTimer {
-            id: uuid::Uuid::new_v4().to_string(),
-            prompt: parsed.prompt,
-            schedule: parsed.schedule,
-            enabled: true,
-            created_at_unix_seconds: now.timestamp(),
-            last_scheduled_at_unix_seconds: None,
-            last_completed_at_unix_seconds: None,
+        let (timer_id, message) = match parsed {
+            LoopCommand::Focus { id } => {
+                if self.loop_timers.timers.contains_key(&id) {
+                    self.open_loop_timer_actions(id);
+                } else {
+                    self.chat_widget.add_error_message(format!(
+                        "Unknown loop `{id}`. Create it with `/loop {id} <time> <prompt>`."
+                    ));
+                }
+                return;
+            }
+            LoopCommand::Create {
+                id,
+                schedule,
+                prompt,
+            } => {
+                let prompt = prompt.trim().to_string();
+                if prompt.is_empty() {
+                    self.chat_widget.add_error_message(
+                        "Failed to create `/loop`: expected a prompt.".to_string(),
+                    );
+                    return;
+                }
+                let mode = if id.is_some() {
+                    LoopMode::Persistent
+                } else {
+                    LoopMode::OneShot
+                };
+                let timer_id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                let existing = self.loop_timers.timers.get(&timer_id).cloned();
+                let timer = PersistedLoopTimer {
+                    id: timer_id.clone(),
+                    mode,
+                    prompt: prompt.clone(),
+                    action: existing.as_ref().and_then(|timer| timer.action.clone()),
+                    delivery_mode: existing.as_ref().and_then(|timer| timer.delivery_mode),
+                    schedule: schedule.clone(),
+                    enabled: true,
+                    rollout_path: existing
+                        .as_ref()
+                        .and_then(|timer| timer.rollout_path.clone()),
+                    created_at_unix_seconds: existing
+                        .as_ref()
+                        .map_or(now.timestamp(), |timer| timer.created_at_unix_seconds),
+                    last_scheduled_at_unix_seconds: None,
+                    last_completed_at_unix_seconds: existing
+                        .as_ref()
+                        .and_then(|timer| timer.last_completed_at_unix_seconds),
+                };
+                self.loop_timers.timers.insert(timer.id.clone(), timer);
+                let summary = match mode {
+                    LoopMode::OneShot => {
+                        format!(
+                            "Created one-shot `/loop`: {} -> {prompt}",
+                            schedule.display()
+                        )
+                    }
+                    LoopMode::Persistent => {
+                        let verb = if existing.is_some() {
+                            "Updated"
+                        } else {
+                            "Created"
+                        };
+                        format!(
+                            "{verb} persistent `/loop {timer_id}`: {} -> {prompt}",
+                            schedule.display()
+                        )
+                    }
+                };
+                (timer_id, summary)
+            }
         };
-
-        let timer_id = timer.id.clone();
-        let prompt = timer.prompt.clone();
-        let schedule_display = timer.schedule.display().to_string();
-        self.loop_timers.timers.insert(timer.id.clone(), timer);
         if let Err(err) = self.persist_loop_timers() {
             self.chat_widget
                 .add_error_message(format!("Failed to persist `/loop` timer: {err}"));
@@ -208,15 +263,13 @@ impl App {
             return;
         }
 
-        self.schedule_loop_timer(&timer_id, now);
-        self.chat_widget.add_info_message(
-            format!("Created `/loop` timer: {schedule_display} -> {prompt}"),
-            /*hint*/ None,
-        );
-        self.app_event_tx.send(AppEvent::TriggerLoopTimer {
-            timer_id,
-            scheduled_for_unix_seconds: now.timestamp(),
-        });
+        if let Some(timer) = self.loop_timers.timers.get(&timer_id).cloned()
+            && let Some(due) = self.next_due_for_timer(&timer, now)
+        {
+            self.schedule_loop_timer(&timer_id, due);
+        }
+        self.chat_widget.add_info_message(message, /*hint*/ None);
+        self.refresh_loop_timers_panel_if_active();
     }
 
     pub(crate) fn open_loop_timer_actions(&mut self, timer_id: String) {
@@ -255,12 +308,86 @@ impl App {
         };
 
         let timer_id_for_delete = timer.id.clone();
+        let timer_id_for_run_now = timer.id.clone();
+        let timer_id_for_edit_prompt = timer.id.clone();
+        let timer_id_for_edit_schedule = timer.id.clone();
+        let timer_id_for_edit_action = timer.id.clone();
+        let timer_id_for_edit_delivery_mode = timer.id.clone();
         self.chat_widget.show_selection_view(SelectionViewParams {
             view_id: Some(LOOP_TIMER_ACTIONS_VIEW_ID),
-            title: Some("Loop Timer".to_string()),
-            subtitle: Some(format!("{} -> {}", timer.schedule.display(), timer.prompt)),
+            title: Some("Loop Manager".to_string()),
+            subtitle: Some(format!(
+                "{} · {}",
+                timer_descriptor(timer),
+                timer.schedule.display()
+            )),
             footer_hint: Some(standard_popup_hint_line()),
             items: vec![
+                SelectionItem {
+                    name: "Run Now".to_string(),
+                    description: Some("Trigger this loop immediately.".to_string()),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::TriggerLoopTimer {
+                            timer_id: timer_id_for_run_now.clone(),
+                            scheduled_for_unix_seconds: Utc::now().timestamp(),
+                            source: LoopTimerTriggerSource::Manual,
+                        })
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: "Edit Prompt".to_string(),
+                    description: Some(
+                        "Update the task this loop should stay aligned to.".to_string(),
+                    ),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::OpenEditLoopTimerPrompt {
+                            timer_id: timer_id_for_edit_prompt.clone(),
+                        })
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: "Edit Schedule".to_string(),
+                    description: Some("Change the interval or cron expression.".to_string()),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::OpenEditLoopTimerSchedule {
+                            timer_id: timer_id_for_edit_schedule.clone(),
+                        })
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: "Edit Action".to_string(),
+                    description: Some(
+                        "Set the optional text appended in `As User Message + Action` mode."
+                            .to_string(),
+                    ),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::OpenEditLoopTimerAction {
+                            timer_id: timer_id_for_edit_action.clone(),
+                        })
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: "Delivery Mode".to_string(),
+                    description: Some(format!(
+                        "Currently {}. Adjust how the loop reply feeds back into the main thread.",
+                        effective_loop_delivery_mode(Some(timer)).short_label()
+                    )),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::OpenEditLoopTimerDeliveryMode {
+                            timer_id: timer_id_for_edit_delivery_mode.clone(),
+                        })
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
                 enabled_action,
                 SelectionItem {
                     name: "Delete".to_string(),
@@ -277,6 +404,179 @@ impl App {
             on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenLoopTimersPanel))),
             ..Default::default()
         });
+    }
+
+    pub(crate) fn open_loop_timer_prompt_editor(&mut self, timer_id: String) {
+        self.ensure_loop_timers_loaded();
+        let Some(timer) = self.loop_timers.timers.get(&timer_id) else {
+            self.chat_widget
+                .add_error_message("That loop timer no longer exists.".to_string());
+            self.open_loop_timers_panel();
+            return;
+        };
+        self.chat_widget
+            .open_loop_timer_prompt_editor(timer_id, timer.prompt.clone());
+    }
+
+    pub(crate) fn open_loop_timer_schedule_editor(&mut self, timer_id: String) {
+        self.ensure_loop_timers_loaded();
+        let Some(timer) = self.loop_timers.timers.get(&timer_id) else {
+            self.chat_widget
+                .add_error_message("That loop timer no longer exists.".to_string());
+            self.open_loop_timers_panel();
+            return;
+        };
+        self.chat_widget
+            .open_loop_timer_schedule_editor(timer_id, timer.schedule.display().to_string());
+    }
+
+    pub(crate) fn open_loop_timer_action_editor(&mut self, timer_id: String) {
+        self.ensure_loop_timers_loaded();
+        let Some(timer) = self.loop_timers.timers.get(&timer_id) else {
+            self.chat_widget
+                .add_error_message("That loop timer no longer exists.".to_string());
+            self.open_loop_timers_panel();
+            return;
+        };
+        self.chat_widget
+            .open_loop_timer_action_editor(timer_id, timer.action.clone().unwrap_or_default());
+    }
+
+    pub(crate) fn open_loop_timer_delivery_mode_menu(&mut self, timer_id: String) {
+        self.ensure_loop_timers_loaded();
+        let Some(timer) = self.loop_timers.timers.get(&timer_id) else {
+            self.chat_widget
+                .add_error_message("That loop timer no longer exists.".to_string());
+            self.open_loop_timers_panel();
+            return;
+        };
+
+        let current_mode = effective_loop_delivery_mode(Some(timer));
+        let items = LoopDeliveryMode::USER_SELECTABLE
+            .into_iter()
+            .map(|mode| {
+                let timer_id = timer_id.clone();
+                SelectionItem {
+                    name: mode.title().to_string(),
+                    description: Some(mode.description().to_string()),
+                    is_current: current_mode == mode,
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::SaveLoopTimerDeliveryMode {
+                            timer_id: timer_id.clone(),
+                            delivery_mode: (mode != LoopDeliveryMode::AssistantOnly)
+                                .then_some(mode),
+                        })
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }
+            })
+            .collect();
+
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            title: Some("Loop Manager".to_string()),
+            subtitle: Some(format!("Delivery mode · {}", timer_descriptor(timer))),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            on_cancel: Some(Box::new(move |tx| {
+                tx.send(AppEvent::OpenLoopTimerActions {
+                    timer_id: timer_id.clone(),
+                })
+            })),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn save_loop_timer_prompt(&mut self, timer_id: String, prompt: String) {
+        self.ensure_loop_timers_loaded();
+        let prompt = prompt.trim().to_string();
+        if prompt.is_empty() {
+            self.chat_widget
+                .add_error_message("Loop prompt cannot be empty.".to_string());
+            return;
+        }
+        let Some(timer) = self.loop_timers.timers.get_mut(&timer_id) else {
+            self.chat_widget
+                .add_error_message("That loop timer no longer exists.".to_string());
+            self.open_loop_timers_panel();
+            return;
+        };
+        timer.prompt = prompt;
+        if let Err(err) = self.persist_loop_timers() {
+            self.chat_widget
+                .add_error_message(format!("Failed to update loop timer prompt: {err}"));
+        }
+        self.open_loop_timer_actions(timer_id);
+    }
+
+    pub(crate) fn save_loop_timer_schedule(&mut self, timer_id: String, schedule: String) {
+        self.ensure_loop_timers_loaded();
+        let schedule = match parse_loop_schedule(schedule.trim()) {
+            Ok(schedule) => schedule,
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to update loop schedule: {err}"));
+                return;
+            }
+        };
+        let updated_timer = {
+            let Some(timer) = self.loop_timers.timers.get_mut(&timer_id) else {
+                self.chat_widget
+                    .add_error_message("That loop timer no longer exists.".to_string());
+                self.open_loop_timers_panel();
+                return;
+            };
+            timer.schedule = schedule;
+            timer.last_scheduled_at_unix_seconds = None;
+            timer.clone()
+        };
+        if let Err(err) = self.persist_loop_timers() {
+            self.chat_widget
+                .add_error_message(format!("Failed to update loop timer schedule: {err}"));
+        }
+        if updated_timer.enabled
+            && let Some(due) = self.next_due_for_timer(&updated_timer, Utc::now())
+        {
+            self.schedule_loop_timer(&timer_id, due);
+        }
+        self.open_loop_timer_actions(timer_id);
+    }
+
+    pub(crate) fn save_loop_timer_action(&mut self, timer_id: String, action: String) {
+        self.ensure_loop_timers_loaded();
+        let Some(timer) = self.loop_timers.timers.get_mut(&timer_id) else {
+            self.chat_widget
+                .add_error_message("That loop timer no longer exists.".to_string());
+            self.open_loop_timers_panel();
+            return;
+        };
+        let trimmed = action.trim().to_string();
+        timer.action = (!trimmed.is_empty()).then_some(trimmed);
+        if let Err(err) = self.persist_loop_timers() {
+            self.chat_widget
+                .add_error_message(format!("Failed to update loop timer action: {err}"));
+        }
+        self.open_loop_timer_actions(timer_id);
+    }
+
+    pub(crate) fn save_loop_timer_delivery_mode(
+        &mut self,
+        timer_id: String,
+        delivery_mode: Option<LoopDeliveryMode>,
+    ) {
+        self.ensure_loop_timers_loaded();
+        let Some(timer) = self.loop_timers.timers.get_mut(&timer_id) else {
+            self.chat_widget
+                .add_error_message("That loop timer no longer exists.".to_string());
+            self.open_loop_timers_panel();
+            return;
+        };
+        timer.delivery_mode = delivery_mode;
+        if let Err(err) = self.persist_loop_timers() {
+            self.chat_widget
+                .add_error_message(format!("Failed to update loop timer delivery mode: {err}"));
+        }
+        self.open_loop_timer_actions(timer_id);
     }
 
     pub(crate) fn set_loop_timer_enabled(&mut self, timer_id: String, enabled: bool) {
@@ -319,20 +619,24 @@ impl App {
         &mut self,
         timer_id: String,
         scheduled_for_unix_seconds: i64,
-    ) {
+        source: LoopTimerTriggerSource,
+    ) -> Vec<Arc<dyn HistoryCell>> {
         self.ensure_loop_timers_loaded();
         let now = Utc::now();
         let timer = {
             let Some(timer) = self.loop_timers.timers.get_mut(&timer_id) else {
-                return;
+                return Vec::new();
             };
-            if !timer.enabled {
-                return;
+            if matches!(source, LoopTimerTriggerSource::Scheduled) && !timer.enabled {
+                return Vec::new();
             }
             timer.last_scheduled_at_unix_seconds = Some(scheduled_for_unix_seconds);
             timer.clone()
         };
-        let next_due = self.next_due_for_timer(&timer, now);
+        let next_due = timer
+            .enabled
+            .then(|| self.next_due_for_timer(&timer, now))
+            .flatten();
         if let Err(err) = self.persist_loop_timers() {
             self.chat_widget
                 .add_error_message(format!("Failed to update loop timer schedule: {err}"));
@@ -342,11 +646,13 @@ impl App {
         }
 
         if self.loop_timers.active_runs.contains_key(&timer_id) {
-            return;
-        };
+            self.sync_background_loop_status();
+            self.refresh_loop_timers_panel_if_active();
+            return Vec::new();
+        }
         let prompt = timer.prompt.clone();
         let mut loop_config = self.config.clone();
-        loop_config.ephemeral = true;
+        loop_config.ephemeral = matches!(timer.mode, LoopMode::OneShot);
         loop_config.include_apply_patch_tool = false;
         if let Err(err) = loop_config
             .permissions
@@ -355,7 +661,7 @@ impl App {
         {
             self.chat_widget
                 .add_error_message(format!("Failed to configure `/loop` approvals: {err}"));
-            return;
+            return Vec::new();
         }
         if let Err(err) = loop_config
             .permissions
@@ -367,7 +673,7 @@ impl App {
         {
             self.chat_widget
                 .add_error_message(format!("Failed to configure `/loop` sandbox: {err}"));
-            return;
+            return Vec::new();
         }
         loop_config.developer_instructions =
             Some(match loop_config.developer_instructions.take() {
@@ -377,32 +683,76 @@ impl App {
                 _ => LOOP_DEVELOPER_INSTRUCTIONS.to_string(),
             });
 
-        let initial_history = build_loop_initial_history(
-            self.primary_session_configured
-                .as_ref()
-                .and_then(|event| event.rollout_path.as_deref()),
-        )
-        .await;
+        let primary_rollout_path = self
+            .primary_session_configured
+            .as_ref()
+            .and_then(|event| event.rollout_path.as_deref());
+        let recent_main_messages = load_recent_main_thread_messages(primary_rollout_path, 3).await;
+        let loop_input = build_loop_run_input(&prompt, &recent_main_messages);
 
-        let new_thread = match self
-            .server
-            .start_thread_with_history_and_source(
-                loop_config,
-                initial_history,
-                SessionSource::SubAgent(SubAgentSource::Other("loop".to_string())),
-            )
-            .await
-        {
+        let new_thread = match timer.mode {
+            LoopMode::OneShot => {
+                let initial_history = build_loop_initial_history(primary_rollout_path).await;
+                self.server
+                    .start_thread_with_history_and_source(
+                        loop_config,
+                        initial_history,
+                        SessionSource::SubAgent(SubAgentSource::Other("loop".to_string())),
+                    )
+                    .await
+            }
+            LoopMode::Persistent => {
+                let rollout_path = timer
+                    .rollout_path
+                    .as_ref()
+                    .filter(|path| path.exists())
+                    .cloned();
+                match rollout_path {
+                    Some(rollout_path) => {
+                        self.server
+                            .resume_thread_from_rollout(
+                                loop_config,
+                                rollout_path,
+                                Arc::clone(&self.auth_manager),
+                                /*parent_trace*/ None,
+                            )
+                            .await
+                    }
+                    None => {
+                        let initial_history =
+                            build_loop_initial_history(primary_rollout_path).await;
+                        self.server
+                            .start_thread_with_history_and_source(
+                                loop_config,
+                                initial_history,
+                                SessionSource::SubAgent(SubAgentSource::Other("loop".to_string())),
+                            )
+                            .await
+                    }
+                }
+            }
+        };
+        let new_thread = match new_thread {
             Ok(new_thread) => new_thread,
             Err(err) => {
                 self.chat_widget
                     .add_error_message(format!("Failed to start `/loop` execution: {err}"));
-                return;
+                return Vec::new();
             }
         };
 
         let thread_id = new_thread.thread_id;
         let thread = new_thread.thread;
+        let rollout_path = new_thread.session_configured.rollout_path.clone();
+        if matches!(timer.mode, LoopMode::Persistent)
+            && let Some(timer) = self.loop_timers.timers.get_mut(&timer_id)
+        {
+            timer.rollout_path = rollout_path;
+            if let Err(err) = self.persist_loop_timers() {
+                self.chat_widget
+                    .add_error_message(format!("Failed to persist `/loop` thread state: {err}"));
+            }
+        }
         let app_event_tx = self.app_event_tx.clone();
         let listener_thread = Arc::clone(&thread);
         let timer_id_for_event = timer_id.clone();
@@ -474,11 +824,12 @@ impl App {
                 listener_handle,
             },
         );
+        self.sync_background_loop_status();
 
         if let Err(err) = thread
             .submit(Op::UserInput {
                 items: vec![codex_protocol::user_input::UserInput::Text {
-                    text: prompt,
+                    text: loop_input,
                     text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
@@ -488,7 +839,13 @@ impl App {
             self.chat_widget
                 .add_error_message(format!("Failed to submit `/loop` prompt: {err}"));
             self.stop_loop_timer_run(&timer_id);
+            self.sync_background_loop_status();
+            self.refresh_loop_timers_panel_if_active();
+            return Vec::new();
         }
+
+        self.refresh_loop_timers_panel_if_active();
+        self.record_loop_timer_started(&timer_id, &timer.prompt)
     }
 
     pub(crate) fn finish_loop_timer(
@@ -496,84 +853,112 @@ impl App {
         timer_id: String,
         prompt: String,
         result: Result<String, String>,
-    ) -> Vec<Arc<dyn HistoryCell>> {
+    ) -> LoopTimerCompletion {
         self.ensure_loop_timers_loaded();
         self.stop_loop_timer_run(&timer_id);
-
+        self.sync_background_loop_status();
+        let mut completed_timer = None;
+        let mut remove_after_completion = false;
         if let Some(timer) = self.loop_timers.timers.get_mut(&timer_id) {
             timer.last_completed_at_unix_seconds = Some(Utc::now().timestamp());
+            remove_after_completion = matches!(timer.mode, LoopMode::OneShot);
+            completed_timer = Some(timer.clone());
+        }
+        if remove_after_completion {
+            self.loop_timers.timers.remove(&timer_id);
+        }
+        if completed_timer.is_some() || remove_after_completion {
             if let Err(err) = self.persist_loop_timers() {
                 self.chat_widget
                     .add_error_message(format!("Failed to persist loop timer completion: {err}"));
             }
         }
+        self.refresh_loop_timers_panel_if_active();
 
         match result {
             Ok(message) => {
                 let Some(primary_thread_id) = self.primary_thread_id else {
-                    return Vec::new();
+                    return LoopTimerCompletion {
+                        cells: Vec::new(),
+                        followup_user_message: None,
+                    };
                 };
-                let timer_summary = self
-                    .loop_timers
-                    .timers
-                    .get(&timer_id)
+                let timer_summary = completed_timer
+                    .as_ref()
                     .map(|timer| {
-                        let prompt_prefix = prompt.chars().take(48).collect::<String>();
-                        let prompt_prefix = if prompt.chars().count() > 48 {
-                            format!("{prompt_prefix}...")
-                        } else {
-                            prompt_prefix
-                        };
-                        let loop_id_prefix = timer.id.chars().take(8).collect::<String>();
                         format!(
-                            "Loop {loop_id_prefix} ({}) ran: {prompt_prefix}",
-                            timer.schedule.display()
+                            "Loop {} ({}) ran: {}",
+                            loop_id_prefix(&timer.id),
+                            timer.schedule.display(),
+                            prompt_prefix(&prompt),
                         )
                     })
                     .unwrap_or_else(|| {
-                        let prompt_prefix = prompt.chars().take(48).collect::<String>();
-                        let prompt_prefix = if prompt.chars().count() > 48 {
-                            format!("{prompt_prefix}...")
-                        } else {
-                            prompt_prefix
-                        };
-                        let loop_id_prefix = timer_id.chars().take(8).collect::<String>();
-                        format!("Loop {loop_id_prefix} ran: {prompt_prefix}")
+                        format!(
+                            "Loop {} ran: {}",
+                            loop_id_prefix(&timer_id),
+                            prompt_prefix(&prompt),
+                        )
                     });
                 let summary_cell: Arc<dyn HistoryCell> =
                     Arc::new(new_info_event(timer_summary, /*hint*/ None));
                 let assistant_cell: Arc<dyn HistoryCell> =
                     Arc::new(loop_result_cell(&message, self.config.cwd.as_path()));
                 let mut mirrored_cells = Vec::new();
+                let delivery_mode = effective_loop_delivery_mode(completed_timer.as_ref());
+                let followup_user_message = match delivery_mode {
+                    LoopDeliveryMode::AssistantOnly => None,
+                    LoopDeliveryMode::ResultAsUser => Some(message.clone()),
+                    LoopDeliveryMode::AssistantThenActionUser => {
+                        Some(build_loop_result_user_message_with_action(
+                            &message,
+                            completed_timer
+                                .as_ref()
+                                .and_then(|timer| timer.action.as_deref()),
+                        ))
+                    }
+                };
                 self.record_thread_history_cell(primary_thread_id, summary_cell.clone());
                 mirrored_cells.push(summary_cell);
-                match self.config.tui_loop_completion_mirror_mode {
-                    TuiLoopCompletionMirrorMode::PromptAndResponse => {
-                        // Mirror only the scheduled prompt and the latest final answer back into
-                        // the main thread. The hidden `/loop` execution history stays private.
-                        let user_cell: Arc<dyn HistoryCell> = Arc::new(UserHistoryCell {
-                            message: format!("/loop {prompt}"),
-                            text_elements: Vec::new(),
-                            local_image_paths: Vec::new(),
-                            remote_image_urls: Vec::new(),
-                        });
-                        self.record_thread_history_cell(primary_thread_id, user_cell.clone());
-                        mirrored_cells.push(user_cell);
+                if matches!(delivery_mode, LoopDeliveryMode::AssistantOnly) {
+                    match self.config.tui_loop_completion_mirror_mode {
+                        TuiLoopCompletionMirrorMode::PromptAndResponse => {
+                            // Mirror only the scheduled prompt and the latest final answer back
+                            // into the main thread. The hidden `/loop` execution history stays
+                            // private.
+                            let user_cell: Arc<dyn HistoryCell> = Arc::new(UserHistoryCell {
+                                message: format!("/loop {prompt}"),
+                                text_elements: Vec::new(),
+                                local_image_paths: Vec::new(),
+                                remote_image_urls: Vec::new(),
+                            });
+                            self.record_thread_history_cell(primary_thread_id, user_cell.clone());
+                            mirrored_cells.push(user_cell);
+                        }
+                        TuiLoopCompletionMirrorMode::ResponseOnly => {}
                     }
-                    TuiLoopCompletionMirrorMode::ResponseOnly => {}
+                    self.record_thread_history_cell(primary_thread_id, assistant_cell.clone());
+                    mirrored_cells.push(assistant_cell);
                 }
-                self.record_thread_history_cell(primary_thread_id, assistant_cell.clone());
-                mirrored_cells.push(assistant_cell);
                 if self.active_thread_id == Some(primary_thread_id) {
-                    mirrored_cells
+                    LoopTimerCompletion {
+                        cells: mirrored_cells,
+                        followup_user_message,
+                    }
                 } else {
-                    Vec::new()
+                    LoopTimerCompletion {
+                        cells: Vec::new(),
+                        followup_user_message,
+                    }
                 }
             }
             Err(err) => {
                 self.chat_widget
                     .add_error_message(format!("A `/loop` run failed: {err}"));
-                Vec::new()
+                LoopTimerCompletion {
+                    cells: Vec::new(),
+                    followup_user_message: None,
+                }
             }
         }
     }
@@ -610,6 +995,7 @@ impl App {
         self.stop_all_loop_timer_tasks();
         self.loop_timers.workspace_cwd = Some(self.config.cwd.clone());
         self.loop_timers.thread_history_cells.clear();
+        self.sync_background_loop_status();
 
         let loaded = load_loop_timers(self.config.cwd.as_path())
             .unwrap_or_default()
@@ -643,9 +1029,13 @@ impl App {
         if !timer.enabled {
             return None;
         }
+        if matches!(timer.mode, LoopMode::OneShot) && timer.last_scheduled_at_unix_seconds.is_some()
+        {
+            return None;
+        }
         match timer.last_scheduled_at_unix_seconds {
             Some(last_scheduled_at) => Some(timer.schedule.next_due_after(last_scheduled_at, now)),
-            None => Some(now),
+            None => Some(timer.schedule.first_due_after_creation(now)),
         }
     }
 
@@ -664,6 +1054,7 @@ impl App {
             app_event_tx.send(AppEvent::TriggerLoopTimer {
                 timer_id: timer_id_for_event,
                 scheduled_for_unix_seconds: due_at.timestamp(),
+                source: LoopTimerTriggerSource::Scheduled,
             });
         });
         self.loop_timers.scheduler_tasks.insert(timer_id, handle);
@@ -679,6 +1070,7 @@ impl App {
         let Some(run) = self.loop_timers.active_runs.remove(timer_id) else {
             return;
         };
+        self.sync_background_loop_status();
         run.listener_handle.abort();
         let server = Arc::clone(&self.server);
         tokio::spawn(async move {
@@ -726,97 +1118,87 @@ impl App {
             .or_default()
             .push(cell.clone());
     }
-}
 
-struct ParsedLoopSpec {
-    schedule: LoopSchedule,
-    prompt: String,
-}
-
-fn parse_loop_spec(spec: &str) -> Result<ParsedLoopSpec, String> {
-    let tokens = spec.split_whitespace().collect::<Vec<_>>();
-    if tokens.len() < 2 {
-        return Err("expected a schedule followed by a prompt".to_string());
-    }
-
-    if let Some(seconds) = parse_interval_seconds(tokens[0]) {
-        let prompt = spec[tokens[0].len()..].trim();
-        if prompt.is_empty() {
-            return Err("expected a prompt after the interval".to_string());
-        }
-        return Ok(ParsedLoopSpec {
-            schedule: LoopSchedule::Interval {
-                display: tokens[0].to_string(),
-                seconds,
-            },
-            prompt: prompt.to_string(),
-        });
-    }
-
-    for field_count in [7usize, 6, 5] {
-        if tokens.len() <= field_count {
-            continue;
-        }
-        let display = tokens[..field_count].join(" ");
-        let normalized = normalize_cron_expression(&display, field_count);
-        if Schedule::from_str(&normalized).is_ok() {
-            let prompt = tokens[field_count..].join(" ");
-            if !prompt.trim().is_empty() {
-                return Ok(ParsedLoopSpec {
-                    schedule: LoopSchedule::Cron {
-                        display,
-                        normalized,
-                    },
-                    prompt,
-                });
-            }
-        }
-    }
-
-    Err(
-        "could not parse the schedule; use `5m`-style intervals or a 5/6/7-field cron expression"
-            .to_string(),
-    )
-}
-
-fn parse_interval_seconds(token: &str) -> Option<u64> {
-    let mut index = 0usize;
-    let mut total = 0u64;
-    let bytes = token.as_bytes();
-    while index < bytes.len() {
-        let digits_start = index;
-        while index < bytes.len() && bytes[index].is_ascii_digit() {
-            index += 1;
-        }
-        if digits_start == index || index >= bytes.len() {
-            return None;
-        }
-        let value = token[digits_start..index].parse::<u64>().ok()?;
-        let multiplier = match bytes[index] as char {
-            's' => 1,
-            'm' => 60,
-            'h' => 60 * 60,
-            'd' => 60 * 60 * 24,
-            _ => return None,
+    fn record_loop_timer_started(
+        &mut self,
+        timer_id: &str,
+        prompt: &str,
+    ) -> Vec<Arc<dyn HistoryCell>> {
+        let Some(primary_thread_id) = self.primary_thread_id else {
+            return Vec::new();
         };
-        total = total.checked_add(value.checked_mul(multiplier)?)?;
-        index += 1;
+
+        let message = self
+            .loop_timers
+            .timers
+            .get(timer_id)
+            .map(|timer| {
+                format!(
+                    "Loop {} ({}) is running in background: {}",
+                    loop_id_prefix(&timer.id),
+                    timer.schedule.display(),
+                    prompt_prefix(prompt),
+                )
+            })
+            .unwrap_or_else(|| {
+                format!(
+                    "Loop {} is running in background: {}",
+                    loop_id_prefix(timer_id),
+                    prompt_prefix(prompt),
+                )
+            });
+        let cell: Arc<dyn HistoryCell> = Arc::new(new_info_event(message, /*hint*/ None));
+        self.record_thread_history_cell(primary_thread_id, cell.clone());
+        if self.active_thread_id == Some(primary_thread_id) {
+            vec![cell]
+        } else {
+            Vec::new()
+        }
     }
-    (total > 0).then_some(total)
+
+    fn sync_background_loop_status(&mut self) {
+        let running_loops = self
+            .loop_timers
+            .active_runs
+            .keys()
+            .filter_map(|timer_id| {
+                self.loop_timers.timers.get(timer_id).map(|timer| {
+                    format!(
+                        "{} ({}) · {}",
+                        loop_item_name(timer),
+                        timer.schedule.display(),
+                        prompt_prefix(&timer.prompt),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        self.chat_widget.sync_background_loop_status(running_loops);
+    }
 }
 
-fn normalize_cron_expression(expression: &str, field_count: usize) -> String {
-    match field_count {
-        5 => format!("0 {expression} *"),
-        6 => format!("{expression} *"),
-        _ => expression.to_string(),
-    }
-}
-
-fn loop_timer_selection_item(timer: &PersistedLoopTimer) -> SelectionItem {
+fn loop_timer_selection_item(timer: &PersistedLoopTimer, is_running: bool) -> SelectionItem {
     let timer_id = timer.id.clone();
-    let mut description_parts = vec![timer.schedule.display().to_string()];
-    description_parts.push(timer.prompt.clone());
+    let mut description_parts = vec![
+        timer_descriptor(timer).to_string(),
+        timer.schedule.display().to_string(),
+        prompt_prefix(&timer.prompt),
+        effective_loop_delivery_mode(Some(timer))
+            .short_label()
+            .to_string(),
+    ];
+    if matches!(
+        effective_loop_delivery_mode(Some(timer)),
+        LoopDeliveryMode::AssistantThenActionUser
+    ) && timer
+        .action
+        .as_ref()
+        .is_some_and(|action| !action.trim().is_empty())
+    {
+        description_parts.push("has action".to_string());
+    }
+    if is_running {
+        description_parts.push("running now".to_string());
+    }
     if !timer.enabled {
         description_parts.push("disabled".to_string());
     }
@@ -827,7 +1209,7 @@ fn loop_timer_selection_item(timer: &PersistedLoopTimer) -> SelectionItem {
         ));
     }
     SelectionItem {
-        name: timer.prompt.clone(),
+        name: loop_item_name(timer),
         description: Some(description_parts.join(" · ")),
         is_disabled: false,
         actions: vec![Box::new(move |tx| {
@@ -840,10 +1222,89 @@ fn loop_timer_selection_item(timer: &PersistedLoopTimer) -> SelectionItem {
     }
 }
 
+fn loop_item_name(timer: &PersistedLoopTimer) -> String {
+    match timer.mode {
+        LoopMode::OneShot => format!("one-shot {}", prompt_prefix(&timer.prompt)),
+        LoopMode::Persistent => timer.id.clone(),
+    }
+}
+
+fn timer_descriptor(timer: &PersistedLoopTimer) -> &'static str {
+    match timer.mode {
+        LoopMode::OneShot => "one-shot",
+        LoopMode::Persistent => "persistent",
+    }
+}
+
 fn loop_result_cell(message: &str, cwd: &Path) -> AgentMessageCell {
     let mut rendered = vec![Line::default()];
     append_markdown(message, /*width*/ None, Some(cwd), &mut rendered);
     AgentMessageCell::new(rendered, /*is_first_line*/ false)
+}
+
+fn effective_loop_delivery_mode(timer: Option<&PersistedLoopTimer>) -> LoopDeliveryMode {
+    timer
+        .and_then(|timer| timer.delivery_mode)
+        .unwrap_or_default()
+}
+
+fn loop_id_prefix(id: &str) -> String {
+    id.chars().take(8).collect()
+}
+
+fn prompt_prefix(prompt: &str) -> String {
+    let prefix = prompt.chars().take(48).collect::<String>();
+    if prompt.chars().count() > 48 {
+        format!("{prefix}...")
+    } else {
+        prefix
+    }
+}
+
+fn build_loop_run_input(prompt: &str, recent_main_messages: &[String]) -> String {
+    if recent_main_messages.is_empty() {
+        return prompt.to_string();
+    }
+    let recent_messages = recent_main_messages.join("\n\n");
+    format!("Recent main-thread messages:\n{recent_messages}\n\nOriginal loop prompt:\n{prompt}")
+}
+
+fn build_loop_result_user_message_with_action(result: &str, action: Option<&str>) -> String {
+    let Some(action) = action.map(str::trim).filter(|action| !action.is_empty()) else {
+        return result.to_string();
+    };
+    format!("{result}\n\nAdditional action:\n{action}")
+}
+
+async fn load_recent_main_thread_messages(
+    rollout_path: Option<&Path>,
+    limit: usize,
+) -> Vec<String> {
+    let Some(rollout_path) = rollout_path else {
+        return Vec::new();
+    };
+    let Ok(history) = RolloutRecorder::get_rollout_history(rollout_path).await else {
+        return Vec::new();
+    };
+    let mut messages = history
+        .get_rollout_items()
+        .iter()
+        .filter_map(|item| match item {
+            RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. })
+                if role == "user" || role == "assistant" =>
+            {
+                content_items_to_text(content)
+                    .map(|text| text.trim().to_string())
+                    .filter(|text| !text.is_empty())
+                    .map(|text| format!("{role}: {text}"))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if messages.len() > limit {
+        messages.drain(..messages.len().saturating_sub(limit));
+    }
+    messages
 }
 
 async fn build_loop_initial_history(rollout_path: Option<&Path>) -> InitialHistory {
@@ -935,9 +1396,8 @@ mod tests {
     use super::super::BacktrackState;
     use super::super::KeyChordState;
     use super::super::WindowsSandboxState;
+    use super::LoopMode;
     use super::LoopSchedule;
-    use super::parse_interval_seconds;
-    use super::parse_loop_spec;
     use crate::bottom_pane::FeedbackAudience;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
     use crate::display_preferences::DisplayPreferences;
@@ -953,6 +1413,7 @@ mod tests {
     use codex_otel::SessionTelemetry;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::SessionSource;
+    use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::text::Line;
     use std::collections::HashMap;
@@ -1039,37 +1500,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn parse_loop_spec_accepts_interval_prompt() {
-        let parsed = parse_loop_spec("5m check status").expect("interval should parse");
-        assert_eq!(
-            parsed.schedule,
-            LoopSchedule::Interval {
-                display: "5m".to_string(),
-                seconds: 300,
-            }
-        );
-        assert_eq!(parsed.prompt, "check status");
-    }
-
-    #[test]
-    fn parse_loop_spec_accepts_five_field_cron_prompt() {
-        let parsed = parse_loop_spec("*/5 * * * * summarize").expect("cron should parse");
-        assert_eq!(
-            parsed.schedule,
-            LoopSchedule::Cron {
-                display: "*/5 * * * *".to_string(),
-                normalized: "0 */5 * * * * *".to_string(),
-            }
-        );
-        assert_eq!(parsed.prompt, "summarize");
-    }
-
-    #[test]
-    fn parse_interval_seconds_accepts_compound_values() {
-        assert_eq!(parse_interval_seconds("1h30m"), Some(5_400));
-    }
-
     #[tokio::test]
     async fn finish_loop_timer_only_replays_prompt_and_latest_answer() {
         let mut app = make_test_app().await;
@@ -1083,13 +1513,15 @@ mod tests {
             )]))],
         );
 
-        let cells = app.finish_loop_timer(
+        let completion = app.finish_loop_timer(
             "timer-1".to_string(),
             "check status".to_string(),
             Ok("latest answer only".to_string()),
         );
+        let cells = completion.cells;
 
         assert_eq!(cells.len(), 3);
+        assert_eq!(completion.followup_user_message, None);
 
         let rendered = cells
             .iter()
@@ -1133,13 +1565,15 @@ mod tests {
         app.primary_thread_id = Some(primary_thread_id);
         app.active_thread_id = Some(primary_thread_id);
 
-        let cells = app.finish_loop_timer(
+        let completion = app.finish_loop_timer(
             "timer-1".to_string(),
             "check status".to_string(),
             Ok("latest answer only".to_string()),
         );
+        let cells = completion.cells;
 
         assert_eq!(cells.len(), 2);
+        assert_eq!(completion.followup_user_message, None);
 
         let rendered = cells
             .iter()
@@ -1178,5 +1612,42 @@ mod tests {
             .get(&primary_thread_id)
             .expect("primary thread history should be recorded");
         assert_eq!(stored.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn record_loop_timer_started_replays_background_notice() {
+        let mut app = make_test_app().await;
+        let primary_thread_id = ThreadId::new();
+        app.primary_thread_id = Some(primary_thread_id);
+        app.active_thread_id = Some(primary_thread_id);
+        app.loop_timers.timers.insert(
+            "timer-1".to_string(),
+            super::PersistedLoopTimer {
+                id: "timer-1".to_string(),
+                mode: LoopMode::Persistent,
+                prompt: "check status".to_string(),
+                action: None,
+                schedule: LoopSchedule::Interval {
+                    display: "5m".to_string(),
+                    seconds: 300,
+                },
+                enabled: true,
+                rollout_path: None,
+                created_at_unix_seconds: 0,
+                last_scheduled_at_unix_seconds: None,
+                last_completed_at_unix_seconds: None,
+            },
+        );
+
+        let cells = app.record_loop_timer_started("timer-1", "check status");
+        assert_eq!(cells.len(), 1);
+
+        let rendered = cells[0]
+            .display_lines(80)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_snapshot!("loop_timer_background_notice", rendered);
     }
 }

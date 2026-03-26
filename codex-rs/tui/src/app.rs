@@ -142,6 +142,7 @@ mod btw;
 mod display_preferences_menu;
 mod jump_navigation;
 mod key_chord;
+pub(crate) mod loop_timer_command;
 mod loop_timers;
 mod pending_interactive_replay;
 
@@ -3421,12 +3422,45 @@ impl App {
             AppEvent::TriggerLoopTimer {
                 timer_id,
                 scheduled_for_unix_seconds,
+                source,
             } => {
-                self.trigger_loop_timer(timer_id, scheduled_for_unix_seconds)
+                let cells = self
+                    .trigger_loop_timer(timer_id, scheduled_for_unix_seconds, source)
                     .await;
+                for cell in cells {
+                    self.append_visible_history_cell(tui, cell);
+                }
+                self.refresh_status_surfaces();
             }
             AppEvent::OpenLoopTimerActions { timer_id } => {
                 self.open_loop_timer_actions(timer_id);
+            }
+            AppEvent::OpenEditLoopTimerPrompt { timer_id } => {
+                self.open_loop_timer_prompt_editor(timer_id);
+            }
+            AppEvent::OpenEditLoopTimerSchedule { timer_id } => {
+                self.open_loop_timer_schedule_editor(timer_id);
+            }
+            AppEvent::OpenEditLoopTimerAction { timer_id } => {
+                self.open_loop_timer_action_editor(timer_id);
+            }
+            AppEvent::OpenEditLoopTimerDeliveryMode { timer_id } => {
+                self.open_loop_timer_delivery_mode_menu(timer_id);
+            }
+            AppEvent::SaveLoopTimerPrompt { timer_id, prompt } => {
+                self.save_loop_timer_prompt(timer_id, prompt);
+            }
+            AppEvent::SaveLoopTimerSchedule { timer_id, schedule } => {
+                self.save_loop_timer_schedule(timer_id, schedule);
+            }
+            AppEvent::SaveLoopTimerAction { timer_id, action } => {
+                self.save_loop_timer_action(timer_id, action);
+            }
+            AppEvent::SaveLoopTimerDeliveryMode {
+                timer_id,
+                delivery_mode,
+            } => {
+                self.save_loop_timer_delivery_mode(timer_id, delivery_mode);
             }
             AppEvent::EnableLoopTimer { timer_id } => {
                 self.set_loop_timer_enabled(timer_id, /*enabled*/ true);
@@ -3442,9 +3476,13 @@ impl App {
                 prompt,
                 result,
             } => {
-                let cells = self.finish_loop_timer(timer_id, prompt, result);
-                for cell in cells {
+                let completion = self.finish_loop_timer(timer_id, prompt, result);
+                for cell in completion.cells {
                     self.append_visible_history_cell(tui, cell);
+                }
+                if let Some(followup_user_message) = completion.followup_user_message {
+                    self.chat_widget
+                        .submit_loop_followup_user_message(followup_user_message);
                 }
                 self.refresh_status_surfaces();
             }

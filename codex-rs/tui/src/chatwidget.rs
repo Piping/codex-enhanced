@@ -392,6 +392,12 @@ impl UnifiedExecWaitStreak {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BackgroundLoopStatus {
+    header: String,
+    details: Option<String>,
+}
+
 fn is_unified_exec_source(source: ExecCommandSource) -> bool {
     matches!(
         source,
@@ -796,6 +802,7 @@ pub(crate) struct ChatWidget {
     // details here so transient stream interruptions can restore the footer
     // exactly as it was shown.
     current_status: StatusIndicatorState,
+    background_loop_status: Option<BackgroundLoopStatus>,
     // Guardian review keeps its own pending set so it can derive a single
     // footer summary from one or more in-flight review events.
     pending_guardian_review_status: PendingGuardianReviewStatus,
@@ -1204,7 +1211,34 @@ impl ChatWidget {
     fn update_task_running_state(&mut self) {
         self.bottom_pane
             .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
-        self.refresh_terminal_title();
+        if self.bottom_pane.is_task_running() {
+            self.refresh_terminal_title();
+        } else {
+            self.refresh_background_loop_status_surface();
+        }
+    }
+
+    fn refresh_background_loop_status_surface(&mut self) {
+        if self.bottom_pane.is_task_running() {
+            self.refresh_terminal_title();
+            return;
+        }
+        if let Some(status) = self.background_loop_status.clone() {
+            self.bottom_pane.ensure_status_indicator();
+            self.bottom_pane
+                .set_interrupt_hint_visible(/*visible*/ false);
+            self.terminal_title_status_kind = TerminalTitleStatusKind::RunningBackgroundLoop;
+            self.set_status(
+                status.header,
+                status.details,
+                StatusDetailsCapitalization::Preserve,
+                /*details_max_lines*/ 2,
+            );
+        } else {
+            self.bottom_pane.hide_status_indicator();
+            self.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
+            self.refresh_terminal_title();
+        }
     }
 
     fn restore_reasoning_status_header(&mut self) {
@@ -3797,6 +3831,7 @@ impl ChatWidget {
             full_raw_reasoning_buffer: String::new(),
             display_preferences,
             current_status: StatusIndicatorState::working(),
+            background_loop_status: None,
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
             terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
@@ -4006,6 +4041,7 @@ impl ChatWidget {
             full_raw_reasoning_buffer: String::new(),
             display_preferences,
             current_status: StatusIndicatorState::working(),
+            background_loop_status: None,
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
             terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
@@ -4207,6 +4243,7 @@ impl ChatWidget {
             full_raw_reasoning_buffer: String::new(),
             display_preferences,
             current_status: StatusIndicatorState::working(),
+            background_loop_status: None,
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
             terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
@@ -4645,7 +4682,7 @@ impl ChatWidget {
             }
             SlashCommand::Loop => {
                 self.add_error_message(
-                    "Usage: /loop <duration|cron> <prompt> (for example: /loop 5m check status)"
+                    "Usage: /loop <time> <prompt>, /loop <id> <time> <prompt>, or /loop <id>"
                         .to_string(),
                 );
             }
@@ -5345,6 +5382,92 @@ impl ChatWidget {
         );
 
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_loop_timer_prompt_editor(
+        &mut self,
+        timer_id: String,
+        current_prompt: String,
+    ) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Edit loop prompt".to_string(),
+            "Type an updated prompt and press Enter".to_string(),
+            Some(format!("Loop: {timer_id}")),
+            Box::new(move |prompt: String| {
+                tx.send(AppEvent::SaveLoopTimerPrompt {
+                    timer_id: timer_id.clone(),
+                    prompt,
+                });
+            }),
+        )
+        .with_initial_text(current_prompt);
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_loop_timer_schedule_editor(
+        &mut self,
+        timer_id: String,
+        current_schedule: String,
+    ) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Edit loop schedule".to_string(),
+            "Type a new interval or cron expression and press Enter".to_string(),
+            Some(format!("Loop: {timer_id}")),
+            Box::new(move |schedule: String| {
+                tx.send(AppEvent::SaveLoopTimerSchedule {
+                    timer_id: timer_id.clone(),
+                    schedule,
+                });
+            }),
+        )
+        .with_initial_text(current_schedule);
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_loop_timer_action_editor(
+        &mut self,
+        timer_id: String,
+        current_action: String,
+    ) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Edit loop action".to_string(),
+            "Type the user message to send after each completed run".to_string(),
+            Some(format!("Loop: {timer_id}")),
+            Box::new(move |action: String| {
+                tx.send(AppEvent::SaveLoopTimerAction {
+                    timer_id: timer_id.clone(),
+                    action,
+                });
+            }),
+        )
+        .with_initial_text(current_action);
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn submit_loop_followup_user_message(&mut self, message: String) {
+        self.queue_user_message(UserMessage::from(message));
+    }
+
+    pub(crate) fn sync_background_loop_status(&mut self, running_loops: Vec<String>) {
+        self.background_loop_status = if running_loops.is_empty() {
+            None
+        } else {
+            Some(BackgroundLoopStatus {
+                header: if running_loops.len() == 1 {
+                    "Running background loop".to_string()
+                } else {
+                    format!("Running {} background loops", running_loops.len())
+                },
+                details: Some(running_loops.join("\n")),
+            })
+        };
+        self.refresh_background_loop_status_surface();
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {

@@ -60,6 +60,12 @@ verify-fast-crate *args:
     cargo test "$@"
     cargo clippy --tests "$@"
 
+# Run the narrow `/loop` edit-run verification path for codex-tui.
+verify-tui-loop:
+    cargo check -p codex-tui --tests
+    cargo test -p codex-tui loop_timer_command
+    cargo test -p codex-tui loop_timers
+
 # Build and run Codex from source using Bazel.
 # Note we have to use the combination of `[no-cd]` and `--run_under="cd $PWD &&"`
 # to ensure that Bazel runs the command in the current working directory.

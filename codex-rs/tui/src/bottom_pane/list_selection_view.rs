@@ -1350,7 +1350,7 @@ mod tests {
                     SelectionItem {
                         name: "check status".to_string(),
                         description: Some(
-                            "5m · check status · last completed 2026-03-25 10:00:00 UTC"
+                            "5m · check status · running now · last completed 2026-03-25 10:00:00 UTC"
                                 .to_string(),
                         ),
                         dismiss_on_select: true,
