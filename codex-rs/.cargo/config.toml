@@ -1,6 +1,11 @@
 [build]
 jobs = 8
 
+[target.'cfg(target_os = "macos")']
+# Stable Cargo can't select a linker by profile, so use ld64.lld for macOS
+# target builds, which includes local `cargo test` runs.
+rustflags = ["-C", "link-arg=-fuse-ld=/opt/homebrew/opt/lld/bin/ld64.lld"]
+
 [target.'cfg(all(windows, target_env = "msvc"))']
 rustflags = ["-C", "link-arg=/STACK:8388608"]
 

@@ -709,6 +709,23 @@ pub struct ModelAvailabilityNuxConfig {
     pub shown_count: HashMap<String, u32>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum TuiLoopCompletionMirrorMode {
+    #[default]
+    PromptAndResponse,
+    ResponseOnly,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiLoopConfig {
+    /// Controls what `/loop` mirrors back into the main thread after a scheduled run finishes.
+    /// Defaults to `prompt-and-response`.
+    #[serde(default)]
+    pub completion_mirror_mode: TuiLoopCompletionMirrorMode,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiDisplayPreferences {
@@ -804,6 +821,10 @@ pub struct Tui {
     /// Startup tooltip availability NUX state persisted by the TUI.
     #[serde(default)]
     pub model_availability_nux: ModelAvailabilityNuxConfig,
+
+    /// Controls how completed `/loop` runs are mirrored back into the main thread.
+    #[serde(default, rename = "loop")]
+    pub loop_config: TuiLoopConfig,
 
     /// Transcript visibility preferences that affect only TUI rendering.
     #[serde(default)]

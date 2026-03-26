@@ -78,4 +78,19 @@ developer message Codex inserts when realtime becomes active. It only affects
 the realtime start message in prompt history and does not change websocket
 backend prompt settings or the realtime end/inactive message.
 
+## Loop timers
+
+`[tui.loop]` controls what a completed `/loop` run mirrors back into the main
+thread.
+
+```toml
+[tui.loop]
+completion_mirror_mode = "response-only"
+```
+
+Supported values:
+
+- `prompt-and-response` (default): mirror `/loop <prompt>` and the latest assistant reply.
+- `response-only`: mirror only the latest assistant reply.
+
 Ctrl+C/Ctrl+D quitting uses a ~1 second double-press hint (`ctrl + c again to quit`).

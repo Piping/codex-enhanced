@@ -13,6 +13,8 @@ use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
 use crate::config::types::ToolSuggestDiscoverableType;
 use crate::config::types::TuiDisplayPreferences;
+use crate::config::types::TuiLoopCompletionMirrorMode;
+use crate::config::types::TuiLoopConfig;
 use crate::config_loader::RequirementSource;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
@@ -247,6 +249,7 @@ fn config_toml_deserializes_model_availability_nux() {
                     ("gpt-foo".to_string(), 2),
                 ]),
             },
+            loop_config: TuiLoopConfig::default(),
             display_preferences: TuiDisplayPreferences::default(),
         }
     );
@@ -295,6 +298,29 @@ fn runtime_config_loads_tui_display_preferences() {
             show_waited_messages: false,
             show_patch_diffs: true,
         }
+    );
+}
+
+#[test]
+fn runtime_config_loads_tui_loop_completion_mirror_mode() {
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            tui: Some(Tui {
+                loop_config: TuiLoopConfig {
+                    completion_mirror_mode: TuiLoopCompletionMirrorMode::ResponseOnly,
+                },
+                ..Tui::default()
+            }),
+            ..ConfigToml::default()
+        },
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").path().to_path_buf(),
+    )
+    .expect("load config");
+
+    assert_eq!(
+        cfg.tui_loop_completion_mirror_mode,
+        TuiLoopCompletionMirrorMode::ResponseOnly
     );
 }
 
@@ -959,6 +985,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             terminal_title: None,
             theme: None,
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
+            loop_config: TuiLoopConfig::default(),
             display_preferences: TuiDisplayPreferences::default(),
         }
     );
@@ -4381,6 +4408,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             animations: true,
             show_tooltips: true,
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
+            tui_loop_completion_mirror_mode: TuiLoopCompletionMirrorMode::PromptAndResponse,
             tui_display_preferences: TuiDisplayPreferences::default(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
@@ -4525,6 +4553,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
+        tui_loop_completion_mirror_mode: TuiLoopCompletionMirrorMode::PromptAndResponse,
         tui_display_preferences: TuiDisplayPreferences::default(),
         analytics_enabled: Some(true),
         feedback_enabled: true,
@@ -4667,6 +4696,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
+        tui_loop_completion_mirror_mode: TuiLoopCompletionMirrorMode::PromptAndResponse,
         tui_display_preferences: TuiDisplayPreferences::default(),
         analytics_enabled: Some(false),
         feedback_enabled: true,
@@ -4795,6 +4825,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
+        tui_loop_completion_mirror_mode: TuiLoopCompletionMirrorMode::PromptAndResponse,
         tui_display_preferences: TuiDisplayPreferences::default(),
         analytics_enabled: Some(true),
         feedback_enabled: true,
@@ -6135,6 +6166,8 @@ struct TuiTomlTest {
     notifications: Notifications,
     #[serde(default)]
     notification_method: NotificationMethod,
+    #[serde(default, rename = "loop")]
+    loop_config: TuiLoopConfig,
     #[serde(default)]
     display_preferences: TuiDisplayPreferences,
 }
@@ -6195,6 +6228,21 @@ fn test_tui_display_preferences() {
             show_exec_commands: false,
             show_waited_messages: false,
             show_patch_diffs: true,
+        }
+    );
+}
+
+#[test]
+fn test_tui_loop_completion_mirror_mode() {
+    let toml = r#"
+            [tui.loop]
+            completion_mirror_mode = "response-only"
+        "#;
+    let parsed: RootTomlTest = toml::from_str(toml).expect("deserialize tui.loop");
+    assert_eq!(
+        parsed.tui.loop_config,
+        TuiLoopConfig {
+            completion_mirror_mode: TuiLoopCompletionMirrorMode::ResponseOnly,
         }
     );
 }

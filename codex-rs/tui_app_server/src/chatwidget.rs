@@ -1860,11 +1860,13 @@ impl ChatWidget {
             &self.config,
             &model_for_header,
             event,
-            self.show_welcome_banner,
-            startup_tooltip_override,
-            self.display_preferences.clone(),
-            self.plan_type,
-            show_fast_status,
+            history_cell::SessionInfoOptions {
+                is_first_event: self.show_welcome_banner,
+                tooltip_override: startup_tooltip_override,
+                display_preferences: self.display_preferences.clone(),
+                auth_plan: self.plan_type,
+                show_fast_status,
+            },
         );
         self.apply_session_info_cell(session_info_cell);
 

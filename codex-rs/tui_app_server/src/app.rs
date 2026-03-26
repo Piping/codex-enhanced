@@ -8398,11 +8398,13 @@ guardian_approval = true
                 app.chat_widget.config_ref(),
                 app.chat_widget.current_model(),
                 event,
-                is_first,
-                None,
-                app.display_preferences.clone(),
-                None,
-                false,
+                crate::history_cell::SessionInfoOptions {
+                    is_first_event: is_first,
+                    tooltip_override: None,
+                    display_preferences: app.display_preferences.clone(),
+                    auth_plan: None,
+                    show_fast_status: false,
+                },
             )) as Arc<dyn HistoryCell>
         };
 
@@ -9435,11 +9437,13 @@ guardian_approval = true
                 app.chat_widget.config_ref(),
                 app.chat_widget.current_model(),
                 event,
-                is_first,
-                None,
-                app.display_preferences.clone(),
-                None,
-                false,
+                crate::history_cell::SessionInfoOptions {
+                    is_first_event: is_first,
+                    tooltip_override: None,
+                    display_preferences: app.display_preferences.clone(),
+                    auth_plan: None,
+                    show_fast_status: false,
+                },
             )) as Arc<dyn HistoryCell>
         };
 

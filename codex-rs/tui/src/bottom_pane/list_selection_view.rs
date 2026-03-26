@@ -1264,7 +1264,7 @@ mod tests {
         ListSelectionView::new(
             SelectionViewParams {
                 title: Some("Control Panel".to_string()),
-                subtitle: Some("4 features available.".to_string()),
+                subtitle: Some("7 features available.".to_string()),
                 footer_hint: Some(standard_popup_hint_line()),
                 items: vec![
                     SelectionItem {
@@ -1279,6 +1279,15 @@ mod tests {
                         description: None,
                         selected_description: Some(
                             "Fork the current thread into a new session.".to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Timers".to_string(),
+                        description: None,
+                        selected_description: Some(
+                            "Manage workspace-local `/loop` scheduled prompts.".to_string(),
                         ),
                         dismiss_on_select: true,
                         ..Default::default()
@@ -1317,6 +1326,40 @@ mod tests {
                         description: None,
                         selected_description: Some(
                             "Restore the last sent input and roll back one turn.".to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            tx,
+        )
+    }
+
+    fn make_loop_timers_view() -> ListSelectionView {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Loop Timers".to_string()),
+                subtitle: Some("2 timer(s) configured for /workspace/project.".to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
+                footer_path: Some("/workspace/project/.codex/loop_timers.json".to_string()),
+                items: vec![
+                    SelectionItem {
+                        name: "check status".to_string(),
+                        description: Some(
+                            "5m · check status · last completed 2026-03-25 10:00:00 UTC"
+                                .to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "summarize blockers".to_string(),
+                        description: Some(
+                            "*/10 * * * * · summarize blockers · disabled".to_string(),
                         ),
                         dismiss_on_select: true,
                         ..Default::default()
@@ -1519,6 +1562,12 @@ mod tests {
     fn control_panel_menu_snapshot() {
         let view = make_control_panel_view();
         assert_snapshot!("control_panel_menu", render_lines(&view));
+    }
+
+    #[test]
+    fn loop_timers_menu_snapshot() {
+        let view = make_loop_timers_view();
+        assert_snapshot!("loop_timers_menu", render_lines(&view));
     }
 
     #[test]

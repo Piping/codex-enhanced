@@ -1512,13 +1512,16 @@ impl ChatWidget {
             &self.config,
             &model_for_header,
             event,
-            self.show_welcome_banner,
-            startup_tooltip_override,
-            self.display_preferences.clone(),
-            self.auth_manager
-                .auth_cached()
-                .and_then(|auth| auth.account_plan_type()),
-            show_fast_status,
+            history_cell::SessionInfoOptions {
+                is_first_event: self.show_welcome_banner,
+                tooltip_override: startup_tooltip_override,
+                display_preferences: self.display_preferences.clone(),
+                auth_plan: self
+                    .auth_manager
+                    .auth_cached()
+                    .and_then(|auth| auth.account_plan_type()),
+                show_fast_status,
+            },
         );
         self.apply_session_info_cell(session_info_cell);
 
@@ -4640,6 +4643,12 @@ impl ChatWidget {
             SlashCommand::Btw => {
                 self.add_error_message("Usage: /btw <temporary discussion prompt>".to_string());
             }
+            SlashCommand::Loop => {
+                self.add_error_message(
+                    "Usage: /loop <duration|cron> <prompt> (for example: /loop 5m check status)"
+                        .to_string(),
+                );
+            }
             SlashCommand::Rename => {
                 self.session_telemetry
                     .counter("codex.thread.rename", /*inc*/ 1, &[]);
@@ -5028,6 +5037,20 @@ impl ChatWidget {
                     .counter("codex.thread.btw", /*inc*/ 1, &[]);
                 self.app_event_tx.send(AppEvent::StartBtwDiscussion {
                     prompt: prepared_args,
+                });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::Loop if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
+                else {
+                    return;
+                };
+                self.session_telemetry
+                    .counter("codex.thread.loop", /*inc*/ 1, &[]);
+                self.app_event_tx.send(AppEvent::CreateLoopTimer {
+                    spec: prepared_args,
                 });
                 self.bottom_pane.drain_pending_submission_state();
             }

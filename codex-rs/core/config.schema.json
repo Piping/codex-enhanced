@@ -1644,6 +1644,17 @@
           },
           "description": "Transcript visibility preferences that affect only TUI rendering."
         },
+        "loop": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiLoopConfig"
+            }
+          ],
+          "default": {
+            "completion_mirror_mode": "prompt-and-response"
+          },
+          "description": "Controls how completed `/loop` runs are mirrored back into the main thread."
+        },
         "model_availability_nux": {
           "allOf": [
             {
@@ -1722,6 +1733,28 @@
           "default": true,
           "description": "Show \"Waited for ...\" transcript messages for background terminal interactions. Defaults to `true`.",
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "TuiLoopCompletionMirrorMode": {
+      "enum": [
+        "prompt-and-response",
+        "response-only"
+      ],
+      "type": "string"
+    },
+    "TuiLoopConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "completion_mirror_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiLoopCompletionMirrorMode"
+            }
+          ],
+          "default": "prompt-and-response",
+          "description": "Controls what `/loop` mirrors back into the main thread after a scheduled run finishes. Defaults to `prompt-and-response`."
         }
       },
       "type": "object"

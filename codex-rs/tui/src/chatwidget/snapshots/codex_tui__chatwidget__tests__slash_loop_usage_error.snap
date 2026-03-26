@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: rendered
+---
+■ Usage: /loop <duration|cron> <prompt> (for example: /loop 5m check status)

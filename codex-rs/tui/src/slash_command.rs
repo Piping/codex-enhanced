@@ -24,6 +24,7 @@ pub enum SlashCommand {
     Skills,
     Review,
     Btw,
+    Loop,
     Rename,
     New,
     Resume,
@@ -79,6 +80,7 @@ impl SlashCommand {
             SlashCommand::Btw => {
                 "start a hidden temporary discussion that won't affect the main thread"
             }
+            SlashCommand::Loop => "schedule a prompt to run repeatedly in this workspace",
             SlashCommand::Rename => "rename the current thread",
             SlashCommand::Resume => "resume a saved chat",
             SlashCommand::Clear => "clear the terminal and start a new chat",
@@ -134,6 +136,7 @@ impl SlashCommand {
             self,
             SlashCommand::Review
                 | SlashCommand::Btw
+                | SlashCommand::Loop
                 | SlashCommand::Rename
                 | SlashCommand::Plan
                 | SlashCommand::Fast
@@ -160,6 +163,7 @@ impl SlashCommand {
             | SlashCommand::Experimental
             | SlashCommand::Review
             | SlashCommand::Btw
+            | SlashCommand::Loop
             | SlashCommand::Plan
             | SlashCommand::Clear
             | SlashCommand::Logout

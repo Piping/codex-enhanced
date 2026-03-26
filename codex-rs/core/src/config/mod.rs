@@ -25,6 +25,7 @@ use crate::config::types::ToolSuggestConfig;
 use crate::config::types::ToolSuggestDiscoverable;
 use crate::config::types::Tui;
 use crate::config::types::TuiDisplayPreferences;
+use crate::config::types::TuiLoopCompletionMirrorMode;
 use crate::config::types::UriBasedFileOpener;
 use crate::config::types::WindowsSandboxModeToml;
 use crate::config::types::WindowsToml;
@@ -347,6 +348,9 @@ pub struct Config {
 
     /// Transcript visibility preferences that affect only TUI rendering.
     pub tui_display_preferences: TuiDisplayPreferences,
+
+    /// Controls what completed `/loop` runs mirror back into the main thread.
+    pub tui_loop_completion_mirror_mode: TuiLoopCompletionMirrorMode,
 
     /// Start the TUI in the specified collaboration mode (plan/default).
 
@@ -2713,6 +2717,11 @@ impl Config {
                 .tui
                 .as_ref()
                 .map(|t| t.model_availability_nux.clone())
+                .unwrap_or_default(),
+            tui_loop_completion_mirror_mode: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.loop_config.completion_mirror_mode)
                 .unwrap_or_default(),
             tui_display_preferences: cfg
                 .tui

@@ -46,6 +46,20 @@ install:
 test:
     cargo nextest run --no-fail-fast
 
+# Run the default lightweight verification pass for tui, ext, and cli.
+verify-fast:
+    cargo test -p codex-tui
+    cargo clippy --tests -p codex-tui
+    cargo test -p codex-ext
+    cargo clippy --tests -p codex-ext
+    cargo test -p codex-cli
+    cargo clippy --tests -p codex-cli
+
+# Run a lightweight verification pass for explicitly selected crates/targets.
+verify-fast-crate *args:
+    cargo test "$@"
+    cargo clippy --tests "$@"
+
 # Build and run Codex from source using Bazel.
 # Note we have to use the combination of `[no-cd]` and `--run_under="cd $PWD &&"`
 # to ensure that Bazel runs the command in the current working directory.

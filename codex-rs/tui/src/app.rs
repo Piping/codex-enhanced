@@ -76,7 +76,6 @@ use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONF
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_ext::AccountPoolStore;
-use codex_ext::HostCapabilities;
 use codex_ext::ManagedAccountAuthStore;
 use codex_ext::activate_managed_account;
 use codex_ext::persist_current_managed_account_snapshot;
@@ -143,6 +142,7 @@ mod btw;
 mod display_preferences_menu;
 mod jump_navigation;
 mod key_chord;
+mod loop_timers;
 mod pending_interactive_replay;
 
 use self::agent_navigation::AgentNavigationDirection;
@@ -154,6 +154,7 @@ use self::jump_navigation::build_jump_catalog;
 use self::key_chord::KeyChordAction;
 use self::key_chord::KeyChordResolution;
 use self::key_chord::KeyChordState;
+use self::loop_timers::LoopTimersState;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
@@ -907,6 +908,7 @@ pub(crate) struct App {
 
     windows_sandbox: WindowsSandboxState,
     btw_session: Option<BtwSessionState>,
+    loop_timers: LoopTimersState,
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
@@ -1827,6 +1829,7 @@ impl App {
             let thread_id = session.session_id;
             self.primary_thread_id = Some(thread_id);
             self.primary_session_configured = Some(session.clone());
+            self.ensure_loop_timers_loaded();
             self.upsert_agent_picker_thread(
                 thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
                 /*is_closed*/ false,
@@ -1944,7 +1947,6 @@ impl App {
     }
 
     fn open_control_panel(&mut self) {
-        let capabilities = HostCapabilities::codex_mvp();
         let items = vec![
             SelectionItem {
                 name: "Sessions".to_string(),
@@ -1961,6 +1963,16 @@ impl App {
                     "Fork the current thread into a new session.".to_string(),
                 ),
                 actions: vec![Box::new(|tx| tx.send(AppEvent::ForkCurrentSession))],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Loop Manager".to_string(),
+                description: None,
+                selected_description: Some(
+                    "Manage workspace-local `/loop` scheduled prompts.".to_string(),
+                ),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenLoopTimersPanel))],
                 dismiss_on_select: true,
                 ..Default::default()
             },
@@ -1999,14 +2011,34 @@ impl App {
         self.chat_widget.show_selection_view(SelectionViewParams {
             view_id: Some("fork-control-panel"),
             title: Some("Control Panel".to_string()),
-            subtitle: Some(format!(
-                "{} features available.",
-                capabilities.capabilities.len()
-            )),
+            subtitle: Some(format!("{} features available.", items.len())),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
         });
+    }
+
+    fn append_visible_history_cell(&mut self, tui: &mut tui::Tui, cell: Arc<dyn HistoryCell>) {
+        if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+            t.insert_cell(cell.clone());
+            tui.frame_requester().schedule_frame();
+        }
+        self.transcript_cells.push(cell.clone());
+        let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+        if !display.is_empty() {
+            if !cell.is_stream_continuation() {
+                if self.has_emitted_history_lines {
+                    display.insert(0, Line::from(""));
+                } else {
+                    self.has_emitted_history_lines = true;
+                }
+            }
+            if self.overlay.is_some() {
+                self.deferred_history_lines.extend(display);
+            } else {
+                tui.insert_history_lines(display);
+            }
+        }
     }
 
     fn display_preferences_panel_params(
@@ -2698,7 +2730,9 @@ impl App {
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
+        self.primary_session_configured = None;
         self.pending_primary_events.clear();
+        self.loop_timers.thread_history_cells.clear();
         self.chat_widget.set_pending_thread_approvals(Vec::new());
         self.sync_active_agent_label();
     }
@@ -2842,6 +2876,7 @@ impl App {
         for event in snapshot.events {
             self.handle_codex_event_replay(event);
         }
+        self.replay_loop_history_cells_for_active_thread();
         self.chat_widget
             .set_queue_autosend_suppressed(/*suppressed*/ false);
         if resume_restored_queue {
@@ -3133,6 +3168,7 @@ impl App {
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             btw_session: None,
+            loop_timers: LoopTimersState::default(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -3373,8 +3409,44 @@ impl App {
             AppEvent::OpenAccountsPanel => {
                 self.open_accounts_panel();
             }
+            AppEvent::OpenLoopTimersPanel => {
+                self.open_loop_timers_panel();
+            }
             AppEvent::OpenJumpToMessagePanel => {
                 self.open_jump_to_message_panel();
+            }
+            AppEvent::CreateLoopTimer { spec } => {
+                self.create_loop_timer(spec);
+            }
+            AppEvent::TriggerLoopTimer {
+                timer_id,
+                scheduled_for_unix_seconds,
+            } => {
+                self.trigger_loop_timer(timer_id, scheduled_for_unix_seconds)
+                    .await;
+            }
+            AppEvent::OpenLoopTimerActions { timer_id } => {
+                self.open_loop_timer_actions(timer_id);
+            }
+            AppEvent::EnableLoopTimer { timer_id } => {
+                self.set_loop_timer_enabled(timer_id, /*enabled*/ true);
+            }
+            AppEvent::DisableLoopTimer { timer_id } => {
+                self.set_loop_timer_enabled(timer_id, /*enabled*/ false);
+            }
+            AppEvent::DeleteLoopTimer { timer_id } => {
+                self.delete_loop_timer(timer_id);
+            }
+            AppEvent::LoopTimerCompleted {
+                timer_id,
+                prompt,
+                result,
+            } => {
+                let cells = self.finish_loop_timer(timer_id, prompt, result);
+                for cell in cells {
+                    self.append_visible_history_cell(tui, cell);
+                }
+                self.refresh_status_surfaces();
             }
             AppEvent::UndoLastUserMessage => {
                 self.undo_last_user_message();
@@ -3697,29 +3769,7 @@ impl App {
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
-                if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_cell(cell.clone());
-                    tui.frame_requester().schedule_frame();
-                }
-                self.transcript_cells.push(cell.clone());
-                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
-                if !display.is_empty() {
-                    // Only insert a separating blank line for new cells that are not
-                    // part of an ongoing stream. Streaming continuations should not
-                    // accrue extra blank lines between chunks.
-                    if !cell.is_stream_continuation() {
-                        if self.has_emitted_history_lines {
-                            display.insert(0, Line::from(""));
-                        } else {
-                            self.has_emitted_history_lines = true;
-                        }
-                    }
-                    if self.overlay.is_some() {
-                        self.deferred_history_lines.extend(display);
-                    } else {
-                        tui.insert_history_lines(display);
-                    }
-                }
+                self.append_visible_history_cell(tui, cell);
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
@@ -7572,11 +7622,13 @@ guardian_approval = true
                 app.chat_widget.config_ref(),
                 app.chat_widget.current_model(),
                 event,
-                is_first,
-                None,
-                app.display_preferences.clone(),
-                None,
-                false,
+                crate::history_cell::SessionInfoOptions {
+                    is_first_event: is_first,
+                    tooltip_override: None,
+                    display_preferences: app.display_preferences.clone(),
+                    auth_plan: None,
+                    show_fast_status: false,
+                },
             )) as Arc<dyn HistoryCell>
         };
 
@@ -7763,6 +7815,7 @@ guardian_approval = true
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             btw_session: None,
+            loop_timers: LoopTimersState::default(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -7830,6 +7883,7 @@ guardian_approval = true
                 pending_shutdown_exit_thread_id: None,
                 windows_sandbox: WindowsSandboxState::default(),
                 btw_session: None,
+                loop_timers: LoopTimersState::default(),
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
                 agent_navigation: AgentNavigationState::default(),
@@ -8437,11 +8491,13 @@ guardian_approval = true
                 app.chat_widget.config_ref(),
                 app.chat_widget.current_model(),
                 event,
-                is_first,
-                None,
-                app.display_preferences.clone(),
-                None,
-                false,
+                crate::history_cell::SessionInfoOptions {
+                    is_first_event: is_first,
+                    tooltip_override: None,
+                    display_preferences: app.display_preferences.clone(),
+                    auth_plan: None,
+                    show_fast_status: false,
+                },
             )) as Arc<dyn HistoryCell>
         };
 

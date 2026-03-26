@@ -1,0 +1,17 @@
+---
+source: tui/src/bottom_pane/list_selection_view.rs
+expression: render_lines(&view)
+---
+                                                
+  Loop Timers                                   
+  2 timer(s) configured for /workspace/project  
+                                                
+› 1. check status        5m · check status ·    
+                         last completed 2026-   
+                         03-25 10:00:00 UTC     
+  2. summarize blockers  */10 * * * * ·         
+                         summarize blockers ·   
+                         disabled               
+                                                
+  /workspace/project/.codex/loop_timers.json    
+  Press enter to confirm or esc to go back

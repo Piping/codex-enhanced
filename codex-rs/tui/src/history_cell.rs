@@ -1151,6 +1151,14 @@ impl HistoryCell for TooltipHistoryCell {
 #[derive(Debug)]
 pub struct SessionInfoCell(CompositeHistoryCell);
 
+pub(crate) struct SessionInfoOptions {
+    pub(crate) is_first_event: bool,
+    pub(crate) tooltip_override: Option<String>,
+    pub(crate) display_preferences: DisplayPreferences,
+    pub(crate) auth_plan: Option<PlanType>,
+    pub(crate) show_fast_status: bool,
+}
+
 impl HistoryCell for SessionInfoCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.0.display_lines(width)
@@ -1169,12 +1177,15 @@ pub(crate) fn new_session_info(
     config: &Config,
     requested_model: &str,
     event: SessionConfiguredEvent,
-    is_first_event: bool,
-    tooltip_override: Option<String>,
-    display_preferences: DisplayPreferences,
-    auth_plan: Option<PlanType>,
-    show_fast_status: bool,
+    options: SessionInfoOptions,
 ) -> SessionInfoCell {
+    let SessionInfoOptions {
+        is_first_event,
+        tooltip_override,
+        display_preferences,
+        auth_plan,
+        show_fast_status,
+    } = options;
     let SessionConfiguredEvent {
         model,
         reasoning_effort,
@@ -2874,11 +2885,13 @@ mod tests {
             &config,
             "gpt-5",
             session_configured_event("gpt-5"),
-            false,
-            Some("Model just became available".to_string()),
-            DisplayPreferences::from_config(&config),
-            Some(PlanType::Free),
-            false,
+            SessionInfoOptions {
+                is_first_event: false,
+                tooltip_override: Some("Model just became available".to_string()),
+                display_preferences: DisplayPreferences::from_config(&config),
+                auth_plan: Some(PlanType::Free),
+                show_fast_status: false,
+            },
         );
 
         let rendered = render_transcript(&cell).join("\n");
@@ -2893,11 +2906,13 @@ mod tests {
             &config,
             "gpt-5",
             session_configured_event("gpt-5"),
-            false,
-            Some("Model just became available".to_string()),
-            DisplayPreferences::from_config(&config),
-            Some(PlanType::Free),
-            false,
+            SessionInfoOptions {
+                is_first_event: false,
+                tooltip_override: Some("Model just became available".to_string()),
+                display_preferences: DisplayPreferences::from_config(&config),
+                auth_plan: Some(PlanType::Free),
+                show_fast_status: false,
+            },
         );
 
         let rendered = render_transcript(&cell).join("\n");
@@ -2911,11 +2926,13 @@ mod tests {
             &config,
             "gpt-5",
             session_configured_event("gpt-5"),
-            true,
-            Some("Model just became available".to_string()),
-            DisplayPreferences::from_config(&config),
-            Some(PlanType::Free),
-            false,
+            SessionInfoOptions {
+                is_first_event: true,
+                tooltip_override: Some("Model just became available".to_string()),
+                display_preferences: DisplayPreferences::from_config(&config),
+                auth_plan: Some(PlanType::Free),
+                show_fast_status: false,
+            },
         );
 
         let rendered = render_transcript(&cell).join("\n");
@@ -2931,11 +2948,13 @@ mod tests {
             &config,
             "gpt-5",
             session_configured_event("gpt-5"),
-            false,
-            Some("Model just became available".to_string()),
-            DisplayPreferences::from_config(&config),
-            Some(PlanType::Free),
-            false,
+            SessionInfoOptions {
+                is_first_event: false,
+                tooltip_override: Some("Model just became available".to_string()),
+                display_preferences: DisplayPreferences::from_config(&config),
+                auth_plan: Some(PlanType::Free),
+                show_fast_status: false,
+            },
         );
 
         let rendered = render_transcript(&cell).join("\n");

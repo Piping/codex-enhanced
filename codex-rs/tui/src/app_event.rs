@@ -79,6 +79,8 @@ pub(crate) enum AppEvent {
     OpenControlPanel,
     /// Open the account pool panel inside the control panel flow.
     OpenAccountsPanel,
+    /// Open the loop timers panel inside the control panel flow.
+    OpenLoopTimersPanel,
     /// Open the transcript jump panel inside the control panel flow.
     OpenJumpToMessagePanel,
     /// Open the show/hide settings panel inside the control panel flow.
@@ -86,6 +88,37 @@ pub(crate) enum AppEvent {
     /// Start a hidden ephemeral `/btw` discussion.
     StartBtwDiscussion {
         prompt: String,
+    },
+    /// Create a persisted workspace loop timer from `/loop ...`.
+    CreateLoopTimer {
+        spec: String,
+    },
+    /// Execute a due loop timer once.
+    TriggerLoopTimer {
+        timer_id: String,
+        scheduled_for_unix_seconds: i64,
+    },
+    /// Open the actions view for a specific loop timer.
+    OpenLoopTimerActions {
+        timer_id: String,
+    },
+    /// Enable a disabled loop timer.
+    EnableLoopTimer {
+        timer_id: String,
+    },
+    /// Disable an enabled loop timer.
+    DisableLoopTimer {
+        timer_id: String,
+    },
+    /// Delete a loop timer.
+    DeleteLoopTimer {
+        timer_id: String,
+    },
+    /// Final result for a hidden `/loop` execution.
+    LoopTimerCompleted {
+        timer_id: String,
+        prompt: String,
+        result: Result<String, String>,
     },
     /// Final result for a hidden `/btw` discussion.
     BtwCompleted {
