@@ -6,7 +6,7 @@ This document describes the current Rust TUI implementation of `/loop`.
 
 `/loop` is implemented as a workspace-local scheduler owned by `App`. It supports:
 
-- one-shot loops that run once in a hidden ephemeral thread
+- one-shot loops that keep firing on schedule, but use a fresh hidden ephemeral thread every run
 - persistent loops that keep a stable id and resume their own hidden rollout
 
 The implementation reuses the existing Codex thread runtime instead of inventing a second model
@@ -16,6 +16,7 @@ The high-level split is:
 
 - parsing and slash dispatch in the TUI input layer
 - loop state, persistence, and scheduling in `tui/src/app/loop_timers.rs`
+- loop execution permission policy in `tui/src/app/loop_execution.rs`
 - slash parsing helpers in `tui/src/app/loop_timer_command.rs`
 - runtime policy and thread creation through existing core thread APIs
 - main-thread mirroring as TUI-only history cells
@@ -32,12 +33,11 @@ The high-level split is:
 - `tui/src/app/loop_timer_command.rs`
   - parses one-shot, persistent-create, and persistent-focus forms
   - defines persisted per-loop delivery modes
+- `tui/src/app/loop_execution.rs`
+  - owns per-loop execution overrides
+  - resolves per-loop cwd and writable directories into runtime sandbox overrides
 - `tui/src/app/loop_timers.rs`
   - owns persistence, scheduling, hidden execution, and mirroring
-- `core/src/config/types.rs`
-  - defines `tui.loop.completion_mirror_mode`
-- `core/src/config/mod.rs`
-  - loads the loop mirror config into runtime `Config`
 
 ## Persistence model
 
@@ -61,6 +61,9 @@ Each persisted loop stores:
 - `prompt`
 - optional `action`
 - optional `delivery_mode` override
+- per-loop `execution`
+  - optional cwd override
+  - writable-directory overrides
 - `schedule`
 - `enabled`
 - `rollout_path`
@@ -86,8 +89,9 @@ Cron expressions are normalized to the format expected by the `cron` crate:
 Each loop has one scheduler task that sleeps until the next due time and then
 sends `AppEvent::TriggerLoopTimer`.
 
-One-shot loops schedule only their first due time. After that single trigger completes, the loop
-record is removed.
+One-shot loops keep rescheduling future due times too. The difference is not the scheduler; it is
+the execution context. Every one-shot trigger runs in a fresh hidden ephemeral thread and does not
+reuse private rollout history from earlier runs.
 
 Persistent loops keep rescheduling future runs unless disabled or deleted.
 
@@ -102,22 +106,38 @@ SessionSource::SubAgent(SubAgentSource::Other("loop"))
 That keeps `/loop` executions separate from the visible main-thread workflow while still using the
 normal Codex thread runtime.
 
-All loop runs force the same policy overrides:
+No strict `/loop`-specific clamp is applied by default anymore. A loop starts from the main
+thread's runtime config and then applies only its own explicit execution overrides.
 
-- `approval_policy = never`
-- read-only sandbox
-- `network_access = false`
-- `include_apply_patch_tool = false`
-- extra developer instructions that forbid side effects
+If a loop has no execution overrides:
+
+- it inherits the parent cwd
+- it inherits the parent sandbox / approval policy
+- it inherits the parent tool availability
+
+If a loop has a cwd override:
+
+- that override becomes the execution cwd for that loop only
+
+If a loop has writable directories configured:
+
+- the runtime switches that loop to `WorkspaceWrite`
+- those directories become the only writable roots
+- read-only access stays broad enough to inspect the rest of the workspace
+- other loops still keep their own inherited or overridden policy
+
+This keeps the execution model local to each loop instead of introducing one shared workspace-level
+loop policy.
 
 ### One-shot runs
 
-One-shot loops start a fresh hidden thread with:
+One-shot loops start a fresh hidden thread on every trigger with:
 
 - `ephemeral = true`
 - compact initial history forked from the current main-thread rollout
 
-The hidden thread is destroyed after completion.
+The hidden thread is destroyed after completion, but the timer record stays persisted so the next
+scheduled trigger can start another fresh run.
 
 ### Persistent runs
 
@@ -155,6 +175,7 @@ private turns.
 
 It can:
 
+- create loops from a guided submenu
 - inspect configured loops
 - open per-loop actions
 - run a loop immediately
@@ -162,8 +183,20 @@ It can:
 - edit schedule
 - edit action
 - edit delivery mode
+- edit execution settings
 - enable / disable
 - delete
+
+`Create Loop Agent` opens a submenu with:
+
+- `One-Shot Loop`
+- `Persistent Loop`
+
+Each loop action menu includes `Execution Settings`, which owns:
+
+- a per-loop cwd override
+- a per-loop writable-directory list
+- reset actions back to the main-thread defaults
 
 The slash command stays lightweight:
 
@@ -188,23 +221,15 @@ When the run starts:
 When the run finishes:
 
 1. timestamps are updated and persisted
-2. one-shot loops are removed from persistence
-3. the hidden run is shut down and removed
-4. `Loop Manager` is refreshed so the running marker disappears
-5. a compact completion info cell is created for the main thread
-6. the configured mirrored payload is appended as local TUI history
-7. the effective per-loop delivery mode may enqueue a follow-up user turn
+2. the hidden run is shut down and removed
+3. `Loop Manager` is refreshed so the running marker disappears
+4. a compact completion info cell is created for the main thread
+5. the configured mirrored payload is appended as local TUI history
+6. the effective per-loop delivery mode may enqueue a follow-up user turn
 
 Only the latest final answer is mirrored. Intermediate hidden-thread transcript items stay private.
 
 ## Delivery modes
-
-The loop runtime has two separate knobs:
-
-- `completion_mirror_mode`
-- per-loop `delivery_mode`
-
-`completion_mirror_mode` controls what transcript cells appear locally in the main thread.
 
 `delivery_mode` controls what gets submitted back into the main thread as a new user turn. It is
 stored per loop, and defaults in code to `assistant-only` when no override is set:
@@ -217,8 +242,6 @@ stored per loop, and defaults in code to `assistant-only` when no override is se
 - `assistant-then-action-user`
   - submit the loop result as a user message
   - if the loop has an action, append that action text at the end
-
-This split keeps transcript presentation separate from follow-up execution semantics.
 
 ## Why mirroring happens in the TUI layer
 
@@ -234,7 +257,6 @@ work stays isolated unless the UI chooses to expose a compact result.
 - overlap policy is effectively `skip` because a running loop ignores duplicate triggers
 - loop-to-main delivery is still transcript-oriented, not a structured action channel
 - delivery still feeds back as plain user text, not a typed execution payload
-- permissions are fixed rather than per-loop configurable
 
 ## Future extensions
 
@@ -243,5 +265,4 @@ Possible follow-up work:
 - app-server parity
 - retry policy and backoff
 - structured delivery into the main execution layer
-- per-loop permission presets
 - multiple context-injection strategies beyond `latest 3 + original prompt`

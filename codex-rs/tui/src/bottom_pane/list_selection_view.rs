@@ -1264,34 +1264,9 @@ mod tests {
         ListSelectionView::new(
             SelectionViewParams {
                 title: Some("Control Panel".to_string()),
-                subtitle: Some("7 features available.".to_string()),
+                subtitle: Some("5 features available.".to_string()),
                 footer_hint: Some(standard_popup_hint_line()),
                 items: vec![
-                    SelectionItem {
-                        name: "Sessions".to_string(),
-                        description: None,
-                        selected_description: Some("Resume or switch saved chats.".to_string()),
-                        dismiss_on_select: true,
-                        ..Default::default()
-                    },
-                    SelectionItem {
-                        name: "Fork Current Session".to_string(),
-                        description: None,
-                        selected_description: Some(
-                            "Fork the current thread into a new session.".to_string(),
-                        ),
-                        dismiss_on_select: true,
-                        ..Default::default()
-                    },
-                    SelectionItem {
-                        name: "Timers".to_string(),
-                        description: None,
-                        selected_description: Some(
-                            "Manage workspace-local `/loop` scheduled prompts.".to_string(),
-                        ),
-                        dismiss_on_select: true,
-                        ..Default::default()
-                    },
                     SelectionItem {
                         name: "Accounts".to_string(),
                         description: None,
@@ -1302,11 +1277,27 @@ mod tests {
                         ..Default::default()
                     },
                     SelectionItem {
-                        name: "Jump To Message".to_string(),
+                        name: "Sessions".to_string(),
+                        description: None,
+                        selected_description: Some("Resume or switch saved chats.".to_string()),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Thread".to_string(),
                         description: None,
                         selected_description: Some(
-                            "Search committed transcript entries and open the transcript overlay."
+                            "Open thread-specific actions for the current conversation."
                                 .to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Loop Manager".to_string(),
+                        description: None,
+                        selected_description: Some(
+                            "Manage workspace-local `/loop` scheduled prompts.".to_string(),
                         ),
                         dismiss_on_select: true,
                         ..Default::default()
@@ -1319,6 +1310,123 @@ mod tests {
                                 .to_string(),
                         ),
                         dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            tx,
+        )
+    }
+
+    fn make_loop_execution_view() -> ListSelectionView {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Loop Execution".to_string()),
+                subtitle: Some("Execution settings · persistent loop".to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
+                items: vec![
+                    SelectionItem {
+                        name: "Working Directory".to_string(),
+                        description: Some(
+                            "CWD: `session default (/workspace/project)`. Writable scope: session default.".to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Use Session Working Directory".to_string(),
+                        description: Some(
+                            "Clear the per-loop cwd override and inherit the main thread working directory.".to_string(),
+                        ),
+                        is_disabled: true,
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Writable Directories".to_string(),
+                        description: Some(
+                            "Restrict loop file writes to specific directories. Leave empty to inherit the session scope.".to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Use Session Writable Scope".to_string(),
+                        description: Some(
+                            "Clear the per-loop writable-directory override and inherit the main thread sandbox scope.".to_string(),
+                        ),
+                        is_disabled: true,
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            tx,
+        )
+    }
+
+    fn make_loop_create_view() -> ListSelectionView {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Loop Manager".to_string()),
+                subtitle: Some("Create loop agent".to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
+                items: vec![
+                    SelectionItem {
+                        name: "One-Shot Loop".to_string(),
+                        description: Some(
+                            "Schedule a loop that keeps firing, but uses a fresh hidden thread each run.".to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Persistent Loop".to_string(),
+                        description: Some(
+                            "Schedule a loop with a stable id and a private long-lived hidden context.".to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            tx,
+        )
+    }
+
+    fn make_thread_view() -> ListSelectionView {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Thread".to_string()),
+                subtitle: Some("3 actions available.".to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
+                items: vec![
+                    SelectionItem {
+                        name: "Fork Current Session".to_string(),
+                        description: None,
+                        selected_description: Some(
+                            "Fork the current thread into a new session.".to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Jump To Message".to_string(),
+                        description: None,
+                        selected_description: Some(
+                            "Search committed transcript entries and open the transcript overlay."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: true,
                         ..Default::default()
                     },
                     SelectionItem {
@@ -1342,11 +1450,20 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         ListSelectionView::new(
             SelectionViewParams {
-                title: Some("Loop Timers".to_string()),
+                title: Some("Loop Manager".to_string()),
                 subtitle: Some("2 timer(s) configured for /workspace/project.".to_string()),
                 footer_hint: Some(standard_popup_hint_line()),
                 footer_path: Some("/workspace/project/.codex/loop_timers.json".to_string()),
                 items: vec![
+                    SelectionItem {
+                        name: "Create Loop Agent".to_string(),
+                        description: Some(
+                            "Create a one-shot or persistent `/loop` entry from a guided form."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
                     SelectionItem {
                         name: "check status".to_string(),
                         description: Some(
@@ -1562,6 +1679,24 @@ mod tests {
     fn control_panel_menu_snapshot() {
         let view = make_control_panel_view();
         assert_snapshot!("control_panel_menu", render_lines(&view));
+    }
+
+    #[test]
+    fn thread_menu_snapshot() {
+        let view = make_thread_view();
+        assert_snapshot!("thread_menu", render_lines(&view));
+    }
+
+    #[test]
+    fn loop_execution_menu_snapshot() {
+        let view = make_loop_execution_view();
+        assert_snapshot!("loop_execution_menu", render_lines(&view));
+    }
+
+    #[test]
+    fn loop_create_menu_snapshot() {
+        let view = make_loop_create_view();
+        assert_snapshot!("loop_create_menu", render_lines(&view));
     }
 
     #[test]

@@ -1,0 +1,20 @@
+---
+source: tui/src/bottom_pane/list_selection_view.rs
+expression: render_lines(&view)
+---
+                                                
+  Loop Execution                                
+  Execution settings · persistent loop          
+                                                
+› 1. Working Directory      CWD: `session       
+                             default (/workspace
+                             /project)`.        
+                             Writable scope:    
+                             session default.   
+  2. Use Session Working                        
+     Directory                                  
+  3. Writable Directories                       
+  4. Use Session Writable                       
+     Scope                                      
+                                                
+  Press enter to confirm or esc to go back      

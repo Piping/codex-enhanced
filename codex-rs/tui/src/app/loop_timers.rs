@@ -1,4 +1,11 @@
 use super::App;
+use super::loop_execution::PersistedLoopExecutionSettings;
+use super::loop_execution::apply_loop_execution_settings;
+use super::loop_execution::cwd_editor_text;
+use super::loop_execution::loop_execution_summary;
+use super::loop_execution::parse_loop_cwd;
+use super::loop_execution::parse_loop_writable_roots;
+use super::loop_execution::writable_roots_editor_text;
 use super::loop_timer_command::LoopCommand;
 use super::loop_timer_command::LoopDeliveryMode;
 use super::loop_timer_command::LoopMode;
@@ -26,13 +33,10 @@ use codex_protocol::ThreadId;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use ratatui::text::Line;
@@ -48,14 +52,10 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 
 const LOOP_TIMERS_VIEW_ID: &str = "fork-loop-timers-panel";
+const LOOP_CREATE_VIEW_ID: &str = "fork-loop-create-panel";
 const LOOP_TIMER_ACTIONS_VIEW_ID: &str = "fork-loop-timer-actions-panel";
+const LOOP_EXECUTION_VIEW_ID: &str = "fork-loop-execution-panel";
 const LOOP_CONTEXT_BUDGET_TOKENS: usize = 2_000;
-const LOOP_DEVELOPER_INSTRUCTIONS: &str = concat!(
-    "This is a hidden `/loop` execution thread. ",
-    "Use the current main-thread context only as read-only background. ",
-    "Do not write files, apply patches, spawn agents, or perform side-effectful actions. ",
-    "Return only the answer for this scheduled prompt."
-);
 const LOOP_TIMER_FILE_NAME: &str = "loop_timers.json";
 
 #[derive(Default)]
@@ -75,6 +75,7 @@ struct ActiveLoopRun {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 struct PersistedLoopTimersFile {
+    #[serde(default)]
     timers: Vec<PersistedLoopTimer>,
 }
 
@@ -88,6 +89,8 @@ struct PersistedLoopTimer {
     action: Option<String>,
     #[serde(default)]
     delivery_mode: Option<LoopDeliveryMode>,
+    #[serde(default)]
+    execution: PersistedLoopExecutionSettings,
     schedule: LoopSchedule,
     enabled: bool,
     #[serde(default)]
@@ -123,11 +126,24 @@ impl App {
             })
             .collect::<Vec<_>>();
 
-        if items.is_empty() {
+        items.insert(
+            0,
+            SelectionItem {
+                name: "Create Loop Agent".to_string(),
+                description: Some(
+                    "Create a one-shot or persistent `/loop` entry from a guided form.".to_string(),
+                ),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenCreateLoopTimerMenu))],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        );
+
+        if self.loop_timers.timers.is_empty() {
             items.push(SelectionItem {
                 name: "No loop timers yet".to_string(),
                 description: Some(
-                    "Create one with `/loop 5m <prompt>` or `/loop <id> 30m <prompt>`.".to_string(),
+                    "Use Create Loop Agent or `/loop 5m <prompt>` to add one.".to_string(),
                 ),
                 is_disabled: true,
                 ..Default::default()
@@ -158,6 +174,154 @@ impl App {
         ) {
             self.chat_widget
                 .show_selection_view(self.loop_timers_panel_params(initial_selected_idx));
+        }
+    }
+
+    pub(crate) fn open_create_loop_timer_menu(&mut self) {
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            view_id: Some(LOOP_CREATE_VIEW_ID),
+            title: Some("Loop Manager".to_string()),
+            subtitle: Some("Create loop agent".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items: vec![
+                SelectionItem {
+                    name: "One-Shot Loop".to_string(),
+                    description: Some(
+                        "Schedule a loop that keeps firing, but uses a fresh hidden thread each run."
+                            .to_string(),
+                    ),
+                    actions: vec![Box::new(|tx| tx.send(AppEvent::OpenCreateOneShotLoopPrompt))],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: "Persistent Loop".to_string(),
+                    description: Some(
+                        "Schedule a loop with a stable id and a private long-lived hidden context."
+                            .to_string(),
+                    ),
+                    actions: vec![Box::new(|tx| {
+                        tx.send(AppEvent::OpenCreatePersistentLoopPrompt)
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+            ],
+            on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenLoopTimersPanel))),
+            ..Default::default()
+        });
+    }
+
+    fn loop_execution_panel_params(
+        &self,
+        timer_id: &str,
+        initial_selected_idx: Option<usize>,
+    ) -> SelectionViewParams {
+        let Some(timer) = self.loop_timers.timers.get(timer_id) else {
+            return SelectionViewParams::default();
+        };
+        let items = vec![
+            SelectionItem {
+                name: "Working Directory".to_string(),
+                description: Some(loop_execution_summary(&timer.execution, self.config.cwd.as_path())),
+                actions: vec![Box::new({
+                    let timer_id = timer_id.to_string();
+                    move |tx| {
+                        tx.send(AppEvent::OpenEditLoopTimerCwd {
+                            timer_id: timer_id.clone(),
+                        })
+                    }
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Use Session Working Directory".to_string(),
+                description: Some(
+                    "Clear the per-loop cwd override and inherit the main thread working directory."
+                        .to_string(),
+                ),
+                is_disabled: timer.execution.cwd.is_none(),
+                actions: vec![Box::new({
+                    let timer_id = timer_id.to_string();
+                    move |tx| {
+                        tx.send(AppEvent::ResetLoopTimerCwd {
+                            timer_id: timer_id.clone(),
+                        })
+                    }
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Writable Directories".to_string(),
+                description: Some(
+                    "Restrict loop file writes to specific directories. Leave empty to inherit the session scope."
+                        .to_string(),
+                ),
+                actions: vec![Box::new({
+                    let timer_id = timer_id.to_string();
+                    move |tx| {
+                        tx.send(AppEvent::OpenEditLoopWritableRoots {
+                            timer_id: timer_id.clone(),
+                        })
+                    }
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Use Session Writable Scope".to_string(),
+                description: Some(
+                    "Clear the per-loop writable-directory override and inherit the main thread sandbox scope."
+                        .to_string(),
+                ),
+                is_disabled: timer.execution.writable_roots.is_empty(),
+                actions: vec![Box::new({
+                    let timer_id = timer_id.to_string();
+                    move |tx| {
+                        tx.send(AppEvent::ResetLoopWritableRoots {
+                            timer_id: timer_id.clone(),
+                        })
+                    }
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        SelectionViewParams {
+            view_id: Some(LOOP_EXECUTION_VIEW_ID),
+            title: Some("Loop Execution".to_string()),
+            subtitle: Some(format!("Execution settings · {}", timer_descriptor(timer))),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx,
+            on_cancel: Some(Box::new({
+                let timer_id = timer_id.to_string();
+                move |tx| {
+                    tx.send(AppEvent::OpenLoopTimerActions {
+                        timer_id: timer_id.clone(),
+                    })
+                }
+            })),
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn open_loop_execution_panel(&mut self, timer_id: String) {
+        self.ensure_loop_timers_loaded();
+
+        let initial_selected_idx = self
+            .chat_widget
+            .selected_index_for_active_view(LOOP_EXECUTION_VIEW_ID);
+        if !self.chat_widget.replace_selection_view_if_active(
+            LOOP_EXECUTION_VIEW_ID,
+            self.loop_execution_panel_params(&timer_id, initial_selected_idx),
+        ) {
+            self.chat_widget.show_selection_view(
+                self.loop_execution_panel_params(&timer_id, initial_selected_idx),
+            );
         }
     }
 
@@ -220,6 +384,11 @@ impl App {
                     prompt: prompt.clone(),
                     action: existing.as_ref().and_then(|timer| timer.action.clone()),
                     delivery_mode: existing.as_ref().and_then(|timer| timer.delivery_mode),
+                    execution: existing
+                        .as_ref()
+                        .map_or_else(PersistedLoopExecutionSettings::default, |timer| {
+                            timer.execution.clone()
+                        }),
                     schedule: schedule.clone(),
                     enabled: true,
                     rollout_path: existing
@@ -313,6 +482,7 @@ impl App {
         let timer_id_for_edit_schedule = timer.id.clone();
         let timer_id_for_edit_action = timer.id.clone();
         let timer_id_for_edit_delivery_mode = timer.id.clone();
+        let timer_id_for_execution_settings = timer.id.clone();
         self.chat_widget.show_selection_view(SelectionViewParams {
             view_id: Some(LOOP_TIMER_ACTIONS_VIEW_ID),
             title: Some("Loop Manager".to_string()),
@@ -388,6 +558,20 @@ impl App {
                     dismiss_on_select: true,
                     ..Default::default()
                 },
+                SelectionItem {
+                    name: "Execution Settings".to_string(),
+                    description: Some(loop_execution_summary(
+                        &timer.execution,
+                        self.config.cwd.as_path(),
+                    )),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::OpenLoopExecutionPanel {
+                            timer_id: timer_id_for_execution_settings.clone(),
+                        })
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
                 enabled_action,
                 SelectionItem {
                     name: "Delete".to_string(),
@@ -440,6 +624,34 @@ impl App {
         };
         self.chat_widget
             .open_loop_timer_action_editor(timer_id, timer.action.clone().unwrap_or_default());
+    }
+
+    pub(crate) fn open_loop_writable_roots_editor(&mut self, timer_id: String) {
+        self.ensure_loop_timers_loaded();
+        let Some(timer) = self.loop_timers.timers.get(&timer_id) else {
+            self.chat_widget
+                .add_error_message("That loop timer no longer exists.".to_string());
+            self.open_loop_timers_panel();
+            return;
+        };
+        self.chat_widget.open_loop_writable_roots_editor(
+            timer_id,
+            writable_roots_editor_text(&timer.execution),
+        );
+    }
+
+    pub(crate) fn open_loop_timer_cwd_editor(&mut self, timer_id: String) {
+        self.ensure_loop_timers_loaded();
+        let Some(timer) = self.loop_timers.timers.get(&timer_id) else {
+            self.chat_widget
+                .add_error_message("That loop timer no longer exists.".to_string());
+            self.open_loop_timers_panel();
+            return;
+        };
+        self.chat_widget.open_loop_timer_cwd_editor(
+            timer_id,
+            cwd_editor_text(&timer.execution, self.config.cwd.as_path()),
+        );
     }
 
     pub(crate) fn open_loop_timer_delivery_mode_menu(&mut self, timer_id: String) {
@@ -579,6 +791,93 @@ impl App {
         self.open_loop_timer_actions(timer_id);
     }
 
+    pub(crate) fn save_loop_writable_roots(&mut self, timer_id: String, writable_roots: String) {
+        self.ensure_loop_timers_loaded();
+        let writable_roots =
+            match parse_loop_writable_roots(&writable_roots, self.config.cwd.as_path()) {
+                Ok(writable_roots) => writable_roots,
+                Err(err) => {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to update `/loop` writable directories: {err}"
+                    ));
+                    return;
+                }
+            };
+        let Some(timer) = self.loop_timers.timers.get_mut(&timer_id) else {
+            self.chat_widget
+                .add_error_message("That loop timer no longer exists.".to_string());
+            self.open_loop_timers_panel();
+            return;
+        };
+        timer.execution.writable_roots = writable_roots;
+        if let Err(err) = self.persist_loop_timers() {
+            self.chat_widget.add_error_message(format!(
+                "Failed to persist `/loop` execution settings: {err}"
+            ));
+        }
+        self.open_loop_execution_panel(timer_id);
+    }
+
+    pub(crate) fn save_loop_timer_cwd(&mut self, timer_id: String, cwd: String) {
+        self.ensure_loop_timers_loaded();
+        let cwd = match parse_loop_cwd(&cwd, self.config.cwd.as_path()) {
+            Ok(cwd) => cwd,
+            Err(err) => {
+                self.chat_widget.add_error_message(format!(
+                    "Failed to update `/loop` working directory: {err}"
+                ));
+                return;
+            }
+        };
+        let Some(timer) = self.loop_timers.timers.get_mut(&timer_id) else {
+            self.chat_widget
+                .add_error_message("That loop timer no longer exists.".to_string());
+            self.open_loop_timers_panel();
+            return;
+        };
+        timer.execution.cwd = Some(cwd);
+        if let Err(err) = self.persist_loop_timers() {
+            self.chat_widget.add_error_message(format!(
+                "Failed to persist `/loop` execution settings: {err}"
+            ));
+        }
+        self.open_loop_execution_panel(timer_id);
+    }
+
+    pub(crate) fn reset_loop_timer_cwd(&mut self, timer_id: String) {
+        self.ensure_loop_timers_loaded();
+        let Some(timer) = self.loop_timers.timers.get_mut(&timer_id) else {
+            self.chat_widget
+                .add_error_message("That loop timer no longer exists.".to_string());
+            self.open_loop_timers_panel();
+            return;
+        };
+        timer.execution.cwd = None;
+        if let Err(err) = self.persist_loop_timers() {
+            self.chat_widget.add_error_message(format!(
+                "Failed to persist `/loop` execution settings: {err}"
+            ));
+        }
+        self.open_loop_execution_panel(timer_id);
+    }
+
+    pub(crate) fn reset_loop_writable_roots(&mut self, timer_id: String) {
+        self.ensure_loop_timers_loaded();
+        let Some(timer) = self.loop_timers.timers.get_mut(&timer_id) else {
+            self.chat_widget
+                .add_error_message("That loop timer no longer exists.".to_string());
+            self.open_loop_timers_panel();
+            return;
+        };
+        timer.execution.writable_roots.clear();
+        if let Err(err) = self.persist_loop_timers() {
+            self.chat_widget.add_error_message(format!(
+                "Failed to persist `/loop` execution settings: {err}"
+            ));
+        }
+        self.open_loop_execution_panel(timer_id);
+    }
+
     pub(crate) fn set_loop_timer_enabled(&mut self, timer_id: String, enabled: bool) {
         self.ensure_loop_timers_loaded();
         let next_due = {
@@ -653,34 +952,23 @@ impl App {
         let prompt = timer.prompt.clone();
         let mut loop_config = self.config.clone();
         loop_config.ephemeral = matches!(timer.mode, LoopMode::OneShot);
-        loop_config.include_apply_patch_tool = false;
-        if let Err(err) = loop_config
-            .permissions
-            .approval_policy
-            .set(AskForApproval::Never)
-        {
-            self.chat_widget
-                .add_error_message(format!("Failed to configure `/loop` approvals: {err}"));
-            return Vec::new();
-        }
-        if let Err(err) = loop_config
-            .permissions
-            .sandbox_policy
-            .set(SandboxPolicy::ReadOnly {
-                access: ReadOnlyAccess::default(),
-                network_access: false,
-            })
-        {
-            self.chat_widget
-                .add_error_message(format!("Failed to configure `/loop` sandbox: {err}"));
-            return Vec::new();
-        }
+        let developer_instructions = match apply_loop_execution_settings(
+            &mut loop_config,
+            &timer.execution,
+            self.config.cwd.as_path(),
+        ) {
+            Ok(instructions) => instructions,
+            Err(err) => {
+                self.chat_widget.add_error_message(err);
+                return Vec::new();
+            }
+        };
         loop_config.developer_instructions =
             Some(match loop_config.developer_instructions.take() {
                 Some(existing) if !existing.trim().is_empty() => {
-                    format!("{existing}\n\n{LOOP_DEVELOPER_INSTRUCTIONS}")
+                    format!("{existing}\n\n{developer_instructions}")
                 }
-                _ => LOOP_DEVELOPER_INSTRUCTIONS.to_string(),
+                _ => developer_instructions,
             });
 
         let primary_rollout_path = self
@@ -858,16 +1146,11 @@ impl App {
         self.stop_loop_timer_run(&timer_id);
         self.sync_background_loop_status();
         let mut completed_timer = None;
-        let mut remove_after_completion = false;
         if let Some(timer) = self.loop_timers.timers.get_mut(&timer_id) {
             timer.last_completed_at_unix_seconds = Some(Utc::now().timestamp());
-            remove_after_completion = matches!(timer.mode, LoopMode::OneShot);
             completed_timer = Some(timer.clone());
         }
-        if remove_after_completion {
-            self.loop_timers.timers.remove(&timer_id);
-        }
-        if completed_timer.is_some() || remove_after_completion {
+        if completed_timer.is_some() {
             if let Err(err) = self.persist_loop_timers() {
                 self.chat_widget
                     .add_error_message(format!("Failed to persist loop timer completion: {err}"));
@@ -997,8 +1280,8 @@ impl App {
         self.loop_timers.thread_history_cells.clear();
         self.sync_background_loop_status();
 
-        let loaded = load_loop_timers(self.config.cwd.as_path())
-            .unwrap_or_default()
+        let loaded = load_loop_timers(self.config.cwd.as_path()).unwrap_or_default();
+        let loaded = loaded
             .timers
             .into_iter()
             .map(|timer| (timer.id.clone(), timer))
@@ -1027,10 +1310,6 @@ impl App {
         now: DateTime<Utc>,
     ) -> Option<DateTime<Utc>> {
         if !timer.enabled {
-            return None;
-        }
-        if matches!(timer.mode, LoopMode::OneShot) && timer.last_scheduled_at_unix_seconds.is_some()
-        {
             return None;
         }
         match timer.last_scheduled_at_unix_seconds {

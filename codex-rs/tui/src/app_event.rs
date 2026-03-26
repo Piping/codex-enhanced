@@ -84,6 +84,8 @@ pub(crate) enum AppEvent {
     CodexEvent(Event),
     /// Open the fork-owned control panel.
     OpenControlPanel,
+    /// Open the current-thread actions panel inside the control panel flow.
+    OpenThreadPanel,
     /// Open the account pool panel inside the control panel flow.
     OpenAccountsPanel,
     /// Open the loop timers panel inside the control panel flow.
@@ -100,6 +102,12 @@ pub(crate) enum AppEvent {
     CreateLoopTimer {
         spec: String,
     },
+    /// Open the loop creation submenu inside Loop Manager.
+    OpenCreateLoopTimerMenu,
+    /// Open an editor for creating a one-shot loop timer.
+    OpenCreateOneShotLoopPrompt,
+    /// Open an editor for creating a persistent loop timer.
+    OpenCreatePersistentLoopPrompt,
     /// Execute a due loop timer once.
     TriggerLoopTimer {
         timer_id: String,
@@ -126,6 +134,18 @@ pub(crate) enum AppEvent {
     OpenEditLoopTimerDeliveryMode {
         timer_id: String,
     },
+    /// Open execution settings for a loop timer.
+    OpenLoopExecutionPanel {
+        timer_id: String,
+    },
+    /// Open an editor for a loop timer's writable directories.
+    OpenEditLoopWritableRoots {
+        timer_id: String,
+    },
+    /// Open an editor for a loop timer's working directory.
+    OpenEditLoopTimerCwd {
+        timer_id: String,
+    },
     /// Persist an updated prompt for a loop timer.
     SaveLoopTimerPrompt {
         timer_id: String,
@@ -145,6 +165,24 @@ pub(crate) enum AppEvent {
     SaveLoopTimerDeliveryMode {
         timer_id: String,
         delivery_mode: Option<LoopDeliveryMode>,
+    },
+    /// Persist updated writable directories for a loop timer.
+    SaveLoopWritableRoots {
+        timer_id: String,
+        writable_roots: String,
+    },
+    /// Persist an updated working directory override for a loop timer.
+    SaveLoopTimerCwd {
+        timer_id: String,
+        cwd: String,
+    },
+    /// Reset a loop timer's working directory override back to the session default.
+    ResetLoopTimerCwd {
+        timer_id: String,
+    },
+    /// Reset a loop timer's writable-directory override back to the session default.
+    ResetLoopWritableRoots {
+        timer_id: String,
     },
     /// Enable a disabled loop timer.
     EnableLoopTimer {

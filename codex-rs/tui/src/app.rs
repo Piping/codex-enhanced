@@ -142,9 +142,11 @@ mod btw;
 mod display_preferences_menu;
 mod jump_navigation;
 mod key_chord;
+mod loop_execution;
 pub(crate) mod loop_timer_command;
 mod loop_timers;
 mod pending_interactive_replay;
+mod thread_menu;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
@@ -157,6 +159,8 @@ use self::key_chord::KeyChordResolution;
 use self::key_chord::KeyChordState;
 use self::loop_timers::LoopTimersState;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
+use self::thread_menu::control_panel_thread_item;
+use self::thread_menu::thread_panel_items;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
@@ -1950,23 +1954,22 @@ impl App {
     fn open_control_panel(&mut self) {
         let items = vec![
             SelectionItem {
+                name: "Accounts".to_string(),
+                description: None,
+                selected_description: Some("Inspect the managed multi-account pool.".to_string()),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenAccountsPanel))],
+                dismiss_on_select: false,
+                ..Default::default()
+            },
+            SelectionItem {
                 name: "Sessions".to_string(),
                 description: None,
                 selected_description: Some("Resume or switch saved chats.".to_string()),
                 actions: vec![Box::new(|tx| tx.send(AppEvent::OpenResumePickerAll))],
-                dismiss_on_select: true,
+                dismiss_on_select: false,
                 ..Default::default()
             },
-            SelectionItem {
-                name: "Fork Current Session".to_string(),
-                description: None,
-                selected_description: Some(
-                    "Fork the current thread into a new session.".to_string(),
-                ),
-                actions: vec![Box::new(|tx| tx.send(AppEvent::ForkCurrentSession))],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
+            control_panel_thread_item(),
             SelectionItem {
                 name: "Loop Manager".to_string(),
                 description: None,
@@ -1974,39 +1977,10 @@ impl App {
                     "Manage workspace-local `/loop` scheduled prompts.".to_string(),
                 ),
                 actions: vec![Box::new(|tx| tx.send(AppEvent::OpenLoopTimersPanel))],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: "Accounts".to_string(),
-                description: None,
-                selected_description: Some("Inspect the managed multi-account pool.".to_string()),
-                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenAccountsPanel))],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: "Jump To Message".to_string(),
-                description: None,
-                selected_description: Some(
-                    "Search committed transcript entries and open the transcript overlay."
-                        .to_string(),
-                ),
-                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenJumpToMessagePanel))],
-                dismiss_on_select: true,
+                dismiss_on_select: false,
                 ..Default::default()
             },
             control_panel_show_hide_item(),
-            SelectionItem {
-                name: "Undo Last User Message".to_string(),
-                description: None,
-                selected_description: Some(
-                    "Restore the last sent input and roll back one turn.".to_string(),
-                ),
-                actions: vec![Box::new(|tx| tx.send(AppEvent::UndoLastUserMessage))],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
         ];
 
         self.chat_widget.show_selection_view(SelectionViewParams {
@@ -2017,6 +1991,31 @@ impl App {
             items,
             ..Default::default()
         });
+    }
+
+    fn thread_panel_params(&self, initial_selected_idx: Option<usize>) -> SelectionViewParams {
+        let items = thread_panel_items();
+        SelectionViewParams {
+            view_id: Some("fork-thread-panel"),
+            title: Some("Thread".to_string()),
+            subtitle: Some(format!("{} actions available.", items.len())),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx,
+            ..Default::default()
+        }
+    }
+
+    fn open_thread_panel(&mut self) {
+        let view_id = "fork-thread-panel";
+        let initial_selected_idx = self.chat_widget.selected_index_for_active_view(view_id);
+        if !self.chat_widget.replace_selection_view_if_active(
+            view_id,
+            self.thread_panel_params(initial_selected_idx),
+        ) {
+            self.chat_widget
+                .show_selection_view(self.thread_panel_params(initial_selected_idx));
+        }
     }
 
     fn append_visible_history_cell(&mut self, tui: &mut tui::Tui, cell: Arc<dyn HistoryCell>) {
@@ -3410,14 +3409,29 @@ impl App {
             AppEvent::OpenAccountsPanel => {
                 self.open_accounts_panel();
             }
+            AppEvent::OpenThreadPanel => {
+                self.open_thread_panel();
+            }
             AppEvent::OpenLoopTimersPanel => {
                 self.open_loop_timers_panel();
+            }
+            AppEvent::OpenLoopExecutionPanel { timer_id } => {
+                self.open_loop_execution_panel(timer_id);
             }
             AppEvent::OpenJumpToMessagePanel => {
                 self.open_jump_to_message_panel();
             }
             AppEvent::CreateLoopTimer { spec } => {
                 self.create_loop_timer(spec);
+            }
+            AppEvent::OpenCreateLoopTimerMenu => {
+                self.open_create_loop_timer_menu();
+            }
+            AppEvent::OpenCreateOneShotLoopPrompt => {
+                self.chat_widget.open_create_one_shot_loop_prompt();
+            }
+            AppEvent::OpenCreatePersistentLoopPrompt => {
+                self.chat_widget.open_create_persistent_loop_prompt();
             }
             AppEvent::TriggerLoopTimer {
                 timer_id,
@@ -3447,6 +3461,12 @@ impl App {
             AppEvent::OpenEditLoopTimerDeliveryMode { timer_id } => {
                 self.open_loop_timer_delivery_mode_menu(timer_id);
             }
+            AppEvent::OpenEditLoopWritableRoots { timer_id } => {
+                self.open_loop_writable_roots_editor(timer_id);
+            }
+            AppEvent::OpenEditLoopTimerCwd { timer_id } => {
+                self.open_loop_timer_cwd_editor(timer_id);
+            }
             AppEvent::SaveLoopTimerPrompt { timer_id, prompt } => {
                 self.save_loop_timer_prompt(timer_id, prompt);
             }
@@ -3461,6 +3481,21 @@ impl App {
                 delivery_mode,
             } => {
                 self.save_loop_timer_delivery_mode(timer_id, delivery_mode);
+            }
+            AppEvent::SaveLoopWritableRoots {
+                timer_id,
+                writable_roots,
+            } => {
+                self.save_loop_writable_roots(timer_id, writable_roots);
+            }
+            AppEvent::SaveLoopTimerCwd { timer_id, cwd } => {
+                self.save_loop_timer_cwd(timer_id, cwd);
+            }
+            AppEvent::ResetLoopTimerCwd { timer_id } => {
+                self.reset_loop_timer_cwd(timer_id);
+            }
+            AppEvent::ResetLoopWritableRoots { timer_id } => {
+                self.reset_loop_writable_roots(timer_id);
             }
             AppEvent::EnableLoopTimer { timer_id } => {
                 self.set_loop_timer_enabled(timer_id, /*enabled*/ true);

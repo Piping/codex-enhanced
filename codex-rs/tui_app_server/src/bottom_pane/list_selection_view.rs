@@ -1268,6 +1268,15 @@ mod tests {
                 footer_hint: Some(standard_popup_hint_line()),
                 items: vec![
                     SelectionItem {
+                        name: "Accounts".to_string(),
+                        description: None,
+                        selected_description: Some(
+                            "Inspect the managed multi-account pool.".to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
                         name: "Sessions".to_string(),
                         description: None,
                         selected_description: Some("Resume or switch saved chats.".to_string()),
@@ -1275,19 +1284,46 @@ mod tests {
                         ..Default::default()
                     },
                     SelectionItem {
+                        name: "Thread".to_string(),
+                        description: None,
+                        selected_description: Some(
+                            "Open thread-specific actions for the current conversation."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Show / Hide UI".to_string(),
+                        description: None,
+                        selected_description: Some(
+                            "Toggle local TUI-only transcript and UI visibility settings."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            tx,
+        )
+    }
+
+    fn make_thread_view() -> ListSelectionView {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Thread".to_string()),
+                subtitle: Some("3 actions available.".to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
+                items: vec![
+                    SelectionItem {
                         name: "Fork Current Session".to_string(),
                         description: None,
                         selected_description: Some(
                             "Fork the current thread into a new session.".to_string(),
-                        ),
-                        dismiss_on_select: true,
-                        ..Default::default()
-                    },
-                    SelectionItem {
-                        name: "Accounts".to_string(),
-                        description: None,
-                        selected_description: Some(
-                            "Inspect the managed multi-account pool.".to_string(),
                         ),
                         dismiss_on_select: true,
                         ..Default::default()
@@ -1300,16 +1336,6 @@ mod tests {
                                 .to_string(),
                         ),
                         dismiss_on_select: true,
-                        ..Default::default()
-                    },
-                    SelectionItem {
-                        name: "Show / Hide UI".to_string(),
-                        description: None,
-                        selected_description: Some(
-                            "Toggle local TUI-only transcript and UI visibility settings."
-                                .to_string(),
-                        ),
-                        dismiss_on_select: false,
                         ..Default::default()
                     },
                     SelectionItem {
@@ -1519,6 +1545,12 @@ mod tests {
     fn control_panel_menu_snapshot() {
         let view = make_control_panel_view();
         assert_snapshot!("control_panel_menu", render_lines(&view));
+    }
+
+    #[test]
+    fn thread_menu_snapshot() {
+        let view = make_thread_view();
+        assert_snapshot!("thread_menu", render_lines(&view));
     }
 
     #[test]

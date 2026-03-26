@@ -6,12 +6,10 @@ expression: render_lines(&view)
   Control Panel                                 
   4 features available.                         
                                                 
-› 1. Sessions                Resume or switch   
-                             saved chats.       
-  2. Fork Current Session                       
-  3. Accounts                                   
-  4. Jump To Message                            
-  5. Show / Hide UI                             
-  6. Undo Last User Message                     
+› 1. Accounts                Inspect the managed
+                             multi-account pool.
+  2. Sessions                                   
+  3. Thread                                     
+  4. Show / Hide UI                             
                                                 
-  Press enter to confirm or esc to go back
+  Press enter to confirm or esc to go back      

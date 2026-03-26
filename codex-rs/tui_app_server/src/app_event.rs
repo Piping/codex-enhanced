@@ -77,6 +77,8 @@ pub(crate) struct ConnectorsSnapshot {
 pub(crate) enum AppEvent {
     /// Open the fork-owned control panel.
     OpenControlPanel,
+    /// Open the current-thread actions panel inside the control panel flow.
+    OpenThreadPanel,
     /// Open the account pool panel inside the control panel flow.
     OpenAccountsPanel,
     /// Open the transcript jump panel inside the control panel flow.

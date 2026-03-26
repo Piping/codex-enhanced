@@ -85,7 +85,6 @@ use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONF
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_ext::AccountPoolStore;
-use codex_ext::HostCapabilities;
 use codex_ext::ManagedAccountAuthStore;
 use codex_ext::activate_managed_account;
 use codex_ext::persist_current_managed_account_snapshot;
@@ -150,6 +149,7 @@ mod display_preferences_menu;
 mod jump_navigation;
 mod key_chord;
 mod pending_interactive_replay;
+mod thread_menu;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
@@ -161,6 +161,8 @@ use self::key_chord::KeyChordAction;
 use self::key_chord::KeyChordResolution;
 use self::key_chord::KeyChordState;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
+use self::thread_menu::control_panel_thread_item;
+use self::thread_menu::thread_panel_items;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
@@ -2526,69 +2528,60 @@ impl App {
     }
 
     fn open_control_panel(&mut self) {
-        let capabilities = HostCapabilities::codex_mvp();
         let items = vec![
-            SelectionItem {
-                name: "Sessions".to_string(),
-                description: None,
-                selected_description: Some("Resume or switch saved chats.".to_string()),
-                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenResumePickerAll))],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: "Fork Current Session".to_string(),
-                description: None,
-                selected_description: Some(
-                    "Fork the current thread into a new session.".to_string(),
-                ),
-                actions: vec![Box::new(|tx| tx.send(AppEvent::ForkCurrentSession))],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
             SelectionItem {
                 name: "Accounts".to_string(),
                 description: None,
                 selected_description: Some("Inspect the managed multi-account pool.".to_string()),
                 actions: vec![Box::new(|tx| tx.send(AppEvent::OpenAccountsPanel))],
-                dismiss_on_select: true,
+                dismiss_on_select: false,
                 ..Default::default()
             },
             SelectionItem {
-                name: "Jump To Message".to_string(),
+                name: "Sessions".to_string(),
                 description: None,
-                selected_description: Some(
-                    "Search committed transcript entries and open the transcript overlay."
-                        .to_string(),
-                ),
-                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenJumpToMessagePanel))],
-                dismiss_on_select: true,
+                selected_description: Some("Resume or switch saved chats.".to_string()),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenResumePickerAll))],
+                dismiss_on_select: false,
                 ..Default::default()
             },
+            control_panel_thread_item(),
             control_panel_show_hide_item(),
-            SelectionItem {
-                name: "Undo Last User Message".to_string(),
-                description: None,
-                selected_description: Some(
-                    "Restore the last sent input and roll back one turn.".to_string(),
-                ),
-                actions: vec![Box::new(|tx| tx.send(AppEvent::UndoLastUserMessage))],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
         ];
 
         self.chat_widget.show_selection_view(SelectionViewParams {
             view_id: Some("fork-control-panel"),
             title: Some("Control Panel".to_string()),
-            subtitle: Some(format!(
-                "{} features available.",
-                capabilities.capabilities.len()
-            )),
+            subtitle: Some(format!("{} features available.", items.len())),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
         });
+    }
+
+    fn thread_panel_params(&self, initial_selected_idx: Option<usize>) -> SelectionViewParams {
+        let items = thread_panel_items();
+        SelectionViewParams {
+            view_id: Some("fork-thread-panel"),
+            title: Some("Thread".to_string()),
+            subtitle: Some(format!("{} actions available.", items.len())),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx,
+            ..Default::default()
+        }
+    }
+
+    fn open_thread_panel(&mut self) {
+        let view_id = "fork-thread-panel";
+        let initial_selected_idx = self.chat_widget.selected_index_for_active_view(view_id);
+        if !self.chat_widget.replace_selection_view_if_active(
+            view_id,
+            self.thread_panel_params(initial_selected_idx),
+        ) {
+            self.chat_widget
+                .show_selection_view(self.thread_panel_params(initial_selected_idx));
+        }
     }
 
     fn display_preferences_panel_params(
@@ -3940,6 +3933,9 @@ impl App {
             }
             AppEvent::OpenAccountsPanel => {
                 self.open_accounts_panel();
+            }
+            AppEvent::OpenThreadPanel => {
+                self.open_thread_panel();
             }
             AppEvent::OpenJumpToMessagePanel => {
                 self.open_jump_to_message_panel();

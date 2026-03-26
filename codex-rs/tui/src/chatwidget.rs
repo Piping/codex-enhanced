@@ -5450,6 +5450,74 @@ impl ChatWidget {
         self.bottom_pane.show_view(Box::new(view));
     }
 
+    pub(crate) fn open_loop_writable_roots_editor(
+        &mut self,
+        timer_id: String,
+        current_roots: String,
+    ) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Edit loop writable directories".to_string(),
+            "Enter one directory per line and press Enter".to_string(),
+            Some(format!("Loop: {timer_id}")),
+            Box::new(move |writable_roots: String| {
+                tx.send(AppEvent::SaveLoopWritableRoots {
+                    timer_id: timer_id.clone(),
+                    writable_roots,
+                });
+            }),
+        )
+        .with_initial_text(current_roots);
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_loop_timer_cwd_editor(&mut self, timer_id: String, current_cwd: String) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Edit loop working directory".to_string(),
+            "Type a directory path and press Enter".to_string(),
+            Some(format!("Loop: {timer_id}")),
+            Box::new(move |cwd: String| {
+                tx.send(AppEvent::SaveLoopTimerCwd {
+                    timer_id: timer_id.clone(),
+                    cwd,
+                });
+            }),
+        )
+        .with_initial_text(current_cwd);
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_create_one_shot_loop_prompt(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Create one-shot loop".to_string(),
+            "Example: 5m summarize what changed".to_string(),
+            Some("Enter `<time> <prompt>`".to_string()),
+            Box::new(move |spec: String| {
+                tx.send(AppEvent::CreateLoopTimer { spec });
+            }),
+        );
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_create_persistent_loop_prompt(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Create persistent loop".to_string(),
+            "Example: director 30m review overall progress".to_string(),
+            Some("Enter `<id> <time> <prompt>`".to_string()),
+            Box::new(move |spec: String| {
+                tx.send(AppEvent::CreateLoopTimer { spec });
+            }),
+        );
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
     pub(crate) fn submit_loop_followup_user_message(&mut self, message: String) {
         self.queue_user_message(UserMessage::from(message));
     }
