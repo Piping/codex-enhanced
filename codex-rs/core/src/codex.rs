@@ -3976,6 +3976,7 @@ impl Session {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn pending_input_snapshot(&self) -> Vec<ResponseInputItem> {
         let active = self.active_turn.lock().await;
         match active.as_ref() {
@@ -4001,6 +4002,7 @@ impl Session {
         std::mem::take(&mut *self.idle_pending_input.lock().await)
     }
 
+    #[cfg(test)]
     pub(crate) async fn queued_response_items_for_next_turn_snapshot(
         &self,
     ) -> Vec<ResponseInputItem> {

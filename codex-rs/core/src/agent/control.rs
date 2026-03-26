@@ -5,10 +5,8 @@ use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
 use crate::codex_thread::ThreadConfigSnapshot;
-use crate::context_manager::is_user_turn_boundary;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
-use crate::event_mapping::parse_turn_item;
 use crate::find_archived_thread_path_by_id_str;
 use crate::find_thread_path_by_id_str;
 use crate::rollout::RolloutRecorder;
@@ -20,10 +18,7 @@ use crate::thread_manager::ThreadManagerState;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
-use codex_protocol::items::TurnItem;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -34,13 +29,25 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
-use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::watch;
 use tracing::warn;
+
+#[cfg(test)]
+use crate::context_manager::is_user_turn_boundary;
+#[cfg(test)]
+use crate::event_mapping::parse_turn_item;
+#[cfg(test)]
+use codex_protocol::items::TurnItem;
+#[cfg(test)]
+use codex_protocol::models::ContentItem;
+#[cfg(test)]
+use codex_protocol::models::ResponseInputItem;
+#[cfg(test)]
+use serde::Serialize;
 
 const AGENT_NAMES: &str = include_str!("agent_names.txt");
 const FORKED_SPAWN_AGENT_OUTPUT_MESSAGE: &str = "You are the newly spawned agent. The prior conversation history was forked from your parent agent. Treat the next user message as your new task, and use the forked history only as background context.";
@@ -57,6 +64,7 @@ pub(crate) struct LiveAgent {
     pub(crate) status: AgentStatus,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub(crate) struct ListedAgent {
     pub(crate) agent_name: String,
@@ -707,6 +715,7 @@ impl AgentControl {
             .join("\n")
     }
 
+    #[cfg(test)]
     pub(crate) async fn list_agents(
         &self,
         current_session_source: &SessionSource,
@@ -1049,6 +1058,7 @@ fn thread_spawn_parent_thread_id(session_source: &SessionSource) -> Option<Threa
     }
 }
 
+#[cfg(test)]
 fn agent_matches_prefix(agent_path: Option<&AgentPath>, prefix: &AgentPath) -> bool {
     if prefix.is_root() {
         return true;
@@ -1063,6 +1073,7 @@ fn agent_matches_prefix(agent_path: Option<&AgentPath>, prefix: &AgentPath) -> b
     })
 }
 
+#[cfg(test)]
 async fn last_task_message_for_thread(thread: &crate::CodexThread) -> Option<String> {
     let pending_input = thread.codex.session.pending_input_snapshot().await;
     if let Some(message) = pending_input
@@ -1094,11 +1105,13 @@ async fn last_task_message_for_thread(thread: &crate::CodexThread) -> Option<Str
         .find_map(last_task_message_from_item)
 }
 
+#[cfg(test)]
 fn last_task_message_from_input_item(item: &ResponseInputItem) -> Option<String> {
     let response_item: ResponseItem = item.clone().into();
     last_task_message_from_item(&response_item)
 }
 
+#[cfg(test)]
 fn last_task_message_from_item(item: &ResponseItem) -> Option<String> {
     if !is_user_turn_boundary(item) {
         return None;

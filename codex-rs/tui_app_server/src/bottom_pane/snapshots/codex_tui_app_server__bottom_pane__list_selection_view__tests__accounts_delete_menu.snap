@@ -1,0 +1,21 @@
+---
+source: tui_app_server/src/bottom_pane/list_selection_view.rs
+expression: render_lines(&view)
+---
+                                                
+  Delete                                        
+  Delete saved snapshots for 2 managed account  
+                                                
+› 1. Delete Primary (disabled)  workspace-1 ·   
+                                pri***@example  
+                                .com · active   
+                                (disabled:      
+                                Switch away     
+                                before          
+                                deleting)       
+  2. Delete Backup              workspace-2 ·   
+                                bac***@example  
+                                .com            
+                                                
+  /tmp/codex-home/accounts.json                 
+  Press enter to confirm or esc to go back

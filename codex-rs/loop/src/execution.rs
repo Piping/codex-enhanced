@@ -28,7 +28,7 @@ pub fn apply_loop_execution_settings(
         .map(|cwd| resolve_absolute_path(cwd, workspace_cwd))
         .transpose()?;
     if let Some(cwd) = resolved_cwd {
-        config.cwd = cwd.into();
+        config.cwd = cwd;
     }
 
     if !settings.writable_roots.is_empty() {

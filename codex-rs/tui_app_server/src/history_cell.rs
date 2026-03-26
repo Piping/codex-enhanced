@@ -12,6 +12,7 @@
 
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
+use crate::display_preferences::DisplayPreferences;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::OutputLinesParams;
 use crate::exec_cell::TOOL_CALL_MAX_LINES;
@@ -586,13 +587,19 @@ impl HistoryCell for PrefixedWrappedHistoryCell {
 pub(crate) struct UnifiedExecInteractionCell {
     command_display: Option<String>,
     stdin: String,
+    display_preferences: DisplayPreferences,
 }
 
 impl UnifiedExecInteractionCell {
-    pub(crate) fn new(command_display: Option<String>, stdin: String) -> Self {
+    pub(crate) fn new(
+        command_display: Option<String>,
+        stdin: String,
+        display_preferences: DisplayPreferences,
+    ) -> Self {
         Self {
             command_display,
             stdin,
+            display_preferences,
         }
     }
 }
@@ -604,6 +611,9 @@ impl HistoryCell for UnifiedExecInteractionCell {
         }
         let wrap_width = width as usize;
         let waited_only = self.stdin.is_empty();
+        if waited_only && !self.display_preferences.show_waited_messages() {
+            return Vec::new();
+        }
 
         let mut header_spans = if waited_only {
             vec!["• Waited for background terminal".bold()]
@@ -646,8 +656,9 @@ impl HistoryCell for UnifiedExecInteractionCell {
 pub(crate) fn new_unified_exec_interaction(
     command_display: Option<String>,
     stdin: String,
+    display_preferences: DisplayPreferences,
 ) -> UnifiedExecInteractionCell {
-    UnifiedExecInteractionCell::new(command_display, stdin)
+    UnifiedExecInteractionCell::new(command_display, stdin, display_preferences)
 }
 
 #[derive(Debug)]
@@ -928,26 +939,43 @@ impl ApprovalDecisionActor {
 pub fn new_guardian_denied_patch_request(
     files: Vec<String>,
     change_count: usize,
+    display_preferences: DisplayPreferences,
 ) -> Box<dyn HistoryCell> {
-    let mut summary = vec![
-        "Request ".into(),
-        "denied".bold(),
-        " for codex to apply ".into(),
-    ];
-    if files.len() == 1 {
-        summary.push("a patch touching ".into());
-        summary.push(Span::from(files[0].clone()).dim());
-    } else {
-        summary.push(format!("a patch touching {change_count} changes across ").into());
-        summary.push(Span::from(files.len().to_string()).dim());
-        summary.push(" files".into());
-    }
+    Box::new(GuardianDeniedPatchRequestCell {
+        files,
+        change_count,
+        display_preferences,
+    })
+}
 
-    Box::new(PrefixedWrappedHistoryCell::new(
-        Line::from(summary),
-        "✗ ".red(),
-        "  ",
-    ))
+#[derive(Debug)]
+struct GuardianDeniedPatchRequestCell {
+    files: Vec<String>,
+    change_count: usize,
+    display_preferences: DisplayPreferences,
+}
+
+impl HistoryCell for GuardianDeniedPatchRequestCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut summary = vec![
+            "Request ".into(),
+            "denied".bold(),
+            " for codex to apply ".into(),
+        ];
+        if self.display_preferences.show_patch_diffs() && self.files.len() == 1 {
+            summary.push("a patch touching ".into());
+            summary.push(Span::from(self.files[0].clone()).dim());
+        } else {
+            summary.push(format!("a patch touching {} changes across ", self.change_count).into());
+            summary.push(Span::from(self.files.len().to_string()).dim());
+            summary.push(" files".into());
+            if !self.display_preferences.show_patch_diffs() {
+                summary.push(" (diff hidden)".dim());
+            }
+        }
+
+        PrefixedWrappedHistoryCell::new(Line::from(summary), "✗ ".red(), "  ").display_lines(width)
+    }
 }
 
 pub fn new_guardian_denied_action_request(summary: String) -> Box<dyn HistoryCell> {
@@ -981,10 +1009,20 @@ pub(crate) fn new_review_status_line(message: String) -> PlainHistoryCell {
 pub(crate) struct PatchHistoryCell {
     changes: HashMap<PathBuf, FileChange>,
     cwd: PathBuf,
+    display_preferences: DisplayPreferences,
 }
 
 impl HistoryCell for PatchHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if !self.display_preferences.show_patch_diffs() {
+            let file_count = self.changes.len();
+            let noun = if file_count == 1 { "file" } else { "files" };
+            return vec![
+                format!("• Edited {file_count} {noun} (diff hidden)")
+                    .dim()
+                    .into(),
+            ];
+        }
         create_diff_summary(&self.changes, &self.cwd, width as usize)
     }
 }
@@ -992,9 +1030,13 @@ impl HistoryCell for PatchHistoryCell {
 #[derive(Debug)]
 struct CompletedMcpToolCallWithImageOutput {
     _image: DynamicImage,
+    display_preferences: DisplayPreferences,
 }
 impl HistoryCell for CompletedMcpToolCallWithImageOutput {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        if !self.display_preferences.show_tool_results() {
+            return Vec::new();
+        }
         vec!["tool result (image output)".into()]
     }
 }
@@ -1079,19 +1121,24 @@ pub(crate) fn padded_emoji(emoji: &str) -> String {
 struct TooltipHistoryCell {
     tip: String,
     cwd: PathBuf,
+    display_preferences: DisplayPreferences,
 }
 
 impl TooltipHistoryCell {
-    fn new(tip: String, cwd: &Path) -> Self {
+    fn new(tip: String, cwd: &Path, display_preferences: DisplayPreferences) -> Self {
         Self {
             tip,
             cwd: cwd.to_path_buf(),
+            display_preferences,
         }
     }
 }
 
 impl HistoryCell for TooltipHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if !self.display_preferences.show_startup_tooltips() {
+            return Vec::new();
+        }
         let indent = "  ";
         let indent_width = UnicodeWidthStr::width(indent);
         let wrap_width = usize::from(width.max(1))
@@ -1112,6 +1159,14 @@ impl HistoryCell for TooltipHistoryCell {
 #[derive(Debug)]
 pub struct SessionInfoCell(CompositeHistoryCell);
 
+pub(crate) struct SessionInfoOptions {
+    pub(crate) is_first_event: bool,
+    pub(crate) tooltip_override: Option<String>,
+    pub(crate) display_preferences: DisplayPreferences,
+    pub(crate) auth_plan: Option<PlanType>,
+    pub(crate) show_fast_status: bool,
+}
+
 impl HistoryCell for SessionInfoCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.0.display_lines(width)
@@ -1130,11 +1185,15 @@ pub(crate) fn new_session_info(
     config: &Config,
     requested_model: &str,
     event: SessionConfiguredEvent,
-    is_first_event: bool,
-    tooltip_override: Option<String>,
-    auth_plan: Option<PlanType>,
-    show_fast_status: bool,
+    options: SessionInfoOptions,
 ) -> SessionInfoCell {
+    let SessionInfoOptions {
+        is_first_event,
+        tooltip_override,
+        display_preferences,
+        auth_plan,
+        show_fast_status,
+    } = options;
     let SessionConfiguredEvent {
         model,
         reasoning_effort,
@@ -1186,15 +1245,14 @@ pub(crate) fn new_session_info(
 
         parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
     } else {
-        if config.show_tooltips
-            && let Some(tooltips) = tooltip_override
-                .or_else(|| {
-                    tooltips::get_tooltip(
-                        auth_plan,
-                        matches!(config.service_tier, Some(ServiceTier::Fast)),
-                    )
-                })
-                .map(|tip| TooltipHistoryCell::new(tip, &config.cwd))
+        if let Some(tooltips) = tooltip_override
+            .or_else(|| {
+                tooltips::get_tooltip(
+                    auth_plan,
+                    matches!(config.service_tier, Some(ServiceTier::Fast)),
+                )
+            })
+            .map(|tip| TooltipHistoryCell::new(tip, &config.cwd, display_preferences))
         {
             parts.push(Box::new(tooltips));
         }
@@ -1411,6 +1469,7 @@ pub(crate) struct McpToolCallCell {
     duration: Option<Duration>,
     result: Option<Result<codex_protocol::mcp::CallToolResult, String>>,
     animations_enabled: bool,
+    display_preferences: DisplayPreferences,
 }
 
 impl McpToolCallCell {
@@ -1418,6 +1477,7 @@ impl McpToolCallCell {
         call_id: String,
         invocation: McpInvocation,
         animations_enabled: bool,
+        display_preferences: DisplayPreferences,
     ) -> Self {
         Self {
             call_id,
@@ -1426,6 +1486,7 @@ impl McpToolCallCell {
             duration: None,
             result: None,
             animations_enabled,
+            display_preferences,
         }
     }
 
@@ -1438,8 +1499,11 @@ impl McpToolCallCell {
         duration: Duration,
         result: Result<codex_protocol::mcp::CallToolResult, String>,
     ) -> Option<Box<dyn HistoryCell>> {
-        let image_cell = try_new_completed_mcp_tool_call_with_image_output(&result)
-            .map(|cell| Box::new(cell) as Box<dyn HistoryCell>);
+        let image_cell = try_new_completed_mcp_tool_call_with_image_output(
+            &result,
+            self.display_preferences.clone(),
+        )
+        .map(|cell| Box::new(cell) as Box<dyn HistoryCell>);
         self.duration = Some(duration);
         self.result = Some(result);
         image_cell
@@ -1531,7 +1595,9 @@ impl HistoryCell for McpToolCallCell {
         // Reserve four columns for the tree prefix ("  └ "/"    ") and ensure the wrapper still has at least one cell to work with.
         let detail_wrap_width = (width as usize).saturating_sub(4).max(1);
 
-        if let Some(result) = &self.result {
+        if self.display_preferences.show_tool_results()
+            && let Some(result) = &self.result
+        {
             match result {
                 Ok(codex_protocol::mcp::CallToolResult { content, .. }) => {
                     if !content.is_empty() {
@@ -1592,8 +1658,9 @@ pub(crate) fn new_active_mcp_tool_call(
     call_id: String,
     invocation: McpInvocation,
     animations_enabled: bool,
+    display_preferences: DisplayPreferences,
 ) -> McpToolCallCell {
-    McpToolCallCell::new(call_id, invocation, animations_enabled)
+    McpToolCallCell::new(call_id, invocation, animations_enabled, display_preferences)
 }
 
 fn web_search_header(completed: bool) -> &'static str {
@@ -1700,6 +1767,7 @@ pub(crate) fn new_web_search_call(
 ///   even when the first block is not a valid image.
 fn try_new_completed_mcp_tool_call_with_image_output(
     result: &Result<codex_protocol::mcp::CallToolResult, String>,
+    display_preferences: DisplayPreferences,
 ) -> Option<CompletedMcpToolCallWithImageOutput> {
     let image = result
         .as_ref()
@@ -1708,7 +1776,10 @@ fn try_new_completed_mcp_tool_call_with_image_output(
         .iter()
         .find_map(decode_mcp_image)?;
 
-    Some(CompletedMcpToolCallWithImageOutput { _image: image })
+    Some(CompletedMcpToolCallWithImageOutput {
+        _image: image,
+        display_preferences,
+    })
 }
 
 /// Decodes an MCP `ImageContent` block into an in-memory image.
@@ -2493,10 +2564,12 @@ impl HistoryCell for PlanUpdateCell {
 pub(crate) fn new_patch_event(
     changes: HashMap<PathBuf, FileChange>,
     cwd: &Path,
+    display_preferences: DisplayPreferences,
 ) -> PatchHistoryCell {
     PatchHistoryCell {
         changes,
         cwd: cwd.to_path_buf(),
+        display_preferences,
     }
 }
 
@@ -2591,6 +2664,48 @@ pub(crate) fn new_reasoning_summary_block(
         &cwd,
         /*transcript_only*/ true,
     ))
+}
+
+#[derive(Debug)]
+pub(crate) struct ReasoningRawContentCell {
+    content: String,
+    cwd: PathBuf,
+    display_preferences: DisplayPreferences,
+}
+
+impl HistoryCell for ReasoningRawContentCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if !self.display_preferences.show_raw_thinking() {
+            return Vec::new();
+        }
+
+        let mut lines = vec![vec!["• ".dim(), "Raw Thinking".dim().italic()].into()];
+        let mut body = Vec::new();
+        append_markdown(
+            &self.content,
+            Some((width as usize).saturating_sub(4)),
+            Some(self.cwd.as_path()),
+            &mut body,
+        );
+        lines.extend(prefix_lines(body, "  ".into(), "  ".into()));
+        lines
+    }
+
+    fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.display_lines(width)
+    }
+}
+
+pub(crate) fn new_reasoning_raw_block(
+    full_raw_reasoning_buffer: String,
+    cwd: &Path,
+    display_preferences: DisplayPreferences,
+) -> Box<dyn HistoryCell> {
+    Box::new(ReasoningRawContentCell {
+        content: full_raw_reasoning_buffer.trim().to_string(),
+        cwd: cwd.to_path_buf(),
+        display_preferences,
+    })
 }
 
 #[derive(Debug)]
@@ -2766,6 +2881,7 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::display_preferences::DisplayPreferenceKey;
     use crate::exec_cell::CommandOutput;
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
@@ -2897,8 +3013,11 @@ mod tests {
 
     #[test]
     fn unified_exec_interaction_cell_renders_input() {
-        let cell =
-            new_unified_exec_interaction(Some("echo hello".to_string()), "ls\npwd".to_string());
+        let cell = new_unified_exec_interaction(
+            Some("echo hello".to_string()),
+            "ls\npwd".to_string(),
+            DisplayPreferences::default(),
+        );
         let lines = render_transcript(&cell);
         assert_eq!(
             lines,
@@ -2912,9 +3031,18 @@ mod tests {
 
     #[test]
     fn unified_exec_interaction_cell_renders_wait() {
-        let cell = new_unified_exec_interaction(None, String::new());
+        let cell = new_unified_exec_interaction(None, String::new(), DisplayPreferences::default());
         let lines = render_transcript(&cell);
         assert_eq!(lines, vec!["• Waited for background terminal"]);
+    }
+
+    #[test]
+    fn unified_exec_interaction_cell_hides_wait_when_preference_disabled() {
+        let display_preferences = DisplayPreferences::default();
+        display_preferences.set_enabled(DisplayPreferenceKey::WaitedMessages, false);
+        let cell = new_unified_exec_interaction(None, String::new(), display_preferences);
+        let lines = render_transcript(&cell);
+        assert_eq!(lines, Vec::<String>::new());
     }
 
     #[test]
@@ -2988,10 +3116,13 @@ mod tests {
             &config,
             "gpt-5",
             session_configured_event("gpt-5"),
-            false,
-            Some("Model just became available".to_string()),
-            Some(PlanType::Free),
-            false,
+            SessionInfoOptions {
+                is_first_event: false,
+                tooltip_override: Some("Model just became available".to_string()),
+                display_preferences: DisplayPreferences::from_config(&config),
+                auth_plan: Some(PlanType::Free),
+                show_fast_status: false,
+            },
         );
 
         let rendered = render_transcript(&cell).join("\n");
@@ -3010,10 +3141,13 @@ mod tests {
             &config,
             "gpt-5",
             session_configured_event("gpt-5"),
-            false,
-            Some("Model just became available".to_string()),
-            Some(PlanType::Free),
-            false,
+            SessionInfoOptions {
+                is_first_event: false,
+                tooltip_override: Some("Model just became available".to_string()),
+                display_preferences: DisplayPreferences::from_config(&config),
+                auth_plan: Some(PlanType::Free),
+                show_fast_status: false,
+            },
         );
 
         let rendered = render_transcript(&cell).join("\n");
@@ -3027,10 +3161,13 @@ mod tests {
             &config,
             "gpt-5",
             session_configured_event("gpt-5"),
-            true,
-            Some("Model just became available".to_string()),
-            Some(PlanType::Free),
-            false,
+            SessionInfoOptions {
+                is_first_event: true,
+                tooltip_override: Some("Model just became available".to_string()),
+                display_preferences: DisplayPreferences::from_config(&config),
+                auth_plan: Some(PlanType::Free),
+                show_fast_status: false,
+            },
         );
 
         let rendered = render_transcript(&cell).join("\n");
@@ -3046,10 +3183,13 @@ mod tests {
             &config,
             "gpt-5",
             session_configured_event("gpt-5"),
-            false,
-            Some("Model just became available".to_string()),
-            Some(PlanType::Free),
-            false,
+            SessionInfoOptions {
+                is_first_event: false,
+                tooltip_override: Some("Model just became available".to_string()),
+                display_preferences: DisplayPreferences::from_config(&config),
+                auth_plan: Some(PlanType::Free),
+                show_fast_status: false,
+            },
         );
 
         let rendered = render_transcript(&cell).join("\n");
@@ -3324,7 +3464,11 @@ mod tests {
     fn unified_exec_interaction_cell_does_not_split_url_like_stdin_token() {
         let url_like =
             "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890";
-        let cell = UnifiedExecInteractionCell::new(Some("true".to_string()), url_like.to_string());
+        let cell = UnifiedExecInteractionCell::new(
+            Some("true".to_string()),
+            url_like.to_string(),
+            DisplayPreferences::default(),
+        );
         let rendered = render_lines(&cell.display_lines(24));
 
         assert_eq!(
@@ -3380,6 +3524,7 @@ mod tests {
         let cell: Box<dyn HistoryCell> = Box::new(UnifiedExecInteractionCell::new(
             Some("true".to_string()),
             url_like.to_string(),
+            DisplayPreferences::default(),
         ));
 
         let width: u16 = 24;
@@ -3494,7 +3639,12 @@ mod tests {
             })),
         };
 
-        let cell = new_active_mcp_tool_call("call-1".into(), invocation, true);
+        let cell = new_active_mcp_tool_call(
+            "call-1".into(),
+            invocation,
+            true,
+            DisplayPreferences::default(),
+        );
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
 
         insta::assert_snapshot!(rendered);
@@ -3526,7 +3676,12 @@ mod tests {
             meta: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-2".into(), invocation, true);
+        let mut cell = new_active_mcp_tool_call(
+            "call-2".into(),
+            invocation,
+            true,
+            DisplayPreferences::default(),
+        );
         assert!(
             cell.complete(Duration::from_millis(1420), Ok(result))
                 .is_none()
@@ -3557,7 +3712,12 @@ mod tests {
             meta: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-image".into(), invocation, true);
+        let mut cell = new_active_mcp_tool_call(
+            "call-image".into(),
+            invocation,
+            true,
+            DisplayPreferences::default(),
+        );
         let extra_cell = cell
             .complete(Duration::from_millis(25), Ok(result))
             .expect("expected image cell");
@@ -3584,7 +3744,12 @@ mod tests {
             meta: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-image-data-url".into(), invocation, true);
+        let mut cell = new_active_mcp_tool_call(
+            "call-image-data-url".into(),
+            invocation,
+            true,
+            DisplayPreferences::default(),
+        );
         let extra_cell = cell
             .complete(Duration::from_millis(25), Ok(result))
             .expect("expected image cell");
@@ -3610,7 +3775,12 @@ mod tests {
             meta: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-image-2".into(), invocation, true);
+        let mut cell = new_active_mcp_tool_call(
+            "call-image-2".into(),
+            invocation,
+            true,
+            DisplayPreferences::default(),
+        );
         let extra_cell = cell
             .complete(Duration::from_millis(25), Ok(result))
             .expect("expected image cell");
@@ -3630,7 +3800,12 @@ mod tests {
             })),
         };
 
-        let mut cell = new_active_mcp_tool_call("call-3".into(), invocation, true);
+        let mut cell = new_active_mcp_tool_call(
+            "call-3".into(),
+            invocation,
+            true,
+            DisplayPreferences::default(),
+        );
         assert!(
             cell.complete(Duration::from_secs(2), Err("network timeout".into()))
                 .is_none()
@@ -3669,7 +3844,12 @@ mod tests {
             meta: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-4".into(), invocation, true);
+        let mut cell = new_active_mcp_tool_call(
+            "call-4".into(),
+            invocation,
+            true,
+            DisplayPreferences::default(),
+        );
         assert!(
             cell.complete(Duration::from_millis(640), Ok(result))
                 .is_none()
@@ -3700,7 +3880,12 @@ mod tests {
             meta: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-5".into(), invocation, true);
+        let mut cell = new_active_mcp_tool_call(
+            "call-5".into(),
+            invocation,
+            true,
+            DisplayPreferences::default(),
+        );
         assert!(
             cell.complete(Duration::from_millis(1280), Ok(result))
                 .is_none()
@@ -3732,7 +3917,12 @@ mod tests {
             meta: None,
         };
 
-        let mut cell = new_active_mcp_tool_call("call-6".into(), invocation, true);
+        let mut cell = new_active_mcp_tool_call(
+            "call-6".into(),
+            invocation,
+            true,
+            DisplayPreferences::default(),
+        );
         assert!(
             cell.complete(Duration::from_millis(320), Ok(result))
                 .is_none()
@@ -3839,6 +4029,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            DisplayPreferences::default(),
         );
         // Mark call complete so markers are ✓
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
@@ -3866,6 +4057,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            DisplayPreferences::default(),
         );
         // Call 1: Search only
         cell.complete_call("c1", CommandOutput::default(), Duration::from_millis(1));
@@ -3935,6 +4127,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            DisplayPreferences::default(),
         );
         cell.complete_call("c1", CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(80);
@@ -3959,6 +4152,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            DisplayPreferences::default(),
         );
         // Mark call complete so it renders as "Ran"
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
@@ -3985,6 +4179,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            DisplayPreferences::default(),
         );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         // Wide enough that it fits inline
@@ -4009,6 +4204,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            DisplayPreferences::default(),
         );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(24);
@@ -4032,6 +4228,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            DisplayPreferences::default(),
         );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(80);
@@ -4056,6 +4253,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            DisplayPreferences::default(),
         );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(28);
@@ -4080,6 +4278,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            DisplayPreferences::default(),
         );
         let stderr: String = (1..=10)
             .map(|n| n.to_string())
@@ -4130,6 +4329,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            DisplayPreferences::default(),
         );
 
         let stderr = "error: first line on stderr\nerror: second line on stderr".to_string();

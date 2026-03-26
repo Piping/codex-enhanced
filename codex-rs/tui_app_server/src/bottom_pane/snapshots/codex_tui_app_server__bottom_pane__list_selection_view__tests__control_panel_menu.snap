@@ -1,0 +1,15 @@
+---
+source: tui_app_server/src/bottom_pane/list_selection_view.rs
+expression: render_lines(&view)
+---
+                                                
+  Control Panel                                 
+  4 features available.                         
+                                                
+› 1. Accounts                Inspect the managed
+                             multi-account pool.
+  2. Sessions                                   
+  3. Thread                                     
+  4. Show / Hide UI                             
+                                                
+  Press enter to confirm or esc to go back      

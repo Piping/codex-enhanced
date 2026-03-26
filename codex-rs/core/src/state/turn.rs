@@ -198,6 +198,7 @@ impl TurnState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn pending_input_snapshot(&self) -> Vec<ResponseInputItem> {
         self.pending_input.clone()
     }

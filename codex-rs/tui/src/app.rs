@@ -16,6 +16,9 @@ use crate::chatwidget::ExternalEditorState;
 use crate::chatwidget::ThreadInputState;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
+use crate::display_preferences::DisplayPreferences;
+use crate::display_preferences::display_preference_edit;
+use crate::display_preferences::set_display_preference_in_config;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::external_editor;
 use crate::file_search::FileSearchManager;
@@ -31,6 +34,7 @@ use crate::multi_agents::format_agent_picker_item_name;
 use crate::multi_agents::next_agent_shortcut_matches;
 use crate::multi_agents::previous_agent_shortcut_matches;
 use crate::pager_overlay::Overlay;
+use crate::rate_limits::fetch_rate_limits;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
@@ -40,6 +44,11 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
+use chrono::Utc;
+use codex_accounts::AccountPoolStore;
+use codex_accounts::ManagedAccountAuthStore;
+use codex_accounts::activate_managed_account;
+use codex_accounts::persist_current_managed_account_snapshot;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::InProcessAppServerClient;
@@ -96,6 +105,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FinalOutput;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
@@ -136,11 +146,27 @@ use toml::Value as TomlValue;
 use uuid::Uuid;
 
 mod agent_navigation;
+mod btw;
+mod display_preferences_menu;
+mod jump_navigation;
+mod key_chord;
+mod loop_timers;
 mod pending_interactive_replay;
+mod thread_menu;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
+use self::btw::BtwSessionState;
+use self::display_preferences_menu::control_panel_show_hide_item;
+use self::display_preferences_menu::display_preferences_items;
+use self::jump_navigation::build_jump_catalog;
+use self::key_chord::KeyChordAction;
+use self::key_chord::KeyChordResolution;
+use self::key_chord::KeyChordState;
+use self::loop_timers::LoopTimersState;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
+use self::thread_menu::control_panel_thread_item;
+use self::thread_menu::thread_panel_items;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
@@ -908,6 +934,7 @@ pub(crate) struct App {
     harness_overrides: ConfigOverrides,
     runtime_approval_policy_override: Option<AskForApproval>,
     runtime_sandbox_policy_override: Option<SandboxPolicy>,
+    display_preferences: DisplayPreferences,
 
     pub(crate) file_search: FileSearchManager,
 
@@ -929,6 +956,7 @@ pub(crate) struct App {
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
+    key_chord: KeyChordState,
     /// When set, the next draw re-renders the transcript into terminal scrollback once.
     ///
     /// This is used after a confirmed thread rollback to ensure scrollback reflects the trimmed
@@ -956,6 +984,8 @@ pub(crate) struct App {
     pending_shutdown_exit_thread_id: Option<ThreadId>,
 
     windows_sandbox: WindowsSandboxState,
+    btw_session: Option<BtwSessionState>,
+    loop_timers: LoopTimersState,
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
@@ -1011,6 +1041,7 @@ impl App {
             feedback_audience: self.feedback_audience,
             model: Some(self.chat_widget.current_model().to_string()),
             startup_tooltip_override: None,
+            display_preferences: self.display_preferences.clone(),
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
             session_telemetry: self.session_telemetry.clone(),
             terminal_title_invalid_items_warned: self.terminal_title_invalid_items_warned.clone(),
@@ -1037,6 +1068,7 @@ impl App {
         self.apply_runtime_policy_overrides(&mut config);
         self.config = config;
         self.chat_widget.sync_plugin_mentions_config(&self.config);
+        self.display_preferences.sync_from_config(&self.config);
         Ok(())
     }
 
@@ -1954,6 +1986,7 @@ impl App {
             let thread_id = session.session_id;
             self.primary_thread_id = Some(thread_id);
             self.primary_session_configured = Some(session.clone());
+            self.ensure_loop_timers_loaded();
             self.upsert_agent_picker_thread(
                 thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
                 /*is_closed*/ false,
@@ -2070,6 +2103,698 @@ impl App {
         self.sync_active_agent_label();
     }
 
+    fn open_control_panel(&mut self) {
+        let items = vec![
+            SelectionItem {
+                name: "Accounts".to_string(),
+                description: None,
+                selected_description: Some("Inspect the managed multi-account pool.".to_string()),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenAccountsPanel))],
+                dismiss_on_select: false,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Sessions".to_string(),
+                description: None,
+                selected_description: Some("Resume or switch saved chats.".to_string()),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenResumePickerAll))],
+                dismiss_on_select: false,
+                ..Default::default()
+            },
+            control_panel_thread_item(),
+            SelectionItem {
+                name: "Loop Manager".to_string(),
+                description: None,
+                selected_description: Some(
+                    "Manage workspace-local `/loop` scheduled prompts.".to_string(),
+                ),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenLoopTimersPanel))],
+                dismiss_on_select: false,
+                ..Default::default()
+            },
+            control_panel_show_hide_item(),
+        ];
+
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            view_id: Some("fork-control-panel"),
+            title: Some("Control Panel".to_string()),
+            subtitle: Some(format!("{} features available.", items.len())),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn thread_panel_params(&self, initial_selected_idx: Option<usize>) -> SelectionViewParams {
+        let items = thread_panel_items();
+        SelectionViewParams {
+            view_id: Some("fork-thread-panel"),
+            title: Some("Thread".to_string()),
+            subtitle: Some(format!("{} actions available.", items.len())),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx,
+            ..Default::default()
+        }
+    }
+
+    fn open_thread_panel(&mut self) {
+        let view_id = "fork-thread-panel";
+        let initial_selected_idx = self.chat_widget.selected_index_for_active_view(view_id);
+        if !self.chat_widget.replace_selection_view_if_active(
+            view_id,
+            self.thread_panel_params(initial_selected_idx),
+        ) {
+            self.chat_widget
+                .show_selection_view(self.thread_panel_params(initial_selected_idx));
+        }
+    }
+
+    fn append_visible_history_cell(&mut self, tui: &mut tui::Tui, cell: Arc<dyn HistoryCell>) {
+        if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+            t.insert_cell(cell.clone());
+            tui.frame_requester().schedule_frame();
+        }
+        self.transcript_cells.push(cell.clone());
+        let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+        if !display.is_empty() {
+            if !cell.is_stream_continuation() {
+                if self.has_emitted_history_lines {
+                    display.insert(0, Line::from(""));
+                } else {
+                    self.has_emitted_history_lines = true;
+                }
+            }
+            if self.overlay.is_some() {
+                self.deferred_history_lines.extend(display);
+            } else {
+                tui.insert_history_lines(display);
+            }
+        }
+    }
+
+    fn display_preferences_panel_params(
+        &self,
+        initial_selected_idx: Option<usize>,
+    ) -> SelectionViewParams {
+        SelectionViewParams {
+            view_id: Some("fork-display-preferences-panel"),
+            title: Some("Show / Hide UI".to_string()),
+            subtitle: Some("These toggles only affect this TUI session.".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            footer_note: Some(
+                "Model context and persisted rollout history are unchanged."
+                    .dim()
+                    .into(),
+            ),
+            items: display_preferences_items(&self.display_preferences),
+            initial_selected_idx,
+            ..Default::default()
+        }
+    }
+
+    fn open_display_preferences_panel(&mut self) {
+        let view_id = "fork-display-preferences-panel";
+        let initial_selected_idx = self.chat_widget.selected_index_for_active_view(view_id);
+        if !self.chat_widget.replace_selection_view_if_active(
+            view_id,
+            self.display_preferences_panel_params(initial_selected_idx),
+        ) {
+            self.chat_widget
+                .show_selection_view(self.display_preferences_panel_params(initial_selected_idx));
+        }
+    }
+
+    fn open_jump_to_message_panel(&mut self) {
+        let catalog = build_jump_catalog(&self.transcript_cells);
+        let subtitle = if catalog.is_empty() {
+            Some("No committed transcript entries are available yet.".to_string())
+        } else {
+            Some(format!(
+                "{} committed transcript entr{} available.",
+                catalog.len(),
+                if catalog.len() == 1 {
+                    "y is"
+                } else {
+                    "ies are"
+                }
+            ))
+        };
+        let items = if catalog.is_empty() {
+            vec![SelectionItem {
+                name: "Nothing to jump to yet".to_string(),
+                description: Some(
+                    "Send a message or wait for a response before using Jump To Message."
+                        .to_string(),
+                ),
+                is_disabled: true,
+                ..Default::default()
+            }]
+        } else {
+            catalog
+                .targets
+                .iter()
+                .map(|target| {
+                    let cell_index = target.cell_index;
+                    SelectionItem {
+                        name: target.title.clone(),
+                        description: Some(target.preview.clone()),
+                        actions: vec![Box::new(move |tx| {
+                            tx.send(AppEvent::JumpToTranscriptCell(cell_index));
+                        })],
+                        dismiss_on_select: true,
+                        search_value: Some(target.search_value()),
+                        ..Default::default()
+                    }
+                })
+                .collect()
+        };
+
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            view_id: Some("fork-jump-to-message-panel"),
+            title: Some("Jump To Message".to_string()),
+            subtitle,
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn open_accounts_panel(&mut self) {
+        let view_id = "fork-accounts-panel";
+        let initial_selected_idx = self.chat_widget.selected_index_for_active_view(view_id);
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        let path = store.path();
+        let state = self.sync_current_auth_into_account_pool(&store);
+        let mut items = Vec::new();
+        let subtitle = match &state {
+            Ok(state) => Some(format!(
+                "{} account(s) configured. Active: {}.",
+                state.accounts.len(),
+                state.active_account_id.as_deref().unwrap_or("none")
+            )),
+            Err(err) => Some(format!("Failed to read account pool: {err}")),
+        };
+
+        match state {
+            Ok(state) => {
+                for account in &state.accounts {
+                    let mut description_parts = Vec::new();
+                    if let Some(masked_email) = &account.masked_email {
+                        description_parts.push(masked_email.clone());
+                    }
+                    if let Some(plan_label) = &account.plan_label {
+                        description_parts.push(plan_label.clone());
+                    }
+                    if let Some(usage_summary) = account.usage_summary() {
+                        description_parts.push(usage_summary);
+                    }
+                    if let Some(cooldown_until) = account.cooldown_until {
+                        description_parts.push(format!("cooldown until {cooldown_until}"));
+                    }
+
+                    let account_id = account.id.clone();
+                    let search_value = format!(
+                        "{} {} {}",
+                        account.display_name(),
+                        account.id,
+                        account.masked_email.clone().unwrap_or_default()
+                    );
+                    items.push(SelectionItem {
+                        name: account.display_name().to_string(),
+                        description: (!description_parts.is_empty())
+                            .then(|| description_parts.join(" · ")),
+                        is_current: state.active_account_id.as_deref() == Some(account.id.as_str()),
+                        is_disabled: !account.enabled,
+                        disabled_reason: (!account.enabled).then(|| "Disabled".to_string()),
+                        actions: vec![Box::new(move |tx| {
+                            tx.send(AppEvent::SetManagedAccountActive(account_id.clone()));
+                        })],
+                        dismiss_on_select: true,
+                        search_value: Some(search_value),
+                        ..Default::default()
+                    });
+                }
+                if !state.accounts.is_empty() {
+                    items.push(SelectionItem {
+                        name: "Refresh Quota".to_string(),
+                        description: Some(
+                            "Fetch the latest quota for the active ChatGPT account.".to_string(),
+                        ),
+                        actions: vec![Box::new(|tx| tx.send(AppEvent::RefreshManagedAccountQuota))],
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    });
+                    items.push(SelectionItem {
+                        name: "Rename".to_string(),
+                        description: Some(
+                            "Open alias rename actions for managed accounts.".to_string(),
+                        ),
+                        actions: vec![Box::new(|tx| {
+                            tx.send(AppEvent::OpenManagedAccountRenamePanel)
+                        })],
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    });
+                    items.push(SelectionItem {
+                        name: "Delete".to_string(),
+                        description: Some(
+                            "Open deletion actions for managed accounts.".to_string(),
+                        ),
+                        actions: vec![Box::new(|tx| {
+                            tx.send(AppEvent::OpenManagedAccountDeletePanel)
+                        })],
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    });
+                }
+            }
+            Err(err) => {
+                items.push(SelectionItem {
+                    name: "Account pool unavailable".to_string(),
+                    description: Some(err.to_string()),
+                    is_disabled: true,
+                    ..Default::default()
+                });
+            }
+        }
+
+        if items.is_empty() {
+            items.push(SelectionItem {
+                name: "No managed accounts yet".to_string(),
+                description: Some(format!(
+                    "Run repeated ChatGPT login flows and persist them into {}.",
+                    path.display()
+                )),
+                is_disabled: true,
+                ..Default::default()
+            });
+        }
+
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            view_id: Some(view_id),
+            title: Some("Accounts".to_string()),
+            subtitle,
+            footer_hint: Some(standard_popup_hint_line()),
+            footer_path: Some(path.display().to_string()),
+            initial_selected_idx,
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn open_managed_account_rename_panel(&mut self) {
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        let path = store.path();
+        let state = self.sync_current_auth_into_account_pool(&store);
+        let mut items = Vec::new();
+        let subtitle = match &state {
+            Ok(state) => Some(format!(
+                "Rename aliases for {} managed account(s).",
+                state.accounts.len()
+            )),
+            Err(err) => Some(format!("Failed to read account pool: {err}")),
+        };
+
+        match state {
+            Ok(state) => {
+                for account in &state.accounts {
+                    let account_id = account.id.clone();
+                    let current_alias = account.alias.clone();
+                    let mut description_parts = Vec::new();
+                    if let Some(alias) =
+                        (!current_alias.is_empty()).then_some(current_alias.clone())
+                    {
+                        description_parts.push(format!("alias: {alias}"));
+                    }
+                    description_parts.push(account.id.clone());
+                    if let Some(masked_email) = &account.masked_email {
+                        description_parts.push(masked_email.clone());
+                    }
+                    items.push(SelectionItem {
+                        name: format!("Rename {}", account.display_name()),
+                        description: Some(description_parts.join(" · ")),
+                        actions: vec![Box::new(move |tx| {
+                            tx.send(AppEvent::OpenRenameManagedAccountAliasPrompt {
+                                account_id: account_id.clone(),
+                                current_alias: current_alias.clone(),
+                            });
+                        })],
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    });
+                }
+            }
+            Err(err) => {
+                items.push(SelectionItem {
+                    name: "Account pool unavailable".to_string(),
+                    description: Some(err.to_string()),
+                    is_disabled: true,
+                    ..Default::default()
+                });
+            }
+        }
+
+        if items.is_empty() {
+            items.push(SelectionItem {
+                name: "No managed accounts yet".to_string(),
+                description: Some(format!(
+                    "Run repeated ChatGPT login flows and persist them into {}.",
+                    path.display()
+                )),
+                is_disabled: true,
+                ..Default::default()
+            });
+        }
+
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            view_id: Some("fork-account-rename-panel"),
+            title: Some("Rename".to_string()),
+            subtitle,
+            footer_hint: Some(standard_popup_hint_line()),
+            footer_path: Some(path.display().to_string()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn open_managed_account_delete_panel(&mut self) {
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        let path = store.path();
+        let state = self.sync_current_auth_into_account_pool(&store);
+        let mut items = Vec::new();
+        let subtitle = match &state {
+            Ok(state) => Some(format!(
+                "Delete saved snapshots for {} managed account(s).",
+                state.accounts.len()
+            )),
+            Err(err) => Some(format!("Failed to read account pool: {err}")),
+        };
+
+        match state {
+            Ok(state) => {
+                for account in &state.accounts {
+                    let account_id = account.id.clone();
+                    let display_name = account.display_name().to_string();
+                    let is_active = state.active_account_id.as_deref() == Some(account.id.as_str());
+                    let mut description_parts = Vec::new();
+                    description_parts.push(account.id.clone());
+                    if let Some(masked_email) = &account.masked_email {
+                        description_parts.push(masked_email.clone());
+                    }
+                    if is_active {
+                        description_parts.push("active".to_string());
+                    }
+                    items.push(SelectionItem {
+                        name: format!("Delete {display_name}"),
+                        description: Some(description_parts.join(" · ")),
+                        is_disabled: is_active,
+                        disabled_reason: is_active
+                            .then(|| "Switch away before deleting".to_string()),
+                        actions: vec![Box::new(move |tx| {
+                            tx.send(AppEvent::OpenDeleteManagedAccountConfirmation {
+                                account_id: account_id.clone(),
+                                display_name: display_name.clone(),
+                            });
+                        })],
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    });
+                }
+            }
+            Err(err) => {
+                items.push(SelectionItem {
+                    name: "Account pool unavailable".to_string(),
+                    description: Some(err.to_string()),
+                    is_disabled: true,
+                    ..Default::default()
+                });
+            }
+        }
+
+        if items.is_empty() {
+            items.push(SelectionItem {
+                name: "No managed accounts yet".to_string(),
+                description: Some(format!(
+                    "Run repeated ChatGPT login flows and persist them into {}.",
+                    path.display()
+                )),
+                is_disabled: true,
+                ..Default::default()
+            });
+        }
+
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            view_id: Some("fork-account-delete-panel"),
+            title: Some("Delete".to_string()),
+            subtitle,
+            footer_hint: Some(standard_popup_hint_line()),
+            footer_path: Some(path.display().to_string()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn sync_current_auth_into_account_pool(
+        &self,
+        store: &AccountPoolStore,
+    ) -> std::io::Result<codex_accounts::AccountPoolState> {
+        let snapshot = persist_current_managed_account_snapshot(
+            &self.config.codex_home,
+            self.config.cli_auth_credentials_store_mode,
+        )?;
+        store.update(|state| {
+            if let Some(snapshot) = &snapshot {
+                state.upsert_account(snapshot.profile.clone());
+            }
+        })
+    }
+
+    fn accounts_panel_is_active(&self) -> bool {
+        self.chat_widget
+            .selected_index_for_active_view("fork-accounts-panel")
+            .is_some()
+    }
+
+    fn apply_rate_limit_snapshot_to_accounts(&mut self, snapshot: RateLimitSnapshot) {
+        self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+        if self.accounts_panel_is_active() {
+            self.open_accounts_panel();
+        }
+    }
+
+    fn refresh_managed_account_quota(&mut self) {
+        let app_event_tx = self.app_event_tx.clone();
+        let auth_manager = Arc::clone(&self.auth_manager);
+        let base_url = self.config.chatgpt_base_url.clone();
+
+        tokio::spawn(async move {
+            let result = match auth_manager.auth().await {
+                Some(auth) if auth.is_chatgpt_auth() => Ok(fetch_rate_limits(base_url, auth).await),
+                Some(_) => Err("The active managed account does not use ChatGPT auth.".to_string()),
+                None => Err("No active managed account is available to refresh.".to_string()),
+            };
+            app_event_tx.send(AppEvent::ManagedAccountQuotaRefreshed(result));
+        });
+    }
+
+    fn finish_managed_account_quota_refresh(
+        &mut self,
+        result: Result<Vec<RateLimitSnapshot>, String>,
+    ) {
+        match result {
+            Ok(snapshots) => {
+                for snapshot in snapshots {
+                    self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+                }
+            }
+            Err(err) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(format!(
+                        "Failed to refresh managed account quota: {err}"
+                    )));
+            }
+        }
+        self.open_accounts_panel();
+    }
+
+    fn set_managed_account_active(&mut self, account_id: String) {
+        if let Err(err) = persist_current_managed_account_snapshot(
+            &self.config.codex_home,
+            self.config.cli_auth_credentials_store_mode,
+        ) {
+            self.chat_widget
+                .add_to_history(history_cell::new_error_event(format!(
+                    "Failed to snapshot current managed account auth: {err}"
+                )));
+            return;
+        }
+        if let Err(err) = activate_managed_account(
+            &self.config.codex_home,
+            self.config.cli_auth_credentials_store_mode,
+            &account_id,
+        ) {
+            self.chat_widget
+                .add_to_history(history_cell::new_error_event(format!(
+                    "Failed to activate managed account auth: {err}"
+                )));
+            return;
+        }
+        self.auth_manager.reload();
+
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        if let Err(err) = store.update(|state| {
+            state.set_active_account(&account_id, Utc::now().timestamp());
+        }) {
+            self.chat_widget
+                .add_to_history(history_cell::new_error_event(format!(
+                    "Failed to update active managed account: {err}"
+                )));
+            return;
+        }
+
+        self.open_accounts_panel();
+    }
+
+    fn save_managed_account_alias(&mut self, account_id: String, alias: String) {
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        if let Err(err) = store.update(|state| {
+            state.rename_account_alias(&account_id, alias.clone());
+        }) {
+            self.chat_widget
+                .add_to_history(history_cell::new_error_event(format!(
+                    "Failed to save managed account alias: {err}"
+                )));
+            return;
+        }
+
+        self.open_managed_account_rename_panel();
+    }
+
+    fn open_managed_account_delete_confirmation(
+        &mut self,
+        account_id: String,
+        display_name: String,
+    ) {
+        let auth_store = ManagedAccountAuthStore::new(self.config.codex_home.clone());
+        let auth_path = auth_store.account_auth_path(&account_id);
+        let confirm_account_id = account_id;
+
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            view_id: Some("fork-account-delete-confirm-panel"),
+            title: Some("Delete Account".to_string()),
+            subtitle: Some(format!(
+                "Delete saved managed-account data for {display_name}?"
+            )),
+            footer_hint: Some(standard_popup_hint_line()),
+            footer_path: Some(auth_path.display().to_string()),
+            items: vec![
+                SelectionItem {
+                    name: format!("Delete {display_name}"),
+                    description: Some(
+                        "Remove its saved auth snapshot and alias from the managed pool."
+                            .to_string(),
+                    ),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::DeleteManagedAccount(confirm_account_id.clone()));
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: "Cancel".to_string(),
+                    description: Some("Return to the delete menu.".to_string()),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::OpenManagedAccountDeletePanel);
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+    }
+
+    fn delete_managed_account(&mut self, account_id: String) {
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        let state = match store.load() {
+            Ok(state) => state,
+            Err(err) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(format!(
+                        "Failed to load managed account pool: {err}"
+                    )));
+                return;
+            }
+        };
+
+        if state.active_account_id.as_deref() == Some(account_id.as_str()) {
+            self.chat_widget
+                .add_to_history(history_cell::new_error_event(
+                    "Switch to another managed account before deleting the active one.".to_string(),
+                ));
+            self.open_managed_account_delete_panel();
+            return;
+        }
+
+        let Some(display_name) = state
+            .accounts
+            .iter()
+            .find(|account| account.id == account_id)
+            .map(|account| account.display_name().to_string())
+        else {
+            self.chat_widget
+                .add_to_history(history_cell::new_error_event(format!(
+                    "Managed account {account_id} was not found."
+                )));
+            self.open_managed_account_delete_panel();
+            return;
+        };
+
+        let auth_store = ManagedAccountAuthStore::new(self.config.codex_home.clone());
+        if let Err(err) = auth_store.delete_account_auth(&account_id) {
+            self.chat_widget
+                .add_to_history(history_cell::new_error_event(format!(
+                    "Failed to remove managed account auth snapshot: {err}"
+                )));
+            return;
+        }
+
+        if let Err(err) = store.update(|state| {
+            state.remove_account(&account_id);
+        }) {
+            self.chat_widget
+                .add_to_history(history_cell::new_error_event(format!(
+                    "Failed to delete managed account: {err}"
+                )));
+            return;
+        }
+
+        self.chat_widget
+            .add_to_history(history_cell::new_info_event(
+                format!("Deleted managed account {display_name}."),
+                None,
+            ));
+        self.open_managed_account_delete_panel();
+    }
+
+    fn jump_to_transcript_cell(&mut self, tui: &mut tui::Tui, cell_index: usize) {
+        if cell_index >= self.transcript_cells.len() {
+            self.chat_widget.add_error_message(format!(
+                "Transcript entry {cell_index} is no longer available."
+            ));
+            return;
+        }
+
+        let _ = tui.enter_alt_screen();
+        let mut overlay = Overlay::new_transcript(self.transcript_cells.clone());
+        if let Overlay::Transcript(transcript) = &mut overlay {
+            transcript.set_highlight_cell(Some(cell_index));
+        }
+        self.overlay = Some(overlay);
+        tui.frame_requester().schedule_frame();
+    }
+
     /// Marks a cached picker thread closed and recomputes the contextual footer label.
     ///
     /// Closing a thread is not the same as removing it: users can still inspect finished agent
@@ -2157,7 +2882,9 @@ impl App {
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
+        self.primary_session_configured = None;
         self.pending_primary_events.clear();
+        self.loop_timers.thread_history_cells.clear();
         self.chat_widget.set_pending_thread_approvals(Vec::new());
         self.sync_active_agent_label();
     }
@@ -2210,6 +2937,7 @@ impl App {
             feedback_audience: self.feedback_audience,
             model: Some(model),
             startup_tooltip_override: None,
+            display_preferences: self.display_preferences.clone(),
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
             session_telemetry: self.session_telemetry.clone(),
             terminal_title_invalid_items_warned: self.terminal_title_invalid_items_warned.clone(),
@@ -2300,6 +3028,7 @@ impl App {
         for event in snapshot.events {
             self.handle_codex_event_replay(event);
         }
+        self.replay_loop_history_cells_for_active_thread();
         self.chat_widget
             .set_queue_autosend_suppressed(/*suppressed*/ false);
         if resume_restored_queue {
@@ -2429,6 +3158,7 @@ impl App {
 
         let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
         let terminal_title_invalid_items_warned = Arc::new(AtomicBool::new(false));
+        let display_preferences = DisplayPreferences::from_config(&config);
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =
@@ -2456,6 +3186,7 @@ impl App {
                     feedback_audience,
                     model: Some(model.clone()),
                     startup_tooltip_override,
+                    display_preferences: display_preferences.clone(),
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
                     terminal_title_invalid_items_warned: terminal_title_invalid_items_warned
@@ -2494,6 +3225,7 @@ impl App {
                     feedback_audience,
                     model: config.model.clone(),
                     startup_tooltip_override: None,
+                    display_preferences: display_preferences.clone(),
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
                     terminal_title_invalid_items_warned: terminal_title_invalid_items_warned
@@ -2538,6 +3270,7 @@ impl App {
                     feedback_audience,
                     model: config.model.clone(),
                     startup_tooltip_override: None,
+                    display_preferences: display_preferences.clone(),
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
                     terminal_title_invalid_items_warned: terminal_title_invalid_items_warned
@@ -2569,6 +3302,7 @@ impl App {
             harness_overrides,
             runtime_approval_policy_override: None,
             runtime_sandbox_policy_override: None,
+            display_preferences,
             file_search,
             enhanced_keys_supported,
             transcript_cells: Vec::new(),
@@ -2579,6 +3313,7 @@ impl App {
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
             terminal_title_invalid_items_warned: terminal_title_invalid_items_warned.clone(),
             backtrack: BacktrackState::default(),
+            key_chord: KeyChordState::default(),
             backtrack_render_pending: false,
             feedback: feedback.clone(),
             feedback_audience,
@@ -2586,6 +3321,8 @@ impl App {
             suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
+            btw_session: None,
+            loop_timers: LoopTimersState::default(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -2808,6 +3545,177 @@ impl App {
 
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
         match event {
+            AppEvent::OpenControlPanel => {
+                self.open_control_panel();
+            }
+            AppEvent::OpenDisplayPreferencesPanel => {
+                self.open_display_preferences_panel();
+            }
+            AppEvent::StartBtwDiscussion { prompt } => {
+                self.start_btw_discussion(prompt).await;
+            }
+            AppEvent::BtwCompleted { thread_id, result } => {
+                self.finish_btw_discussion(thread_id, result);
+            }
+            AppEvent::BtwInsertSummary => {
+                self.insert_btw_summary();
+            }
+            AppEvent::BtwInsertFull => {
+                self.insert_btw_full();
+            }
+            AppEvent::BtwDiscard => {
+                self.discard_btw_session();
+            }
+            AppEvent::OpenAccountsPanel => {
+                self.open_accounts_panel();
+            }
+            AppEvent::OpenThreadPanel => {
+                self.open_thread_panel();
+            }
+            AppEvent::OpenLoopTimersPanel => {
+                self.open_loop_timers_panel();
+            }
+            AppEvent::OpenLoopExecutionPanel { timer_id } => {
+                self.open_loop_execution_panel(timer_id);
+            }
+            AppEvent::OpenJumpToMessagePanel => {
+                self.open_jump_to_message_panel();
+            }
+            AppEvent::CreateLoopTimer { spec } => {
+                self.create_loop_timer(spec);
+            }
+            AppEvent::OpenCreateLoopTimerMenu => {
+                self.open_create_loop_timer_menu();
+            }
+            AppEvent::OpenCreateOneShotLoopPrompt => {
+                self.chat_widget.open_create_one_shot_loop_prompt();
+            }
+            AppEvent::OpenCreatePersistentLoopPrompt => {
+                self.chat_widget.open_create_persistent_loop_prompt();
+            }
+            AppEvent::TriggerLoopTimer {
+                timer_id,
+                scheduled_for_unix_seconds,
+                source,
+            } => {
+                let cells = self
+                    .trigger_loop_timer(timer_id, scheduled_for_unix_seconds, source)
+                    .await;
+                for cell in cells {
+                    self.append_visible_history_cell(tui, cell);
+                }
+                self.refresh_status_surfaces();
+            }
+            AppEvent::OpenLoopTimerActions { timer_id } => {
+                self.open_loop_timer_actions(timer_id);
+            }
+            AppEvent::OpenEditLoopTimerPrompt { timer_id } => {
+                self.open_loop_timer_prompt_editor(timer_id);
+            }
+            AppEvent::OpenEditLoopTimerSchedule { timer_id } => {
+                self.open_loop_timer_schedule_editor(timer_id);
+            }
+            AppEvent::OpenEditLoopTimerAction { timer_id } => {
+                self.open_loop_timer_action_editor(timer_id);
+            }
+            AppEvent::OpenEditLoopTimerDeliveryMode { timer_id } => {
+                self.open_loop_timer_delivery_mode_menu(timer_id);
+            }
+            AppEvent::OpenEditLoopWritableRoots { timer_id } => {
+                self.open_loop_writable_roots_editor(timer_id);
+            }
+            AppEvent::OpenEditLoopTimerCwd { timer_id } => {
+                self.open_loop_timer_cwd_editor(timer_id);
+            }
+            AppEvent::SaveLoopTimerPrompt { timer_id, prompt } => {
+                self.save_loop_timer_prompt(timer_id, prompt);
+            }
+            AppEvent::SaveLoopTimerSchedule { timer_id, schedule } => {
+                self.save_loop_timer_schedule(timer_id, schedule);
+            }
+            AppEvent::SaveLoopTimerAction { timer_id, action } => {
+                self.save_loop_timer_action(timer_id, action);
+            }
+            AppEvent::SaveLoopTimerDeliveryMode {
+                timer_id,
+                delivery_mode,
+            } => {
+                self.save_loop_timer_delivery_mode(timer_id, delivery_mode);
+            }
+            AppEvent::SaveLoopWritableRoots {
+                timer_id,
+                writable_roots,
+            } => {
+                self.save_loop_writable_roots(timer_id, writable_roots);
+            }
+            AppEvent::SaveLoopTimerCwd { timer_id, cwd } => {
+                self.save_loop_timer_cwd(timer_id, cwd);
+            }
+            AppEvent::ResetLoopTimerCwd { timer_id } => {
+                self.reset_loop_timer_cwd(timer_id);
+            }
+            AppEvent::ResetLoopWritableRoots { timer_id } => {
+                self.reset_loop_writable_roots(timer_id);
+            }
+            AppEvent::EnableLoopTimer { timer_id } => {
+                self.set_loop_timer_enabled(timer_id, /*enabled*/ true);
+            }
+            AppEvent::DisableLoopTimer { timer_id } => {
+                self.set_loop_timer_enabled(timer_id, /*enabled*/ false);
+            }
+            AppEvent::DeleteLoopTimer { timer_id } => {
+                self.delete_loop_timer(timer_id);
+            }
+            AppEvent::LoopTimerCompleted {
+                timer_id,
+                prompt,
+                result,
+            } => {
+                let completion = self.finish_loop_timer(timer_id, prompt, result);
+                for cell in completion.cells {
+                    self.append_visible_history_cell(tui, cell);
+                }
+                if let Some(followup_user_message) = completion.followup_user_message {
+                    self.chat_widget
+                        .submit_loop_followup_user_message(followup_user_message);
+                }
+                self.refresh_status_surfaces();
+            }
+            AppEvent::UndoLastUserMessage => {
+                self.undo_last_user_message();
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenManagedAccountRenamePanel => {
+                self.open_managed_account_rename_panel();
+            }
+            AppEvent::OpenManagedAccountDeletePanel => {
+                self.open_managed_account_delete_panel();
+            }
+            AppEvent::RefreshManagedAccountQuota => {
+                self.refresh_managed_account_quota();
+            }
+            AppEvent::SetManagedAccountActive(account_id) => {
+                self.set_managed_account_active(account_id);
+            }
+            AppEvent::OpenRenameManagedAccountAliasPrompt {
+                account_id,
+                current_alias,
+            } => {
+                self.chat_widget
+                    .open_managed_account_alias_prompt(account_id, current_alias);
+            }
+            AppEvent::OpenDeleteManagedAccountConfirmation {
+                account_id,
+                display_name,
+            } => {
+                self.open_managed_account_delete_confirmation(account_id, display_name);
+            }
+            AppEvent::SaveManagedAccountAlias { account_id, alias } => {
+                self.save_managed_account_alias(account_id, alias);
+            }
+            AppEvent::DeleteManagedAccount(account_id) => {
+                self.delete_managed_account(account_id);
+            }
             AppEvent::NewSession => {
                 self.start_fresh_session_with_summary_hint(tui).await;
             }
@@ -2823,6 +3731,107 @@ impl App {
                     &self.config,
                     /*show_all*/ false,
                     crate::resume_picker::SessionSourceFilter::InteractiveOnly,
+                )
+                .await?
+                {
+                    SessionSelection::Resume(target_session) => {
+                        let current_cwd = self.config.cwd.to_path_buf();
+                        let resume_cwd = match crate::resolve_cwd_for_resume_or_fork(
+                            tui,
+                            &self.config,
+                            &current_cwd,
+                            target_session.thread_id,
+                            &target_session.path,
+                            CwdPromptAction::Resume,
+                            /*allow_prompt*/ true,
+                        )
+                        .await?
+                        {
+                            crate::ResolveCwdOutcome::Continue(Some(cwd)) => cwd,
+                            crate::ResolveCwdOutcome::Continue(None) => current_cwd.clone(),
+                            crate::ResolveCwdOutcome::Exit => {
+                                return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+                            }
+                        };
+                        let mut resume_config = match self
+                            .rebuild_config_for_resume_or_fallback(&current_cwd, resume_cwd)
+                            .await
+                        {
+                            Ok(cfg) => cfg,
+                            Err(err) => {
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to rebuild configuration for resume: {err}"
+                                ));
+                                return Ok(AppRunControl::Continue);
+                            }
+                        };
+                        self.apply_runtime_policy_overrides(&mut resume_config);
+                        let summary = session_summary(
+                            self.chat_widget.token_usage(),
+                            self.chat_widget.thread_id(),
+                            self.chat_widget.thread_name(),
+                        );
+                        match self
+                            .server
+                            .resume_thread_from_rollout(
+                                resume_config.clone(),
+                                target_session.path.clone(),
+                                self.auth_manager.clone(),
+                                /*parent_trace*/ None,
+                            )
+                            .await
+                        {
+                            Ok(resumed) => {
+                                self.shutdown_current_thread().await;
+                                self.config = resume_config;
+                                tui.set_notification_method(self.config.tui_notification_method);
+                                self.file_search
+                                    .update_search_dir(self.config.cwd.to_path_buf());
+                                let init = self.chatwidget_init_for_forked_or_resumed_thread(
+                                    tui,
+                                    self.config.clone(),
+                                );
+                                self.replace_chat_widget(ChatWidget::new_from_existing(
+                                    init,
+                                    resumed.thread,
+                                    resumed.session_configured,
+                                ));
+                                self.reset_thread_event_state();
+                                if let Some(summary) = summary {
+                                    let mut lines: Vec<Line<'static>> =
+                                        vec![summary.usage_line.clone().into()];
+                                    if let Some(command) = summary.resume_command {
+                                        let spans = vec![
+                                            "To continue this session, run ".into(),
+                                            command.cyan(),
+                                        ];
+                                        lines.push(spans.into());
+                                    }
+                                    self.chat_widget.add_plain_history_lines(lines);
+                                }
+                            }
+                            Err(err) => {
+                                let path_display = target_session.path.display();
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to resume session from {path_display}: {err}"
+                                ));
+                            }
+                        }
+                    }
+                    SessionSelection::Exit
+                    | SessionSelection::StartFresh
+                    | SessionSelection::Fork(_) => {}
+                }
+
+                // Leaving alt-screen may blank the inline viewport; force a redraw either way.
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenResumePickerAll => {
+                match crate::resume_picker::run_resume_picker(
+                    tui,
+                    &self.config,
+                    /*show_all*/ true,
+                    crate::resume_picker::SessionSourceFilter::IncludeNonInteractive,
                 )
                 .await?
                 {
@@ -2997,29 +4006,7 @@ impl App {
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
-                if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_cell(cell.clone());
-                    tui.frame_requester().schedule_frame();
-                }
-                self.transcript_cells.push(cell.clone());
-                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
-                if !display.is_empty() {
-                    // Only insert a separating blank line for new cells that are not
-                    // part of an ongoing stream. Streaming continuations should not
-                    // accrue extra blank lines between chunks.
-                    if !cell.is_stream_continuation() {
-                        if self.has_emitted_history_lines {
-                            display.insert(0, Line::from(""));
-                        } else {
-                            self.has_emitted_history_lines = true;
-                        }
-                    }
-                    if self.overlay.is_some() {
-                        self.deferred_history_lines.extend(display);
-                    } else {
-                        tui.insert_history_lines(display);
-                    }
-                }
+                self.append_visible_history_cell(tui, cell);
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
@@ -3154,7 +4141,10 @@ impl App {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
             AppEvent::RateLimitSnapshotFetched(snapshot) => {
-                self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+                self.apply_rate_limit_snapshot_to_accounts(snapshot);
+            }
+            AppEvent::ManagedAccountQuotaRefreshed(result) => {
+                self.finish_managed_account_quota_refresh(result);
             }
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
@@ -4015,8 +5005,32 @@ impl App {
             AppEvent::OpenAgentPicker => {
                 self.open_agent_picker().await;
             }
+            AppEvent::ToggleDisplayPreference(key) => {
+                let enabled = !self.display_preferences.is_enabled(key);
+                let edit = display_preference_edit(key, enabled);
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits([edit])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        self.display_preferences.set_enabled(key, enabled);
+                        set_display_preference_in_config(&mut self.config, key, enabled);
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist display preference");
+                        self.chat_widget
+                            .add_error_message(format!("Failed to save display preference: {err}"));
+                    }
+                }
+                self.open_display_preferences_panel();
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::SelectAgentThread(thread_id) => {
                 self.select_agent_thread(tui, thread_id).await?;
+            }
+            AppEvent::JumpToTranscriptCell(cell_index) => {
+                self.jump_to_transcript_cell(tui, cell_index);
             }
             AppEvent::OpenSkillsList => {
                 self.chat_widget.open_skills_list();
@@ -4520,9 +5534,9 @@ impl App {
             Err(external_editor::EditorError::MissingEditor) => {
                 self.chat_widget
                     .add_to_history(history_cell::new_error_event(
-                    "Cannot open external editor: set $VISUAL or $EDITOR before starting Codex."
-                        .to_string(),
-                ));
+                        "Cannot open external editor: set $VISUAL or $EDITOR, or install `vim`."
+                            .to_string(),
+                    ));
                 self.reset_external_editor_state(tui);
                 return;
             }
@@ -4577,7 +5591,46 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
+    fn handle_key_chord_key_event(&mut self, key_event: KeyEvent) -> Option<KeyEvent> {
+        if self.overlay.is_some()
+            || !self.chat_widget.no_modal_or_popup_active()
+            || self.chat_widget.external_editor_state() != ExternalEditorState::Closed
+        {
+            self.key_chord.clear();
+            return Some(key_event);
+        }
+
+        match self.key_chord.handle_key_event(key_event) {
+            KeyChordResolution::NoMatch => Some(key_event),
+            KeyChordResolution::AwaitingSecondKey | KeyChordResolution::Cancelled => None,
+            KeyChordResolution::Forward(forwarded_key_event) => Some(forwarded_key_event),
+            KeyChordResolution::Matched(action) => {
+                match action {
+                    KeyChordAction::UndoLastUserMessage => {
+                        self.undo_last_user_message();
+                    }
+                    KeyChordAction::CopyLatestOutput => {
+                        self.chat_widget.copy_latest_output_to_clipboard();
+                    }
+                }
+                None
+            }
+        }
+    }
+
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
+        let mut key_event = key_event;
+        if matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && key_event.code != KeyCode::Esc
+            && self.backtrack.primed
+        {
+            self.reset_backtrack_state();
+        }
+        let Some(forwarded_key_event) = self.handle_key_chord_key_event(key_event) else {
+            return;
+        };
+        key_event = forwarded_key_event;
+
         // Some terminals, especially on macOS, encode Option+Left/Right as Option+b/f unless
         // enhanced keyboard reporting is available. We only treat those word-motion fallbacks as
         // agent-switch shortcuts when the composer is empty so we never steal the expected
@@ -4696,12 +5749,6 @@ impl App {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
-                // Any non-Esc key press should cancel a primed backtrack.
-                // This avoids stale "Esc-primed" state after the user starts typing
-                // (even if they later backspace to empty).
-                if key_event.code != KeyCode::Esc && self.backtrack.primed {
-                    self.reset_backtrack_state();
-                }
                 self.chat_widget.handle_key_event(key_event);
             }
             _ => {
@@ -4760,6 +5807,8 @@ mod tests {
     use crate::bottom_pane::TerminalTitleItem;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
     use crate::chatwidget::tests::set_chatgpt_auth;
+    use crate::display_preferences::DisplayPreferenceKey;
+    use crate::display_preferences::display_preference_edit;
     use crate::file_search::FileSearchManager;
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
@@ -6914,10 +7963,13 @@ guardian_approval = true
                 app.chat_widget.config_ref(),
                 app.chat_widget.current_model(),
                 event,
-                is_first,
-                None,
-                None,
-                false,
+                crate::history_cell::SessionInfoOptions {
+                    is_first_event: is_first,
+                    tooltip_override: None,
+                    display_preferences: app.display_preferences.clone(),
+                    auth_plan: None,
+                    show_fast_status: false,
+                },
             )) as Arc<dyn HistoryCell>
         };
 
@@ -7009,6 +8061,62 @@ guardian_approval = true
         assert_snapshot!("clear_ui_header_fast_status_gpt54_only", rendered);
     }
 
+    #[tokio::test]
+    async fn display_preferences_panel_toggle_replaces_active_view_so_esc_closes_it() {
+        let mut app = make_test_app().await;
+        app.open_display_preferences_panel();
+        assert!(app.chat_widget.has_active_view());
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(
+            app.chat_widget
+                .selected_index_for_active_view("fork-display-preferences-panel"),
+            Some(2)
+        );
+
+        app.display_preferences.set_enabled(
+            crate::display_preferences::DisplayPreferenceKey::ToolResults,
+            false,
+        );
+        app.open_display_preferences_panel();
+        assert_eq!(
+            app.chat_widget
+                .selected_index_for_active_view("fork-display-preferences-panel"),
+            Some(2)
+        );
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.chat_widget.has_active_view());
+    }
+
+    #[tokio::test]
+    async fn display_preferences_panel_esc_returns_to_control_panel() {
+        let mut app = make_test_app().await;
+        app.open_control_panel();
+        app.open_display_preferences_panel();
+        assert_eq!(
+            app.chat_widget
+                .selected_index_for_active_view("fork-display-preferences-panel"),
+            Some(0)
+        );
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(
+            app.chat_widget
+                .selected_index_for_active_view("fork-control-panel"),
+            Some(0)
+        );
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.chat_widget.has_active_view());
+    }
+
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
@@ -7040,6 +8148,7 @@ guardian_approval = true
             harness_overrides: ConfigOverrides::default(),
             runtime_approval_policy_override: None,
             runtime_sandbox_policy_override: None,
+            display_preferences: DisplayPreferences::default(),
             file_search,
             transcript_cells: Vec::new(),
             overlay: None,
@@ -7050,6 +8159,7 @@ guardian_approval = true
             status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            key_chord: KeyChordState::default(),
             backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
             feedback_audience: FeedbackAudience::External,
@@ -7057,6 +8167,8 @@ guardian_approval = true
             suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
+            btw_session: None,
+            loop_timers: LoopTimersState::default(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -7104,6 +8216,7 @@ guardian_approval = true
                 harness_overrides: ConfigOverrides::default(),
                 runtime_approval_policy_override: None,
                 runtime_sandbox_policy_override: None,
+                display_preferences: DisplayPreferences::default(),
                 file_search,
                 transcript_cells: Vec::new(),
                 overlay: None,
@@ -7114,6 +8227,7 @@ guardian_approval = true
                 status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
                 terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
                 backtrack: BacktrackState::default(),
+                key_chord: KeyChordState::default(),
                 backtrack_render_pending: false,
                 feedback: codex_feedback::CodexFeedback::new(),
                 feedback_audience: FeedbackAudience::External,
@@ -7121,6 +8235,8 @@ guardian_approval = true
                 suppress_shutdown_complete: false,
                 pending_shutdown_exit_thread_id: None,
                 windows_sandbox: WindowsSandboxState::default(),
+                btw_session: None,
+                loop_timers: LoopTimersState::default(),
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
                 agent_navigation: AgentNavigationState::default(),
@@ -7539,6 +8655,33 @@ guardian_approval = true
     }
 
     #[tokio::test]
+    async fn refresh_in_memory_config_from_disk_loads_latest_display_preferences() -> Result<()> {
+        let mut app = make_test_app().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+
+        assert!(app.display_preferences.show_tool_results());
+        assert!(app.display_preferences.show_exec_commands());
+
+        ConfigEditsBuilder::new(&app.config.codex_home)
+            .with_edits([
+                display_preference_edit(DisplayPreferenceKey::ToolResults, false),
+                display_preference_edit(DisplayPreferenceKey::ExecCommands, false),
+            ])
+            .apply()
+            .await
+            .expect("persist display preferences");
+
+        app.refresh_in_memory_config_from_disk().await?;
+
+        assert!(!app.display_preferences.show_tool_results());
+        assert!(!app.display_preferences.show_exec_commands());
+        assert!(!app.config.tui_display_preferences.show_tool_results);
+        assert!(!app.config.tui_display_preferences.show_exec_commands);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn refresh_in_memory_config_from_disk_best_effort_keeps_current_config_on_error()
     -> Result<()> {
         let mut app = make_test_app().await;
@@ -7701,10 +8844,13 @@ guardian_approval = true
                 app.chat_widget.config_ref(),
                 app.chat_widget.current_model(),
                 event,
-                is_first,
-                None,
-                None,
-                false,
+                crate::history_cell::SessionInfoOptions {
+                    is_first_event: is_first,
+                    tooltip_override: None,
+                    display_preferences: app.display_preferences.clone(),
+                    auth_plan: None,
+                    show_fast_status: false,
+                },
             )) as Arc<dyn HistoryCell>
         };
 
@@ -7823,6 +8969,116 @@ guardian_approval = true
             }
         }
         assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn undo_last_user_message_restores_latest_user_input_and_rolls_back_one_turn() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+
+        let remote_image_url = "https://example.com/latest.png".to_string();
+        app.transcript_cells = vec![
+            Arc::new(UserHistoryCell {
+                message: "first".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "latest".to_string(),
+                text_elements: vec![TextElement::new(
+                    codex_protocol::user_input::ByteRange { start: 0, end: 6 },
+                    Some("latest".to_string()),
+                )],
+                local_image_paths: Vec::new(),
+                remote_image_urls: vec![remote_image_url.clone()],
+            }) as Arc<dyn HistoryCell>,
+        ];
+        app.chat_widget
+            .set_composer_text("stale draft".to_string(), Vec::new(), Vec::new());
+
+        assert!(app.undo_last_user_message());
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "latest");
+        assert_eq!(app.chat_widget.remote_image_urls(), vec![remote_image_url]);
+
+        let mut rollback_turns = None;
+        while let Ok(op) = op_rx.try_recv() {
+            if let Op::ThreadRollback { num_turns } = op {
+                rollback_turns = Some(num_turns);
+            }
+        }
+
+        assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn ctrl_x_u_triggers_undo_last_user_message() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+
+        app.transcript_cells = vec![Arc::new(UserHistoryCell {
+            message: "latest".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>];
+
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('x'),
+                KeyModifiers::CONTROL,
+            )),
+            None
+        );
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE)),
+            None
+        );
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "latest");
+
+        let mut rollback_turns = None;
+        while let Ok(op) = op_rx.try_recv() {
+            if let Op::ThreadRollback { num_turns } = op {
+                rollback_turns = Some(num_turns);
+            }
+        }
+
+        assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn ctrl_x_unknown_second_key_falls_through_to_composer_input() {
+        let mut app = make_test_app().await;
+
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('x'),
+                KeyModifiers::CONTROL,
+            )),
+            None
+        );
+        let forwarded =
+            app.handle_key_chord_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert_eq!(
+            forwarded,
+            Some(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE))
+        );
+    }
+
+    #[tokio::test]
+    async fn ctrl_x_y_runs_copy_action_without_inserting_y_into_the_composer() {
+        let mut app = make_test_app().await;
+
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('x'),
+                KeyModifiers::CONTROL,
+            )),
+            None
+        );
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)),
+            None
+        );
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "");
     }
 
     #[tokio::test]

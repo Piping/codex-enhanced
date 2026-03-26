@@ -1,0 +1,15 @@
+---
+source: tui/src/bottom_pane/list_selection_view.rs
+expression: render_lines(&view)
+---
+                                                
+  Thread                                        
+  3 actions available.                          
+                                                
+› 1. Fork Current Session    Fork the current   
+                             thread into a new  
+                             session.           
+  2. Jump To Message                            
+  3. Undo Last User Message                     
+                                                
+  Press enter to confirm or esc to go back      

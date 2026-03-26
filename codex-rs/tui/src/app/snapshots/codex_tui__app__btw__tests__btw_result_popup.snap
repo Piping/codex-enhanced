@@ -1,0 +1,53 @@
+---
+source: tui/src/app/btw.rs
+expression: "render_selection_popup(&view, 92, 28)"
+---
+TestBackend { buffer: Buffer {
+    area: Rect { x: 0, y: 0, width: 92, height: 28 },
+    content: [
+        "                                                                                            ",
+        "  Temporary BTW answer                                                                      ",
+        "  Choose what to do with the temporary answer.                                              ",
+        "                                                                                            ",
+        "› 1. Insert Summary  Insert a short summary into the main composer.                         ",
+        "  2. Insert Full     Insert the full answer into the main composer.                         ",
+        "  3. Discard         Destroy the temporary discussion and keep the main thread untouched.   ",
+        "                                                                                            ",
+        "  Use a hidden thread to brainstorm tradeoffs, then choose whether to insert the summary    ",
+        "  or the full answer back into the main composer.                                           ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "  Press enter to confirm or esc to go back                                                  ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 22, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 46, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 4, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 67, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 21, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 67, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 21, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 89, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 27, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+    ]
+}, scrollback: Buffer {
+    area: Rect { x: 0, y: 0, width: 92, height: 0 }
+}, cursor: false, pos: (0, 0) }

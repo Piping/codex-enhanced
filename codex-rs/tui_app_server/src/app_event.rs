@@ -28,6 +28,7 @@ use codex_utils_approval_presets::ApprovalPreset;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
+use crate::display_preferences::DisplayPreferenceKey;
 use crate::history_cell::HistoryCell;
 
 use codex_core::config::types::ApprovalsReviewer;
@@ -77,10 +78,51 @@ pub(crate) struct ConnectorsSnapshot {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
+    /// Open the fork-owned control panel.
+    OpenControlPanel,
+    /// Open the current-thread actions panel inside the control panel flow.
+    OpenThreadPanel,
+    /// Open the account pool panel inside the control panel flow.
+    OpenAccountsPanel,
+    /// Open the transcript jump panel inside the control panel flow.
+    OpenJumpToMessagePanel,
+    /// Open the show/hide settings panel inside the control panel flow.
+    OpenDisplayPreferencesPanel,
+    /// Restore the latest committed user message into the composer and rollback one turn.
+    UndoLastUserMessage,
+    /// Open the managed-account alias rename submenu.
+    OpenManagedAccountRenamePanel,
+    /// Open the managed-account delete submenu.
+    OpenManagedAccountDeletePanel,
+    /// Refresh cached quota for the current managed ChatGPT account.
+    RefreshManagedAccountQuota,
+    /// Mark a managed account as active in the fork-owned registry.
+    SetManagedAccountActive(String),
+    /// Open an alias editor for a managed account.
+    OpenRenameManagedAccountAliasPrompt {
+        account_id: String,
+        current_alias: String,
+    },
+    /// Open a delete confirmation view for a managed account.
+    OpenDeleteManagedAccountConfirmation {
+        account_id: String,
+        display_name: String,
+    },
+    /// Persist a new alias for a managed account.
+    SaveManagedAccountAlias {
+        account_id: String,
+        alias: String,
+    },
+    /// Delete a managed account from the pool and remove its saved auth snapshot.
+    DeleteManagedAccount(String),
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
     /// Switch the active thread to the selected agent.
     SelectAgentThread(ThreadId),
+    /// Open the transcript overlay and highlight a committed transcript cell.
+    JumpToTranscriptCell(usize),
+    /// Toggle a local TUI-only display preference.
+    ToggleDisplayPreference(DisplayPreferenceKey),
 
     /// Submit an op to the specified thread, regardless of current focus.
     SubmitThreadOp {
@@ -103,6 +145,8 @@ pub(crate) enum AppEvent {
 
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
+    /// Open the resume picker across all saved sessions, ignoring cwd filtering.
+    OpenResumePickerAll,
 
     /// Fork the current session into a new thread.
     ForkCurrentSession,
@@ -139,6 +183,8 @@ pub(crate) enum AppEvent {
     /// Result of refreshing rate limits
     #[allow(dead_code)]
     RateLimitSnapshotFetched(RateLimitSnapshot),
+    /// Result of explicitly refreshing managed-account quota from the Accounts panel.
+    ManagedAccountQuotaRefreshed(Result<Vec<RateLimitSnapshot>, String>),
 
     /// Result of prefetching connectors.
     ConnectorsLoaded {

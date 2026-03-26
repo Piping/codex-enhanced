@@ -1,0 +1,22 @@
+---
+source: tui/src/bottom_pane/list_selection_view.rs
+expression: render_lines(&view)
+---
+                                               
+  Loop Manager                                  
+  2 timer(s) configured for /workspace/project  
+                                                
+› 1. Create Loop Agent   Create a one-shot or   
+                         persistent `/loop`     
+                         entry from a guided    
+                         form.                  
+  2. check status        5m · check status ·    
+                         running now · last     
+                         completed 2026-03-25   
+                         10:00:00 UTC           
+  3. summarize blockers  */10 * * * * ·         
+                         summarize blockers ·   
+                         disabled               
+                                                
+  /workspace/project/.codex/loop_timers.json    
+  Press enter to confirm or esc to go back      

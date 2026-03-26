@@ -17,6 +17,7 @@ use std::path::PathBuf;
 
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::chat_composer::SubmissionTrigger;
 use crate::bottom_pane::pending_input_preview::PendingInputPreview;
 use crate::bottom_pane::pending_thread_approvals::PendingThreadApprovals;
 use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
@@ -80,7 +81,7 @@ pub mod custom_prompt_view;
 mod experimental_features_view;
 mod file_search_popup;
 mod footer;
-mod list_selection_view;
+pub(crate) mod list_selection_view;
 mod prompt_args;
 mod skill_popup;
 mod skills_toggle_view;
@@ -451,6 +452,27 @@ impl BottomPane {
                 self.request_redraw();
                 return InputResult::None;
             }
+            if matches!(key_event.code, KeyCode::Tab)
+                && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+                && self.composer.flush_paste_burst_before_modified_input()
+            {
+                self.request_redraw();
+            }
+
+            if matches!(key_event.code, KeyCode::Tab | KeyCode::Enter)
+                && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+                && self
+                    .composer
+                    .try_insert_bare_custom_prompt_for_editing(match key_event.code {
+                        KeyCode::Tab => SubmissionTrigger::Tab,
+                        KeyCode::Enter => SubmissionTrigger::Enter,
+                        _ => unreachable!(),
+                    })
+            {
+                self.request_redraw();
+                return InputResult::None;
+            }
+
             let (input_result, needs_redraw) = self.composer.handle_key_event(key_event);
             if needs_redraw {
                 self.request_redraw();

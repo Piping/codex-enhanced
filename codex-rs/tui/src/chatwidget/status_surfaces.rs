@@ -19,6 +19,7 @@ pub(super) const TERMINAL_TITLE_SPINNER_INTERVAL: Duration = Duration::from_mill
 pub(super) enum TerminalTitleStatusKind {
     Working,
     WaitingForBackgroundTerminal,
+    RunningBackgroundLoop,
     Undoing,
     #[default]
     Thinking,
@@ -575,11 +576,17 @@ impl ChatWidget {
             {
                 "Ready".to_string()
             }
+            TerminalTitleStatusKind::RunningBackgroundLoop
+                if !self.bottom_pane.is_task_running() =>
+            {
+                "Loop".to_string()
+            }
             TerminalTitleStatusKind::Thinking if !self.bottom_pane.is_task_running() => {
                 "Ready".to_string()
             }
             TerminalTitleStatusKind::Working => "Working".to_string(),
             TerminalTitleStatusKind::WaitingForBackgroundTerminal => "Waiting".to_string(),
+            TerminalTitleStatusKind::RunningBackgroundLoop => "Loop".to_string(),
             TerminalTitleStatusKind::Undoing => "Undoing".to_string(),
             TerminalTitleStatusKind::Thinking => "Thinking".to_string(),
         }
@@ -614,6 +621,7 @@ impl ChatWidget {
     fn terminal_title_has_active_progress(&self) -> bool {
         self.mcp_startup_status.is_some()
             || self.bottom_pane.is_task_running()
+            || self.terminal_title_status_kind == TerminalTitleStatusKind::RunningBackgroundLoop
             || self.terminal_title_status_kind == TerminalTitleStatusKind::Undoing
     }
 

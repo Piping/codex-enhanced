@@ -51,6 +51,7 @@ use codex_core::models_manager::collaboration_mode_presets::CollaborationModesCo
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core::skills::model::SkillMetadata;
+use codex_ext::AccountPoolStore;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_git_utils::CommitLogEntry;
@@ -63,6 +64,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
+use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::PlanItem;
@@ -1922,6 +1924,7 @@ async fn helpers_are_available_and_do_not_panic() {
         feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model),
         startup_tooltip_override: None,
+        display_preferences: DisplayPreferences::default(),
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
@@ -2014,6 +2017,9 @@ async fn make_chatwidget_manual(
         initial_user_message: None,
         token_info: None,
         rate_limit_snapshots_by_limit_id: BTreeMap::new(),
+        latest_codex_rate_limit_snapshot: None,
+        last_submitted_user_turn: None,
+        managed_account_retry_attempted: false,
         plan_type: None,
         rate_limit_warnings: RateLimitWarningState::default(),
         rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
@@ -2047,6 +2053,8 @@ async fn make_chatwidget_manual(
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
+        raw_reasoning_buffer: String::new(),
+        full_raw_reasoning_buffer: String::new(),
         current_status: StatusIndicatorState::working(),
         terminal_title_status_kind: TerminalTitleStatusKind::Working,
         retry_status_header: None,
@@ -2058,6 +2066,7 @@ async fn make_chatwidget_manual(
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         startup_tooltip_override: None,
+        display_preferences: DisplayPreferences::default(),
         queued_user_messages: VecDeque::new(),
         rejected_steers_queue: VecDeque::new(),
         pending_steers: VecDeque::new(),
@@ -2615,6 +2624,80 @@ async fn rate_limit_switch_prompt_popup_snapshot() {
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("rate_limit_switch_prompt_popup", popup);
+}
+
+#[tokio::test]
+async fn rate_limit_snapshot_persists_managed_account_pool_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let codex_home = tempdir().expect("tempdir");
+    chat.config.codex_home = codex_home.path().to_path_buf();
+    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    );
+    let future_reset = chrono::Utc::now().timestamp() + 500;
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: Some("codex".to_string()),
+        limit_name: Some("codex".to_string()),
+        primary: Some(RateLimitWindow {
+            used_percent: 87.0,
+            window_minutes: Some(300),
+            resets_at: Some(future_reset),
+        }),
+        secondary: None,
+        credits: None,
+        plan_type: Some(PlanType::Pro),
+    }));
+
+    let state = AccountPoolStore::new(chat.config.codex_home.clone())
+        .load()
+        .expect("load account pool");
+    assert_eq!(state.active_account_id, Some("account_id".to_string()));
+    assert_eq!(state.accounts.len(), 1);
+    assert_eq!(state.accounts[0].plan_label, Some("pro".to_string()));
+    assert_eq!(
+        state.accounts[0].usage_summary(),
+        Some("5h 87/100".to_string())
+    );
+}
+
+#[tokio::test]
+async fn usage_limit_error_persists_managed_account_cooldown() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let codex_home = tempdir().expect("tempdir");
+    chat.config.codex_home = codex_home.path().to_path_buf();
+    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    );
+    let future_reset = chrono::Utc::now().timestamp() + 900;
+    let snapshot = RateLimitSnapshot {
+        limit_id: Some("codex".to_string()),
+        limit_name: Some("codex".to_string()),
+        primary: Some(RateLimitWindow {
+            used_percent: 100.0,
+            window_minutes: Some(300),
+            resets_at: Some(future_reset),
+        }),
+        secondary: None,
+        credits: None,
+        plan_type: Some(PlanType::Pro),
+    };
+    chat.on_rate_limit_snapshot(Some(snapshot));
+
+    chat.dispatch_event_msg(
+        Some("evt-1".to_string()),
+        EventMsg::Error(ErrorEvent {
+            message: "You've hit your usage limit.".to_string(),
+            codex_error_info: Some(CodexErrorInfo::UsageLimitExceeded),
+        }),
+        None,
+    );
+
+    let state = AccountPoolStore::new(chat.config.codex_home.clone())
+        .load()
+        .expect("load account pool");
+    assert!(state.accounts[0].last_limit_error_at.is_some());
+    assert_eq!(state.accounts[0].cooldown_until, Some(future_reset));
 }
 
 #[tokio::test]
@@ -4101,6 +4184,119 @@ async fn enqueueing_history_prompt_multiple_times_is_stable() {
     for message in chat.queued_user_messages.iter() {
         assert_eq!(message.text, "repeat me");
     }
+}
+
+#[tokio::test]
+async fn tab_completing_custom_prompt_does_not_submit_user_turn() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane.set_custom_prompts(vec![CustomPrompt {
+        name: "my-prompt".to_string(),
+        path: "/tmp/my-prompt.md".to_string().into(),
+        content: "Hello from saved prompt".to_string(),
+        description: None,
+        argument_hint: None,
+    }]);
+
+    for c in "/prompts:my-prompt".chars() {
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+    assert_eq!(chat.bottom_pane.composer_text(), "Hello from saved prompt");
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn tab_then_tab_on_fuzzy_custom_prompt_expands_without_submitting() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane.set_custom_prompts(vec![CustomPrompt {
+        name: "my-prompt".to_string(),
+        path: "/tmp/my-prompt.md".to_string().into(),
+        content: "Hello from saved prompt".to_string(),
+        description: None,
+        argument_hint: None,
+    }]);
+
+    for c in "/my".chars() {
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(chat.bottom_pane.composer_text(), "/prompts:my-prompt ");
+    assert_no_submit_op(&mut op_rx);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(chat.bottom_pane.composer_text(), "Hello from saved prompt");
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn repeated_tab_after_prompt_expansion_does_not_submit() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane.set_custom_prompts(vec![CustomPrompt {
+        name: "my-prompt".to_string(),
+        path: "/tmp/my-prompt.md".to_string().into(),
+        content: "Hello from saved prompt".to_string(),
+        description: None,
+        argument_hint: None,
+    }]);
+
+    for c in "/my".chars() {
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(chat.bottom_pane.composer_text(), "Hello from saved prompt");
+    assert_no_submit_op(&mut op_rx);
+
+    chat.handle_key_event(KeyEvent::new_with_kind(
+        KeyCode::Tab,
+        KeyModifiers::NONE,
+        crossterm::event::KeyEventKind::Repeat,
+    ));
+    assert_eq!(chat.bottom_pane.composer_text(), "Hello from saved prompt");
+    assert_no_submit_op(&mut op_rx);
+
+    chat.handle_key_event(KeyEvent::new_with_kind(
+        KeyCode::Tab,
+        KeyModifiers::NONE,
+        crossterm::event::KeyEventKind::Release,
+    ));
+    assert_eq!(chat.bottom_pane.composer_text(), "Hello from saved prompt");
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn tab_then_tab_on_fuzzy_numeric_custom_prompt_expands_without_submitting() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane.set_custom_prompts(vec![CustomPrompt {
+        name: "star-batch-iterplan".to_string(),
+        path: "/tmp/star-batch-iterplan.md".to_string().into(),
+        content: "$ARGUMENTS\nPrompt body".to_string(),
+        description: None,
+        argument_hint: None,
+    }]);
+
+    for c in "/star".chars() {
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "/prompts:star-batch-iterplan "
+    );
+    assert_no_submit_op(&mut op_rx);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(chat.bottom_pane.composer_text(), "$ARGUMENTS\nPrompt body");
+    assert_no_submit_op(&mut op_rx);
 }
 
 #[tokio::test]
@@ -6065,6 +6261,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
+        display_preferences: DisplayPreferences::default(),
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
@@ -6116,6 +6313,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
+        display_preferences: DisplayPreferences::default(),
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
@@ -6545,6 +6743,73 @@ async fn slash_fork_requests_current_fork() {
     chat.dispatch_command(SlashCommand::Fork);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::ForkCurrentSession));
+}
+
+#[tokio::test]
+async fn slash_btw_without_args_reports_usage() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Btw);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert_snapshot!("slash_btw_usage_error", rendered);
+}
+
+#[tokio::test]
+async fn slash_btw_with_args_requests_temporary_discussion() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane.set_composer_text(
+        "/btw compare these options".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::StartBtwDiscussion { prompt }) if prompt == "compare these options"
+    );
+}
+
+#[tokio::test]
+async fn slash_loop_without_args_reports_usage() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Loop);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert_snapshot!("slash_loop_usage_error", rendered);
+}
+
+#[tokio::test]
+async fn slash_loop_with_args_requests_timer_creation() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane.set_composer_text(
+        "/loop 5m compare these options".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::CreateLoopTimer { spec }) if spec == "5m compare these options"
+    );
+}
+
+#[tokio::test]
+async fn ctrl_p_opens_control_panel() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenControlPanel));
 }
 
 #[tokio::test]

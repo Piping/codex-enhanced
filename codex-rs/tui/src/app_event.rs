@@ -17,6 +17,7 @@ use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_chatgpt::connectors::AppInfo;
 use codex_file_search::FileMatch;
+use codex_loop::LoopDeliveryMode;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::Event;
@@ -27,6 +28,7 @@ use codex_utils_approval_presets::ApprovalPreset;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
+use crate::display_preferences::DisplayPreferenceKey;
 use crate::history_cell::HistoryCell;
 
 use codex_core::config::types::ApprovalsReviewer;
@@ -73,14 +75,182 @@ pub(crate) struct ConnectorsSnapshot {
     pub(crate) connectors: Vec<AppInfo>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LoopTimerTriggerSource {
+    Scheduled,
+    Manual,
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
     CodexEvent(Event),
+    /// Open the fork-owned control panel.
+    OpenControlPanel,
+    /// Open the current-thread actions panel inside the control panel flow.
+    OpenThreadPanel,
+    /// Open the account pool panel inside the control panel flow.
+    OpenAccountsPanel,
+    /// Open the loop timers panel inside the control panel flow.
+    OpenLoopTimersPanel,
+    /// Open the transcript jump panel inside the control panel flow.
+    OpenJumpToMessagePanel,
+    /// Open the show/hide settings panel inside the control panel flow.
+    OpenDisplayPreferencesPanel,
+    /// Start a hidden ephemeral `/btw` discussion.
+    StartBtwDiscussion {
+        prompt: String,
+    },
+    /// Create a persisted workspace loop timer from `/loop ...`.
+    CreateLoopTimer {
+        spec: String,
+    },
+    /// Open the loop creation submenu inside Loop Manager.
+    OpenCreateLoopTimerMenu,
+    /// Open an editor for creating a one-shot loop timer.
+    OpenCreateOneShotLoopPrompt,
+    /// Open an editor for creating a persistent loop timer.
+    OpenCreatePersistentLoopPrompt,
+    /// Execute a due loop timer once.
+    TriggerLoopTimer {
+        timer_id: String,
+        scheduled_for_unix_seconds: i64,
+        source: LoopTimerTriggerSource,
+    },
+    /// Open the actions view for a specific loop timer.
+    OpenLoopTimerActions {
+        timer_id: String,
+    },
+    /// Open a prompt editor for a loop timer.
+    OpenEditLoopTimerPrompt {
+        timer_id: String,
+    },
+    /// Open a schedule editor for a loop timer.
+    OpenEditLoopTimerSchedule {
+        timer_id: String,
+    },
+    /// Open an action editor for a loop timer.
+    OpenEditLoopTimerAction {
+        timer_id: String,
+    },
+    /// Open a delivery-mode picker for a loop timer.
+    OpenEditLoopTimerDeliveryMode {
+        timer_id: String,
+    },
+    /// Open execution settings for a loop timer.
+    OpenLoopExecutionPanel {
+        timer_id: String,
+    },
+    /// Open an editor for a loop timer's writable directories.
+    OpenEditLoopWritableRoots {
+        timer_id: String,
+    },
+    /// Open an editor for a loop timer's working directory.
+    OpenEditLoopTimerCwd {
+        timer_id: String,
+    },
+    /// Persist an updated prompt for a loop timer.
+    SaveLoopTimerPrompt {
+        timer_id: String,
+        prompt: String,
+    },
+    /// Persist an updated schedule for a loop timer.
+    SaveLoopTimerSchedule {
+        timer_id: String,
+        schedule: String,
+    },
+    /// Persist an updated action for a loop timer.
+    SaveLoopTimerAction {
+        timer_id: String,
+        action: String,
+    },
+    /// Persist an updated delivery mode override for a loop timer.
+    SaveLoopTimerDeliveryMode {
+        timer_id: String,
+        delivery_mode: Option<LoopDeliveryMode>,
+    },
+    /// Persist updated writable directories for a loop timer.
+    SaveLoopWritableRoots {
+        timer_id: String,
+        writable_roots: String,
+    },
+    /// Persist an updated working directory override for a loop timer.
+    SaveLoopTimerCwd {
+        timer_id: String,
+        cwd: String,
+    },
+    /// Reset a loop timer's working directory override back to the session default.
+    ResetLoopTimerCwd {
+        timer_id: String,
+    },
+    /// Reset a loop timer's writable-directory override back to the session default.
+    ResetLoopWritableRoots {
+        timer_id: String,
+    },
+    /// Enable a disabled loop timer.
+    EnableLoopTimer {
+        timer_id: String,
+    },
+    /// Disable an enabled loop timer.
+    DisableLoopTimer {
+        timer_id: String,
+    },
+    /// Delete a loop timer.
+    DeleteLoopTimer {
+        timer_id: String,
+    },
+    /// Final result for a hidden `/loop` execution.
+    LoopTimerCompleted {
+        timer_id: String,
+        prompt: String,
+        result: Result<String, String>,
+    },
+    /// Final result for a hidden `/btw` discussion.
+    BtwCompleted {
+        thread_id: ThreadId,
+        result: Result<String, String>,
+    },
+    /// Insert a concise summary from the completed `/btw` answer into the composer.
+    BtwInsertSummary,
+    /// Insert the full completed `/btw` answer into the composer.
+    BtwInsertFull,
+    /// Discard and destroy the active `/btw` discussion.
+    BtwDiscard,
+    /// Restore the latest committed user message into the composer and rollback one turn.
+    UndoLastUserMessage,
+    /// Open the managed-account alias rename submenu.
+    OpenManagedAccountRenamePanel,
+    /// Open the managed-account delete submenu.
+    OpenManagedAccountDeletePanel,
+    /// Refresh cached quota for the current managed ChatGPT account.
+    RefreshManagedAccountQuota,
+    /// Mark a managed account as active in the fork-owned registry.
+    SetManagedAccountActive(String),
+    /// Open an alias editor for a managed account.
+    OpenRenameManagedAccountAliasPrompt {
+        account_id: String,
+        current_alias: String,
+    },
+    /// Open a delete confirmation view for a managed account.
+    OpenDeleteManagedAccountConfirmation {
+        account_id: String,
+        display_name: String,
+    },
+    /// Persist a new alias for a managed account.
+    SaveManagedAccountAlias {
+        account_id: String,
+        alias: String,
+    },
+    /// Delete a managed account from the pool and remove its saved auth snapshot.
+    DeleteManagedAccount(String),
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
     /// Switch the active thread to the selected agent.
     SelectAgentThread(ThreadId),
+    /// Open the transcript overlay and highlight a committed transcript cell.
+    JumpToTranscriptCell(usize),
+    /// Toggle a local TUI-only display preference.
+    ToggleDisplayPreference(DisplayPreferenceKey),
 
     /// Submit an op to the specified thread, regardless of current focus.
     SubmitThreadOp {
@@ -103,6 +273,8 @@ pub(crate) enum AppEvent {
 
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
+    /// Open the resume picker across all saved sessions, ignoring cwd filtering.
+    OpenResumePickerAll,
 
     /// Fork the current session into a new thread.
     ForkCurrentSession,
@@ -137,6 +309,8 @@ pub(crate) enum AppEvent {
 
     /// Result of refreshing rate limits
     RateLimitSnapshotFetched(RateLimitSnapshot),
+    /// Result of explicitly refreshing managed-account quota from the Accounts panel.
+    ManagedAccountQuotaRefreshed(Result<Vec<RateLimitSnapshot>, String>),
 
     /// Result of prefetching connectors.
     ConnectorsLoaded {

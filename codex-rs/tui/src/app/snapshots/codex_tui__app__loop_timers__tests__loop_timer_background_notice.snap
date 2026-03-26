@@ -1,0 +1,5 @@
+---
+source: tui/src/app/loop_timers.rs
+expression: rendered
+---
+• Loop timer-1 (5m) is running in background: check status

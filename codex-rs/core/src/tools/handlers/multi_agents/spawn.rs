@@ -73,7 +73,12 @@ impl ToolHandler for Handler {
             .map_err(FunctionCallError::RespondToModel)?;
         apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
         if let Some(cwd) = resolve_requested_agent_cwd(&turn.cwd, args.cwd.as_deref())? {
-            config.cwd = cwd;
+            config.cwd =
+                codex_utils_absolute_path::AbsolutePathBuf::try_from(cwd).map_err(|error| {
+                    FunctionCallError::RespondToModel(format!(
+                        "spawn_agent cwd must be absolute: {error}"
+                    ))
+                })?;
         }
         apply_spawn_agent_overrides(&mut config, child_depth);
 

@@ -8,6 +8,7 @@
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::display_preferences::DisplayPreferences;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::ExecCommandSource;
 
@@ -36,13 +37,19 @@ pub(crate) struct ExecCall {
 pub(crate) struct ExecCell {
     pub(crate) calls: Vec<ExecCall>,
     animations_enabled: bool,
+    display_preferences: DisplayPreferences,
 }
 
 impl ExecCell {
-    pub(crate) fn new(call: ExecCall, animations_enabled: bool) -> Self {
+    pub(crate) fn new(
+        call: ExecCall,
+        animations_enabled: bool,
+        display_preferences: DisplayPreferences,
+    ) -> Self {
         Self {
             calls: vec![call],
             animations_enabled,
+            display_preferences,
         }
     }
 
@@ -68,6 +75,7 @@ impl ExecCell {
             Some(Self {
                 calls: [self.calls.clone(), vec![call]].concat(),
                 animations_enabled: self.animations_enabled,
+                display_preferences: self.display_preferences.clone(),
             })
         } else {
             None
@@ -135,6 +143,14 @@ impl ExecCell {
         self.animations_enabled
     }
 
+    pub(crate) fn show_exec_commands(&self) -> bool {
+        self.display_preferences.show_exec_commands()
+    }
+
+    pub(crate) fn show_waited_messages(&self) -> bool {
+        self.display_preferences.show_waited_messages()
+    }
+
     pub(crate) fn iter_calls(&self) -> impl Iterator<Item = &ExecCall> {
         self.calls.iter()
     }
@@ -172,5 +188,13 @@ impl ExecCall {
 
     pub(crate) fn is_unified_exec_interaction(&self) -> bool {
         matches!(self.source, ExecCommandSource::UnifiedExecInteraction)
+    }
+
+    pub(crate) fn is_waited_unified_exec_interaction(&self) -> bool {
+        self.is_unified_exec_interaction()
+            && self
+                .interaction_input
+                .as_ref()
+                .is_none_or(std::string::String::is_empty)
     }
 }

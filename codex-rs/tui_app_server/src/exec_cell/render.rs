@@ -3,6 +3,7 @@ use std::time::Instant;
 use super::model::CommandOutput;
 use super::model::ExecCall;
 use super::model::ExecCell;
+use crate::display_preferences::DisplayPreferences;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::HistoryCell;
 use crate::render::highlight::highlight_bash_to_lines;
@@ -44,6 +45,7 @@ pub(crate) fn new_active_exec_command(
     source: ExecCommandSource,
     interaction_input: Option<String>,
     animations_enabled: bool,
+    display_preferences: DisplayPreferences,
 ) -> ExecCell {
     ExecCell::new(
         ExecCall {
@@ -57,6 +59,7 @@ pub(crate) fn new_active_exec_command(
             interaction_input,
         },
         animations_enabled,
+        display_preferences,
     )
 }
 
@@ -197,6 +200,9 @@ pub(crate) fn spinner(start_time: Option<Instant>, animations_enabled: bool) -> 
 
 impl HistoryCell for ExecCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if !self.show_exec_commands() {
+            return Vec::new();
+        }
         if self.is_exploring_cell() {
             self.exploring_display_lines(width)
         } else {
@@ -205,8 +211,17 @@ impl HistoryCell for ExecCell {
     }
 
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if !self.show_exec_commands() {
+            return Vec::new();
+        }
         let mut lines: Vec<Line<'static>> = vec![];
-        for (i, call) in self.iter_calls().enumerate() {
+        for (i, call) in self
+            .iter_calls()
+            .filter(|call| {
+                self.show_waited_messages() || !call.is_waited_unified_exec_interaction()
+            })
+            .enumerate()
+        {
             if i > 0 {
                 lines.push("".into());
             }
@@ -354,9 +369,15 @@ impl ExecCell {
     }
 
     fn command_display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if !self.show_exec_commands() {
+            return Vec::new();
+        }
         let [call] = &self.calls.as_slice() else {
             panic!("Expected exactly one call in a command display cell");
         };
+        if call.is_waited_unified_exec_interaction() && !self.show_waited_messages() {
+            return Vec::new();
+        }
         let layout = EXEC_DISPLAY_LAYOUT;
         let success = call.output.as_ref().map(|o| o.exit_code == 0);
         let bullet = match success {
@@ -689,6 +710,8 @@ const EXEC_DISPLAY_LAYOUT: ExecDisplayLayout = ExecDisplayLayout::new(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::display_preferences::DisplayPreferenceKey;
+    use crate::display_preferences::DisplayPreferences;
     use codex_protocol::protocol::ExecCommandSource;
     use pretty_assertions::assert_eq;
 
@@ -758,7 +781,7 @@ mod tests {
             interaction_input: None,
         };
 
-        let cell = ExecCell::new(call, false);
+        let cell = ExecCell::new(call, false, DisplayPreferences::default());
 
         // Use a narrow width so each logical line wraps into many on-screen lines.
         let lines = cell.command_display_lines(width);
@@ -840,7 +863,7 @@ mod tests {
             interaction_input: None,
         };
 
-        let cell = ExecCell::new(call, false);
+        let cell = ExecCell::new(call, false, DisplayPreferences::default());
         let rendered: Vec<String> = cell
             .command_display_lines(36)
             .iter()
@@ -877,7 +900,7 @@ mod tests {
             interaction_input: None,
         };
 
-        let cell = ExecCell::new(call, false);
+        let cell = ExecCell::new(call, false, DisplayPreferences::default());
         let rendered: Vec<String> = cell
             .display_lines(36)
             .iter()
@@ -918,7 +941,7 @@ mod tests {
             interaction_input: None,
         };
 
-        let cell = ExecCell::new(call, false);
+        let cell = ExecCell::new(call, false, DisplayPreferences::default());
         let rendered: Vec<String> = cell
             .command_display_lines(36)
             .iter()
@@ -955,7 +978,7 @@ mod tests {
             interaction_input: None,
         };
 
-        let cell = ExecCell::new(call, false);
+        let cell = ExecCell::new(call, false, DisplayPreferences::default());
         let width: u16 = 36;
         let logical_height = cell.transcript_lines(width).len() as u16;
         let wrapped_height = cell.desired_transcript_height(width);
@@ -964,5 +987,49 @@ mod tests {
             wrapped_height > logical_height,
             "expected transcript height to account for wrapped URL-like rows, logical_height={logical_height}, wrapped_height={wrapped_height}"
         );
+    }
+
+    #[test]
+    fn hidden_exec_commands_return_empty_display_and_transcript_lines() {
+        let call = ExecCall {
+            call_id: "call-id".to_string(),
+            command: vec!["bash".into(), "-lc".into(), "echo hidden".into()],
+            parsed: Vec::new(),
+            output: Some(CommandOutput {
+                exit_code: 0,
+                formatted_output: "hidden".to_string(),
+                aggregated_output: "hidden".to_string(),
+            }),
+            source: ExecCommandSource::Agent,
+            start_time: None,
+            duration: None,
+            interaction_input: None,
+        };
+        let display_preferences = DisplayPreferences::default();
+        display_preferences.set_enabled(DisplayPreferenceKey::ExecCommands, false);
+        let cell = ExecCell::new(call, false, display_preferences);
+
+        assert_eq!(cell.display_lines(80), Vec::<Line<'static>>::new());
+        assert_eq!(cell.transcript_lines(80), Vec::<Line<'static>>::new());
+    }
+
+    #[test]
+    fn hidden_waited_messages_return_empty_display_and_transcript_lines() {
+        let call = ExecCall {
+            call_id: "call-id".to_string(),
+            command: vec!["bash".into(), "-lc".into(), "sleep 1".into()],
+            parsed: Vec::new(),
+            output: None,
+            source: ExecCommandSource::UnifiedExecInteraction,
+            start_time: None,
+            duration: None,
+            interaction_input: Some(String::new()),
+        };
+        let display_preferences = DisplayPreferences::default();
+        display_preferences.set_enabled(DisplayPreferenceKey::WaitedMessages, false);
+        let cell = ExecCell::new(call, false, display_preferences);
+
+        assert_eq!(cell.display_lines(80), Vec::<Line<'static>>::new());
+        assert_eq!(cell.transcript_lines(80), Vec::<Line<'static>>::new());
     }
 }

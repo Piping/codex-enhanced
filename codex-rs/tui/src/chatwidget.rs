@@ -48,6 +48,7 @@ use crate::bottom_pane::StatusLinePreviewData;
 use crate::bottom_pane::StatusLineSetupView;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::bottom_pane::TerminalTitleSetupView;
+use crate::rate_limits::fetch_rate_limits;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
@@ -59,7 +60,6 @@ use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::ConfigLayerSource;
-use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
@@ -264,6 +264,7 @@ use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::clipboard_text;
 use crate::collaboration_modes;
 use crate::diff_render::display_path_for;
+use crate::display_preferences::DisplayPreferences;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
 use crate::exec_cell::new_active_exec_command;
@@ -322,6 +323,18 @@ use crate::streaming::controller::PlanStreamController;
 use crate::streaming::controller::StreamController;
 
 use chrono::Local;
+use chrono::Utc;
+use codex_accounts::AccountManagementProfile;
+use codex_accounts::AccountPoolStore;
+use codex_accounts::AccountRateLimitSnapshot;
+use codex_accounts::AccountRateLimitWindow;
+use codex_accounts::DefaultAccountRouter;
+use codex_accounts::LimitSignalKind;
+use codex_accounts::RouteTurnRequest;
+use codex_accounts::RoutingTrigger;
+use codex_accounts::activate_managed_account;
+use codex_accounts::infer_limit_signal;
+use codex_accounts::persist_current_managed_account_snapshot;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
@@ -391,6 +404,12 @@ impl UnifiedExecWaitStreak {
         }
         self.command_display = command_display.filter(|display| !display.is_empty());
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BackgroundLoopStatus {
+    header: String,
+    details: Option<String>,
 }
 
 fn is_unified_exec_source(source: ExecCommandSource) -> bool {
@@ -512,6 +531,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) feedback_audience: FeedbackAudience,
     pub(crate) model: Option<String>,
     pub(crate) startup_tooltip_override: Option<String>,
+    pub(crate) display_preferences: DisplayPreferences,
     // Shared latch so we only warn once about invalid status-line item IDs.
     pub(crate) status_line_invalid_items_warned: Arc<AtomicBool>,
     // Shared latch so we only warn once about invalid terminal-title item IDs.
@@ -564,6 +584,47 @@ fn rate_limit_error_kind(info: &CodexErrorInfo) -> Option<RateLimitErrorKind> {
         } => Some(RateLimitErrorKind::Generic),
         _ => None,
     }
+}
+
+fn account_rate_limit_snapshot(snapshot: &RateLimitSnapshot) -> AccountRateLimitSnapshot {
+    AccountRateLimitSnapshot {
+        limit_name: snapshot.limit_name.clone(),
+        primary: snapshot
+            .primary
+            .as_ref()
+            .map(account_rate_limit_window_from_protocol),
+        secondary: snapshot
+            .secondary
+            .as_ref()
+            .map(account_rate_limit_window_from_protocol),
+    }
+}
+
+fn account_rate_limit_snapshot_ref(snapshot: &RateLimitSnapshot) -> AccountRateLimitSnapshot {
+    account_rate_limit_snapshot(snapshot)
+}
+
+fn account_rate_limit_window_from_protocol(
+    window: &codex_protocol::protocol::RateLimitWindow,
+) -> AccountRateLimitWindow {
+    AccountRateLimitWindow {
+        used_percent: window.used_percent,
+        window_minutes: window.window_minutes,
+        resets_at: window.resets_at,
+    }
+}
+
+fn mask_email(email: &str) -> String {
+    let Some((local, domain)) = email.split_once('@') else {
+        return email.to_string();
+    };
+    let visible = local.chars().take(3).collect::<String>();
+    let masked = if local.chars().count() > 3 {
+        format!("{visible}***")
+    } else {
+        format!("{visible}*")
+    };
+    format!("{masked}@{domain}")
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -704,6 +765,9 @@ pub(crate) struct ChatWidget {
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
+    latest_codex_rate_limit_snapshot: Option<RateLimitSnapshot>,
+    last_submitted_user_turn: Option<UserMessage>,
+    managed_account_retry_attempted: bool,
     plan_type: Option<PlanType>,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
@@ -751,10 +815,16 @@ pub(crate) struct ChatWidget {
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
     full_reasoning_buffer: String,
+    // Accumulates the current raw reasoning block for TUI-only visibility toggles.
+    raw_reasoning_buffer: String,
+    // Accumulates the full raw reasoning content for transcript-only recording.
+    full_raw_reasoning_buffer: String,
+    display_preferences: DisplayPreferences,
     // The currently rendered footer state. We keep the already-formatted
     // details here so transient stream interruptions can restore the footer
     // exactly as it was shown.
     current_status: StatusIndicatorState,
+    background_loop_status: Option<BackgroundLoopStatus>,
     // Guardian review keeps its own pending set so it can derive a single
     // footer summary from one or more in-flight review events.
     pending_guardian_review_status: PendingGuardianReviewStatus,
@@ -913,6 +983,12 @@ pub(crate) struct UserMessage {
     remote_image_urls: Vec<String>,
     text_elements: Vec<TextElement>,
     mention_bindings: Vec<MentionBinding>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UserTurnSubmissionKind {
+    Normal,
+    AutoRetry,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -1161,7 +1237,34 @@ impl ChatWidget {
     fn update_task_running_state(&mut self) {
         self.bottom_pane
             .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
-        self.refresh_terminal_title();
+        if self.bottom_pane.is_task_running() {
+            self.refresh_terminal_title();
+        } else {
+            self.refresh_background_loop_status_surface();
+        }
+    }
+
+    fn refresh_background_loop_status_surface(&mut self) {
+        if self.bottom_pane.is_task_running() {
+            self.refresh_terminal_title();
+            return;
+        }
+        if let Some(status) = self.background_loop_status.clone() {
+            self.bottom_pane.ensure_status_indicator();
+            self.bottom_pane
+                .set_interrupt_hint_visible(/*visible*/ false);
+            self.terminal_title_status_kind = TerminalTitleStatusKind::RunningBackgroundLoop;
+            self.set_status(
+                status.header,
+                status.details,
+                StatusDetailsCapitalization::Preserve,
+                /*details_max_lines*/ 2,
+            );
+        } else {
+            self.bottom_pane.hide_status_indicator();
+            self.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
+            self.refresh_terminal_title();
+        }
     }
 
     fn restore_reasoning_status_header(&mut self) {
@@ -1179,7 +1282,11 @@ impl ChatWidget {
             return;
         };
         self.needs_final_message_separator = true;
-        let cell = history_cell::new_unified_exec_interaction(wait.command_display, String::new());
+        let cell = history_cell::new_unified_exec_interaction(
+            wait.command_display,
+            String::new(),
+            self.display_preferences.clone(),
+        );
         self.app_event_tx
             .send(AppEvent::InsertHistoryCell(Box::new(cell)));
         self.restore_reasoning_status_header();
@@ -1470,12 +1577,16 @@ impl ChatWidget {
             &self.config,
             &model_for_header,
             event,
-            self.show_welcome_banner,
-            startup_tooltip_override,
-            self.auth_manager
-                .auth_cached()
-                .and_then(|auth| auth.account_plan_type()),
-            show_fast_status,
+            history_cell::SessionInfoOptions {
+                is_first_event: self.show_welcome_banner,
+                tooltip_override: startup_tooltip_override,
+                display_preferences: self.display_preferences.clone(),
+                auth_plan: self
+                    .auth_manager
+                    .auth_cached()
+                    .and_then(|auth| auth.account_plan_type()),
+                show_fast_status,
+            },
         );
         self.apply_session_info_cell(session_info_cell);
 
@@ -1726,9 +1837,15 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    fn on_raw_reasoning_delta(&mut self, delta: String) {
+        self.raw_reasoning_buffer.push_str(&delta);
+    }
+
     fn on_agent_reasoning_final(&mut self) {
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
+        self.full_raw_reasoning_buffer
+            .push_str(&self.raw_reasoning_buffer);
         if !self.full_reasoning_buffer.is_empty() {
             let cell = history_cell::new_reasoning_summary_block(
                 self.full_reasoning_buffer.clone(),
@@ -1736,8 +1853,18 @@ impl ChatWidget {
             );
             self.add_boxed_history(cell);
         }
+        if !self.full_raw_reasoning_buffer.is_empty() {
+            let cell = history_cell::new_reasoning_raw_block(
+                self.full_raw_reasoning_buffer.clone(),
+                &self.config.cwd,
+                self.display_preferences.clone(),
+            );
+            self.add_boxed_history(cell);
+        }
         self.reasoning_buffer.clear();
         self.full_reasoning_buffer.clear();
+        self.raw_reasoning_buffer.clear();
+        self.full_raw_reasoning_buffer.clear();
         self.request_redraw();
     }
 
@@ -1746,9 +1873,11 @@ impl ChatWidget {
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
         self.full_reasoning_buffer.push_str("\n\n");
         self.reasoning_buffer.clear();
+        self.full_raw_reasoning_buffer
+            .push_str(&self.raw_reasoning_buffer);
+        self.full_raw_reasoning_buffer.push_str("\n\n");
+        self.raw_reasoning_buffer.clear();
     }
-
-    // Raw reasoning uses the same flow as summarized reasoning
 
     fn on_task_started(&mut self) {
         self.agent_turn_running = true;
@@ -1775,11 +1904,14 @@ impl ChatWidget {
         self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
+        self.full_raw_reasoning_buffer.clear();
+        self.raw_reasoning_buffer.clear();
         self.request_redraw();
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
         self.submit_pending_steers_after_interrupt = false;
+        self.managed_account_retry_attempted = false;
         if let Some(message) = last_agent_message.as_ref()
             && !message.trim().is_empty()
         {
@@ -2097,6 +2229,10 @@ impl ChatWidget {
             self.plan_type = snapshot.plan_type.or(self.plan_type);
 
             let is_codex_limit = limit_id.eq_ignore_ascii_case("codex");
+            if is_codex_limit {
+                self.latest_codex_rate_limit_snapshot = Some(snapshot.clone());
+                self.persist_managed_account_rate_limit_snapshot(&snapshot);
+            }
             let warnings = if is_codex_limit {
                 self.rate_limit_warnings.take_warnings(
                     snapshot
@@ -2160,6 +2296,7 @@ impl ChatWidget {
             }
         } else {
             self.rate_limit_snapshots_by_limit_id.clear();
+            self.latest_codex_rate_limit_snapshot = None;
         }
         self.refresh_status_surfaces();
     }
@@ -2705,7 +2842,11 @@ impl ChatWidget {
                         .and_then(serde_json::Value::as_u64)
                         .and_then(|count| usize::try_from(count).ok())
                         .unwrap_or(files.len());
-                    history_cell::new_guardian_denied_patch_request(files, change_count)
+                    history_cell::new_guardian_denied_patch_request(
+                        files,
+                        change_count,
+                        self.display_preferences.clone(),
+                    )
                 }
                 Some("mcp_tool_call") => {
                     let server = action
@@ -2853,6 +2994,7 @@ impl ChatWidget {
             self.add_to_history(history_cell::new_unified_exec_interaction(
                 command_display,
                 ev.stdin,
+                self.display_preferences.clone(),
             ));
         }
     }
@@ -2861,6 +3003,7 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_patch_event(
             event.changes,
             &self.config.cwd,
+            self.display_preferences.clone(),
         ));
     }
 
@@ -3400,6 +3543,7 @@ impl ChatWidget {
                     source,
                     ev.interaction_input.clone(),
                     self.config.animations,
+                    self.display_preferences.clone(),
                 );
                 let completed = orphan.complete_call(&ev.call_id, output, ev.duration);
                 debug_assert!(
@@ -3421,6 +3565,7 @@ impl ChatWidget {
                     source,
                     ev.interaction_input.clone(),
                     self.config.animations,
+                    self.display_preferences.clone(),
                 );
                 let completed = cell.complete_call(&ev.call_id, output, ev.duration);
                 debug_assert!(completed, "new exec cell should contain {}", ev.call_id);
@@ -3613,6 +3758,7 @@ impl ChatWidget {
                 ev.source,
                 interaction_input,
                 self.config.animations,
+                self.display_preferences.clone(),
             )));
             self.bump_active_cell_revision();
         }
@@ -3627,6 +3773,7 @@ impl ChatWidget {
             ev.call_id,
             ev.invocation,
             self.config.animations,
+            self.display_preferences.clone(),
         )));
         self.bump_active_cell_revision();
         self.request_redraw();
@@ -3653,6 +3800,7 @@ impl ChatWidget {
                     call_id,
                     invocation,
                     self.config.animations,
+                    self.display_preferences.clone(),
                 );
                 let extra_cell = cell.complete(duration, result);
                 self.active_cell = Some(Box::new(cell));
@@ -3682,6 +3830,7 @@ impl ChatWidget {
             feedback_audience,
             model,
             startup_tooltip_override,
+            display_preferences,
             status_line_invalid_items_warned,
             terminal_title_invalid_items_warned,
             session_telemetry,
@@ -3747,6 +3896,9 @@ impl ChatWidget {
             initial_user_message,
             token_info: None,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
+            latest_codex_rate_limit_snapshot: None,
+            last_submitted_user_turn: None,
+            managed_account_retry_attempted: false,
             plan_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
@@ -3777,7 +3929,11 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
+            raw_reasoning_buffer: String::new(),
+            full_raw_reasoning_buffer: String::new(),
+            display_preferences,
             current_status: StatusIndicatorState::working(),
+            background_loop_status: None,
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
             terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
@@ -3887,6 +4043,7 @@ impl ChatWidget {
             feedback_audience,
             model,
             startup_tooltip_override,
+            display_preferences,
             status_line_invalid_items_warned,
             terminal_title_invalid_items_warned,
             session_telemetry,
@@ -3951,6 +4108,9 @@ impl ChatWidget {
             initial_user_message,
             token_info: None,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
+            latest_codex_rate_limit_snapshot: None,
+            last_submitted_user_turn: None,
+            managed_account_retry_attempted: false,
             plan_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
@@ -3981,7 +4141,11 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
+            raw_reasoning_buffer: String::new(),
+            full_raw_reasoning_buffer: String::new(),
+            display_preferences,
             current_status: StatusIndicatorState::working(),
+            background_loop_status: None,
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
             terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
@@ -4083,6 +4247,7 @@ impl ChatWidget {
             feedback_audience,
             model,
             startup_tooltip_override: _,
+            display_preferences,
             status_line_invalid_items_warned,
             terminal_title_invalid_items_warned,
             session_telemetry,
@@ -4147,6 +4312,9 @@ impl ChatWidget {
             initial_user_message,
             token_info: None,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
+            latest_codex_rate_limit_snapshot: None,
+            last_submitted_user_turn: None,
+            managed_account_retry_attempted: false,
             plan_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
@@ -4177,7 +4345,11 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
+            raw_reasoning_buffer: String::new(),
+            full_raw_reasoning_buffer: String::new(),
+            display_preferences,
             current_status: StatusIndicatorState::working(),
+            background_loop_status: None,
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
             terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
@@ -4271,6 +4443,15 @@ impl ChatWidget {
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'p') => {
+                self.app_event_tx.send(AppEvent::OpenControlPanel);
+                return;
+            }
             KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers,
@@ -4400,6 +4581,8 @@ impl ChatWidget {
                         // Reset any reasoning header only when we are actually submitting a turn.
                         self.reasoning_buffer.clear();
                         self.full_reasoning_buffer.clear();
+                        self.raw_reasoning_buffer.clear();
+                        self.full_raw_reasoning_buffer.clear();
                         self.set_status_header(String::from("Working"));
                         self.submit_user_message(user_message);
                     } else {
@@ -4479,9 +4662,49 @@ impl ChatWidget {
         self.bottom_pane.set_footer_hint_override(items);
     }
 
+    pub(crate) fn copy_latest_output_to_clipboard(&mut self) {
+        let Some(text) = self.last_copyable_output.as_deref() else {
+            self.add_info_message(
+                "`/copy` is unavailable before the first Codex output or right after a rollback."
+                    .to_string(),
+                /*hint*/ None,
+            );
+            return;
+        };
+
+        match clipboard_text::copy_text_to_clipboard(text) {
+            Ok(()) => {
+                let hint = self.agent_turn_running.then_some(
+                    "Current turn is still running; copied the latest completed output (not the in-progress response)."
+                        .to_string(),
+                );
+                self.add_info_message("Copied latest Codex output to clipboard.".to_string(), hint);
+            }
+            Err(err) => self.add_error_message(format!("Failed to copy to clipboard: {err}")),
+        }
+    }
+
     pub(crate) fn show_selection_view(&mut self, params: SelectionViewParams) {
         self.bottom_pane.show_selection_view(params);
         self.request_redraw();
+    }
+
+    pub(crate) fn replace_selection_view_if_active(
+        &mut self,
+        view_id: &'static str,
+        params: SelectionViewParams,
+    ) -> bool {
+        let replaced = self
+            .bottom_pane
+            .replace_selection_view_if_active(view_id, params);
+        if replaced {
+            self.request_redraw();
+        }
+        replaced
+    }
+
+    pub(crate) fn selected_index_for_active_view(&self, view_id: &'static str) -> Option<usize> {
+        self.bottom_pane.selected_index_for_active_view(view_id)
     }
 
     pub(crate) fn no_modal_or_popup_active(&self) -> bool {
@@ -4571,6 +4794,15 @@ impl ChatWidget {
             }
             SlashCommand::Review => {
                 self.open_review_popup();
+            }
+            SlashCommand::Btw => {
+                self.add_error_message("Usage: /btw <temporary discussion prompt>".to_string());
+            }
+            SlashCommand::Loop => {
+                self.add_error_message(
+                    "Usage: /loop <time> <prompt>, /loop <id> <time> <prompt>, or /loop <id>"
+                        .to_string(),
+                );
             }
             SlashCommand::Rename => {
                 self.session_telemetry
@@ -4734,32 +4966,7 @@ impl ChatWidget {
                 });
             }
             SlashCommand::Copy => {
-                let Some(text) = self.last_copyable_output.as_deref() else {
-                    self.add_info_message(
-                        "`/copy` is unavailable before the first Codex output or right after a rollback."
-                            .to_string(),
-                        /*hint*/ None,
-                    );
-                    return;
-                };
-
-                let copy_result = clipboard_text::copy_text_to_clipboard(text);
-
-                match copy_result {
-                    Ok(()) => {
-                        let hint = self.agent_turn_running.then_some(
-                            "Current turn is still running; copied the latest completed output (not the in-progress response)."
-                                .to_string(),
-                        );
-                        self.add_info_message(
-                            "Copied latest Codex output to clipboard.".to_string(),
-                            hint,
-                        );
-                    }
-                    Err(err) => {
-                        self.add_error_message(format!("Failed to copy to clipboard: {err}"))
-                    }
-                }
+                self.copy_latest_output_to_clipboard();
             }
             SlashCommand::Mention => {
                 self.insert_str("@");
@@ -4949,6 +5156,8 @@ impl ChatWidget {
                 if self.is_session_configured() {
                     self.reasoning_buffer.clear();
                     self.full_reasoning_buffer.clear();
+                    self.raw_reasoning_buffer.clear();
+                    self.full_raw_reasoning_buffer.clear();
                     self.set_status_header(String::from("Working"));
                     self.submit_user_message(user_message);
                 } else {
@@ -4969,6 +5178,34 @@ impl ChatWidget {
                         },
                         user_facing_hint: None,
                     },
+                });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::Btw if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
+                else {
+                    return;
+                };
+                self.session_telemetry
+                    .counter("codex.thread.btw", /*inc*/ 1, &[]);
+                self.app_event_tx.send(AppEvent::StartBtwDiscussion {
+                    prompt: prepared_args,
+                });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::Loop if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
+                else {
+                    return;
+                };
+                self.session_telemetry
+                    .counter("codex.thread.loop", /*inc*/ 1, &[]);
+                self.app_event_tx.send(AppEvent::CreateLoopTimer {
+                    spec: prepared_args,
                 });
                 self.bottom_pane.drain_pending_submission_state();
             }
@@ -5019,6 +5256,404 @@ impl ChatWidget {
         );
 
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    fn current_managed_account_profile(&self) -> Option<AccountManagementProfile> {
+        let auth = self.auth_manager.auth_cached().or_else(|| {
+            CodexAuth::from_auth_storage(
+                &self.config.codex_home,
+                self.config.cli_auth_credentials_store_mode,
+            )
+            .ok()
+            .flatten()
+        })?;
+        if !auth.is_chatgpt_auth() {
+            return None;
+        }
+
+        let id = auth.get_account_id()?;
+        Some(AccountManagementProfile {
+            id: id.clone(),
+            alias: Some(id),
+            masked_email: auth.get_account_email().map(|email| mask_email(&email)),
+            plan_label: auth
+                .account_plan_type()
+                .map(|plan_type| format!("{plan_type:?}").to_ascii_lowercase()),
+            priority: None,
+        })
+    }
+
+    fn persist_managed_account_rate_limit_snapshot(&self, snapshot: &RateLimitSnapshot) {
+        let Some(mut profile) = self.current_managed_account_profile() else {
+            return;
+        };
+        if let Some(plan_type) = snapshot.plan_type {
+            profile.plan_label = Some(format!("{plan_type:?}").to_ascii_lowercase());
+        }
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        let account_id = profile.id.clone();
+        let rate_limit_snapshot = account_rate_limit_snapshot(snapshot);
+        if let Err(err) = store.update(|state| {
+            state.upsert_account(profile);
+            state.apply_rate_limit_snapshot(&account_id, &rate_limit_snapshot);
+        }) {
+            tracing::warn!("failed to persist managed account rate limit snapshot: {err}");
+        }
+    }
+
+    fn persist_managed_account_limit_signal(&self, kind: LimitSignalKind) {
+        let Some(profile) = self.current_managed_account_profile() else {
+            return;
+        };
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        let account_id = profile.id.clone();
+        let snapshot = self
+            .latest_codex_rate_limit_snapshot
+            .as_ref()
+            .map(account_rate_limit_snapshot_ref);
+        let signal = infer_limit_signal(kind, Utc::now().timestamp(), snapshot.as_ref());
+        if let Err(err) = store.update(|state| {
+            state.upsert_account(profile);
+            state.apply_limit_signal(&account_id, &signal);
+        }) {
+            tracing::warn!("failed to persist managed account limit signal: {err}");
+        }
+    }
+
+    fn prepare_managed_account_for_user_turn(&mut self) -> bool {
+        let current_snapshot = match persist_current_managed_account_snapshot(
+            &self.config.codex_home,
+            self.config.cli_auth_credentials_store_mode,
+        ) {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                self.add_error_message(format!(
+                    "Failed to snapshot the current managed account before sending: {err}"
+                ));
+                return false;
+            }
+        };
+        let Some(current_snapshot) = current_snapshot else {
+            return true;
+        };
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        let mut state = match store.load() {
+            Ok(state) => state,
+            Err(err) => {
+                self.add_error_message(format!("Failed to read managed account pool: {err}"));
+                return false;
+            }
+        };
+        state.upsert_account(current_snapshot.profile.clone());
+        if state.accounts.is_empty() {
+            return true;
+        }
+
+        let now_ts = Utc::now().timestamp();
+        let current_account_id = Some(current_snapshot.profile.id);
+        let decision = DefaultAccountRouter::default().select_account(
+            &state,
+            &RouteTurnRequest {
+                now_ts,
+                trigger: RoutingTrigger::NormalTurn,
+                active_account_id: current_account_id.clone(),
+                preferred_account_id: state.active_account_id.clone(),
+            },
+        );
+        let Some(target_account_id) = decision.account_id else {
+            self.add_error_message(
+                "No healthy managed ChatGPT account is available for the next turn.".to_string(),
+            );
+            return false;
+        };
+
+        if current_account_id.as_deref() == Some(target_account_id.as_str()) {
+            return true;
+        }
+
+        let target_label = state
+            .accounts
+            .iter()
+            .find(|account| account.id == target_account_id)
+            .map(|account| account.display_name().to_string())
+            .unwrap_or_else(|| target_account_id.clone());
+        if let Err(err) = activate_managed_account(
+            &self.config.codex_home,
+            self.config.cli_auth_credentials_store_mode,
+            &target_account_id,
+        ) {
+            self.add_error_message(format!(
+                "Failed to activate managed account {target_label}: {err}"
+            ));
+            return false;
+        }
+        self.auth_manager.reload();
+        if let Err(err) = store.update(|state| {
+            state.set_active_account(&target_account_id, now_ts);
+        }) {
+            tracing::warn!("failed to update managed account selection after activation: {err}");
+        }
+        self.add_info_message(
+            format!("Switched to managed account {target_label} before sending."),
+            /*hint*/ None,
+        );
+        true
+    }
+
+    fn retry_user_turn_with_managed_account(&mut self) -> bool {
+        if self.managed_account_retry_attempted {
+            return false;
+        }
+        let Some(user_message) = self.last_submitted_user_turn.clone() else {
+            return false;
+        };
+
+        let current_snapshot = match persist_current_managed_account_snapshot(
+            &self.config.codex_home,
+            self.config.cli_auth_credentials_store_mode,
+        ) {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                tracing::warn!("failed to snapshot current managed account before retry: {err}");
+                return false;
+            }
+        };
+        let Some(current_snapshot) = current_snapshot else {
+            return false;
+        };
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        let mut state = match store.load() {
+            Ok(state) => state,
+            Err(err) => {
+                tracing::warn!("failed to load managed account pool for retry: {err}");
+                return false;
+            }
+        };
+        state.upsert_account(current_snapshot.profile.clone());
+
+        let now_ts = Utc::now().timestamp();
+        let current_account_id = Some(current_snapshot.profile.id);
+        let decision = DefaultAccountRouter::default().select_account(
+            &state,
+            &RouteTurnRequest {
+                now_ts,
+                trigger: RoutingTrigger::RetryAfterHardError,
+                active_account_id: current_account_id.clone(),
+                preferred_account_id: state.active_account_id.clone(),
+            },
+        );
+        let Some(target_account_id) = decision.account_id else {
+            return false;
+        };
+        if current_account_id.as_deref() == Some(target_account_id.as_str()) {
+            return false;
+        }
+
+        let target_label = state
+            .accounts
+            .iter()
+            .find(|account| account.id == target_account_id)
+            .map(|account| account.display_name().to_string())
+            .unwrap_or_else(|| target_account_id.clone());
+        if let Err(err) = activate_managed_account(
+            &self.config.codex_home,
+            self.config.cli_auth_credentials_store_mode,
+            &target_account_id,
+        ) {
+            tracing::warn!("failed to activate managed account {target_label}: {err}");
+            return false;
+        }
+        self.auth_manager.reload();
+        if let Err(err) = store.update(|state| {
+            state.set_active_account(&target_account_id, now_ts);
+        }) {
+            tracing::warn!("failed to update managed account selection after retry: {err}");
+        }
+
+        self.managed_account_retry_attempted = true;
+        self.submit_pending_steers_after_interrupt = false;
+        self.finalize_turn();
+        self.add_to_history(history_cell::new_info_event(
+            format!("Retrying the last turn with managed account {target_label}."),
+            /*hint*/ None,
+        ));
+        self.submit_user_message_with_kind(user_message, UserTurnSubmissionKind::AutoRetry);
+        true
+    }
+
+    pub(crate) fn open_managed_account_alias_prompt(
+        &mut self,
+        account_id: String,
+        current_alias: String,
+    ) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Rename managed account".to_string(),
+            "Type a new alias and press Enter".to_string(),
+            Some(format!("Current alias: {current_alias}")),
+            Box::new(move |alias: String| {
+                tx.send(AppEvent::SaveManagedAccountAlias {
+                    account_id: account_id.clone(),
+                    alias,
+                });
+            }),
+        );
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_loop_timer_prompt_editor(
+        &mut self,
+        timer_id: String,
+        current_prompt: String,
+    ) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Edit loop prompt".to_string(),
+            "Type an updated prompt and press Enter".to_string(),
+            Some(format!("Loop: {timer_id}")),
+            Box::new(move |prompt: String| {
+                tx.send(AppEvent::SaveLoopTimerPrompt {
+                    timer_id: timer_id.clone(),
+                    prompt,
+                });
+            }),
+        )
+        .with_initial_text(current_prompt);
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_loop_timer_schedule_editor(
+        &mut self,
+        timer_id: String,
+        current_schedule: String,
+    ) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Edit loop schedule".to_string(),
+            "Type a new interval or cron expression and press Enter".to_string(),
+            Some(format!("Loop: {timer_id}")),
+            Box::new(move |schedule: String| {
+                tx.send(AppEvent::SaveLoopTimerSchedule {
+                    timer_id: timer_id.clone(),
+                    schedule,
+                });
+            }),
+        )
+        .with_initial_text(current_schedule);
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_loop_timer_action_editor(
+        &mut self,
+        timer_id: String,
+        current_action: String,
+    ) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Edit loop action".to_string(),
+            "Type the user message to send after each completed run".to_string(),
+            Some(format!("Loop: {timer_id}")),
+            Box::new(move |action: String| {
+                tx.send(AppEvent::SaveLoopTimerAction {
+                    timer_id: timer_id.clone(),
+                    action,
+                });
+            }),
+        )
+        .with_initial_text(current_action);
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_loop_writable_roots_editor(
+        &mut self,
+        timer_id: String,
+        current_roots: String,
+    ) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Edit loop writable directories".to_string(),
+            "Enter one directory per line and press Enter".to_string(),
+            Some(format!("Loop: {timer_id}")),
+            Box::new(move |writable_roots: String| {
+                tx.send(AppEvent::SaveLoopWritableRoots {
+                    timer_id: timer_id.clone(),
+                    writable_roots,
+                });
+            }),
+        )
+        .with_initial_text(current_roots);
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_loop_timer_cwd_editor(&mut self, timer_id: String, current_cwd: String) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Edit loop working directory".to_string(),
+            "Type a directory path and press Enter".to_string(),
+            Some(format!("Loop: {timer_id}")),
+            Box::new(move |cwd: String| {
+                tx.send(AppEvent::SaveLoopTimerCwd {
+                    timer_id: timer_id.clone(),
+                    cwd,
+                });
+            }),
+        )
+        .with_initial_text(current_cwd);
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_create_one_shot_loop_prompt(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Create one-shot loop".to_string(),
+            "Example: 5m summarize what changed".to_string(),
+            Some("Enter `<time> <prompt>`".to_string()),
+            Box::new(move |spec: String| {
+                tx.send(AppEvent::CreateLoopTimer { spec });
+            }),
+        );
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_create_persistent_loop_prompt(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Create persistent loop".to_string(),
+            "Example: director 30m review overall progress".to_string(),
+            Some("Enter `<id> <time> <prompt>`".to_string()),
+            Box::new(move |spec: String| {
+                tx.send(AppEvent::CreateLoopTimer { spec });
+            }),
+        );
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn submit_loop_followup_user_message(&mut self, message: String) {
+        self.queue_user_message(UserMessage::from(message));
+    }
+
+    pub(crate) fn sync_background_loop_status(&mut self, running_loops: Vec<String>) {
+        self.background_loop_status = if running_loops.is_empty() {
+            None
+        } else {
+            Some(BackgroundLoopStatus {
+                header: if running_loops.len() == 1 {
+                    "Running background loop".to_string()
+                } else {
+                    format!("Running {} background loops", running_loops.len())
+                },
+                details: Some(running_loops.join("\n")),
+            })
+        };
+        self.refresh_background_loop_status_surface();
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {
@@ -5081,6 +5716,14 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        self.submit_user_message_with_kind(user_message, UserTurnSubmissionKind::Normal);
+    }
+
+    fn submit_user_message_with_kind(
+        &mut self,
+        user_message: UserMessage,
+        submission_kind: UserTurnSubmissionKind,
+    ) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);
@@ -5110,7 +5753,21 @@ impl ChatWidget {
             return;
         }
 
-        let render_in_history = !self.agent_turn_running;
+        let is_normal_submission = submission_kind == UserTurnSubmissionKind::Normal;
+        let render_in_history = is_normal_submission && !self.agent_turn_running;
+        if is_normal_submission {
+            self.last_submitted_user_turn = Some(UserMessage {
+                text: text.clone(),
+                local_images: local_images.clone(),
+                remote_image_urls: remote_image_urls.clone(),
+                text_elements: text_elements.clone(),
+                mention_bindings: mention_bindings.clone(),
+            });
+            self.managed_account_retry_attempted = false;
+            if !self.prepare_managed_account_for_user_turn() {
+                return;
+            }
+        }
         let mut items: Vec<UserInput> = Vec::new();
 
         // Special-case: "!cmd" executes a local shell command instead of sending to the model.
@@ -5264,7 +5921,7 @@ impl ChatWidget {
         } else {
             None
         };
-        let pending_steer = (!render_in_history).then(|| PendingSteer {
+        let pending_steer = (is_normal_submission && !render_in_history).then(|| PendingSteer {
             user_message: UserMessage {
                 text: text.clone(),
                 local_images: local_images.clone(),
@@ -5300,7 +5957,7 @@ impl ChatWidget {
         }
 
         // Persist the text to cross-session message history.
-        if !text.is_empty() {
+        if is_normal_submission && !text.is_empty() {
             let encoded_mentions = mention_bindings
                 .iter()
                 .map(|binding| LinkedMention {
@@ -5323,7 +5980,7 @@ impl ChatWidget {
         }
 
         // Show replayable user content in conversation history.
-        if render_in_history && !text.is_empty() {
+        if is_normal_submission && render_in_history && !text.is_empty() {
             let local_image_paths = local_images
                 .into_iter()
                 .map(|img| img.path)
@@ -5341,7 +5998,7 @@ impl ChatWidget {
                 local_image_paths,
                 remote_image_urls,
             ));
-        } else if render_in_history && !remote_image_urls.is_empty() {
+        } else if is_normal_submission && render_in_history && !remote_image_urls.is_empty() {
             self.last_rendered_user_message_event =
                 Some(Self::rendered_user_message_event_from_parts(
                     String::new(),
@@ -5474,13 +6131,15 @@ impl ChatWidget {
                 self.on_agent_message_delta(delta)
             }
             EventMsg::PlanDelta(event) => self.on_plan_delta(event.delta),
-            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta })
-            | EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
+            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }) => {
+                self.on_agent_reasoning_delta(delta)
+            }
+            EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
                 delta,
-            }) => self.on_agent_reasoning_delta(delta),
+            }) => self.on_raw_reasoning_delta(delta),
             EventMsg::AgentReasoning(AgentReasoningEvent { .. }) => self.on_agent_reasoning_final(),
             EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
-                self.on_agent_reasoning_delta(text);
+                self.on_raw_reasoning_delta(text);
                 self.on_agent_reasoning_final();
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
@@ -5517,7 +6176,14 @@ impl ChatWidget {
                             self.on_server_overloaded_error(message)
                         }
                         RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                            self.on_error(message)
+                            self.persist_managed_account_limit_signal(match kind {
+                                RateLimitErrorKind::UsageLimit => LimitSignalKind::UsageLimit,
+                                RateLimitErrorKind::Generic => LimitSignalKind::RateLimit,
+                                RateLimitErrorKind::ServerOverloaded => unreachable!(),
+                            });
+                            if !self.retry_user_turn_with_managed_account() {
+                                self.on_error(message);
+                            }
                         }
                     }
                 } else {
@@ -9644,22 +10310,6 @@ fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'st
         codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
         codex_protocol::protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
         codex_protocol::protocol::HookEventName::Stop => "Stop",
-    }
-}
-
-async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Vec<RateLimitSnapshot> {
-    match BackendClient::from_auth(base_url, &auth) {
-        Ok(client) => match client.get_rate_limits_many().await {
-            Ok(snapshots) => snapshots,
-            Err(err) => {
-                debug!(error = ?err, "failed to fetch rate limits from /usage");
-                Vec::new()
-            }
-        },
-        Err(err) => {
-            debug!(error = ?err, "failed to construct backend client for rate limits");
-            Vec::new()
-        }
     }
 }
 

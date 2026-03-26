@@ -152,6 +152,7 @@ impl AgentRegistry {
             .cloned()
     }
 
+    #[cfg(test)]
     pub(crate) fn live_agents(&self) -> Vec<AgentMetadata> {
         self.active_agents
             .lock()
