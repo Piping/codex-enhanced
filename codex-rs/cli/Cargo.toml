@@ -19,6 +19,7 @@ workspace = true
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 clap_complete = { workspace = true }
+codex-accounts = { workspace = true }
 codex-app-server = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-app-server-test-client = { workspace = true }
@@ -30,6 +31,7 @@ codex-config = { workspace = true }
 codex-core = { workspace = true }
 codex-exec = { workspace = true }
 codex-execpolicy = { workspace = true }
+codex-ext = { workspace = true }
 codex-features = { workspace = true }
 codex-login = { workspace = true }
 codex-mcp-server = { workspace = true }
@@ -66,6 +68,7 @@ codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-
 [dev-dependencies]
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
+base64 = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }

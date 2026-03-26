@@ -1,0 +1,25 @@
+[package]
+name = "codex-loop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_loop"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono = { workspace = true, features = ["serde"] }
+codex-core = { workspace = true }
+codex-protocol = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+cron = "0.16.0"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

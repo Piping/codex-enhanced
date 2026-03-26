@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "analytics",
+    "accounts",
     "backend-client",
     "ansi-escape",
     "async-utils",
@@ -30,6 +31,7 @@ members = [
     "instructions",
     "secrets",
     "exec",
+    "ext",
     "exec-server",
     "execpolicy",
     "execpolicy-legacy",
@@ -84,11 +86,14 @@ members = [
     "package-manager",
     "plugin",
     "artifacts",
+    "btw",
+    "loop",
+    "threadmessages",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.0.0"
+version = "0.1.7"
 # Track the edition for all workspace crates in one place. Individual
 # crates can still override this value, but keeping it here means new
 # crates created with `cargo new -w ...` automatically inherit the 2024
@@ -99,10 +104,12 @@ license = "Apache-2.0"
 [workspace.dependencies]
 # Internal
 app_test_support = { path = "app-server/tests/common" }
+codex-accounts = { path = "accounts" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-analytics = { path = "analytics" }
 codex-api = { path = "codex-api" }
 codex-artifacts = { path = "artifacts" }
+codex-btw = { path = "btw" }
 codex-code-mode = { path = "code-mode" }
 codex-package-manager = { path = "package-manager" }
 codex-app-server = { path = "app-server" }
@@ -122,6 +129,7 @@ codex-config = { path = "config" }
 codex-core = { path = "core" }
 codex-core-skills = { path = "core-skills" }
 codex-exec = { path = "exec" }
+codex-ext = { path = "ext" }
 codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
@@ -135,6 +143,7 @@ codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
+codex-loop = { path = "loop" }
 codex-mcp-server = { path = "mcp-server" }
 codex-network-proxy = { path = "network-proxy" }
 codex-ollama = { path = "ollama" }
@@ -154,6 +163,7 @@ codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-test-macros = { path = "test-macros" }
 codex-terminal-detection = { path = "terminal-detection" }
+codex-threadmessages = { path = "threadmessages" }
 codex-tui = { path = "tui" }
 codex-tui-app-server = { path = "tui_app_server" }
 codex-v8-poc = { path = "v8-poc" }
@@ -402,15 +412,34 @@ ignored = [
     "codex-v8-poc",
 ]
 
+[profile.dev]
+incremental = false
+lto = false
+
+[profile.dev.package."*"]
+incremental = false
+
+[profile.dev.build-override]
+incremental = false
+
+[profile.test]
+incremental = false
+
+[profile.test.package."*"]
+incremental = false
+
+[profile.test.build-override]
+incremental = false
+
 [profile.release]
-lto = "fat"
+lto = false
 split-debuginfo = "off"
 # Because we bundle some of these executables with the TypeScript CLI, we
 # remove everything to make the binary as small as possible.
 strip = "symbols"
 
-# See https://github.com/openai/codex/issues/1411 for details.
-codegen-units = 1
+# Match local parallelism better to reduce release build time.
+codegen-units = 12
 
 [profile.ci-test]
 debug = 1         # Reduce debug symbol size
