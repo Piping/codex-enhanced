@@ -5,6 +5,7 @@ use crate::types::RateLimitStatusPayload;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
 use codex_client::build_reqwest_client_with_custom_ca;
+use codex_core::auth::AuthDotJson;
 use codex_core::auth::CodexAuth;
 use codex_core::default_client::get_codex_user_agent;
 use codex_protocol::account::PlanType as AccountPlanType;
@@ -144,6 +145,23 @@ impl Client {
         Ok(client)
     }
 
+    pub fn from_auth_dot_json(base_url: impl Into<String>, auth: &AuthDotJson) -> Result<Self> {
+        let Some(tokens) = auth.tokens.as_ref() else {
+            anyhow::bail!("ChatGPT auth is missing token data.");
+        };
+        let mut client = Self::new(base_url)?
+            .with_user_agent(get_codex_user_agent())
+            .with_bearer_token(tokens.access_token.clone());
+        if let Some(account_id) = tokens
+            .account_id
+            .clone()
+            .or_else(|| tokens.id_token.chatgpt_account_id.clone())
+        {
+            client = client.with_chatgpt_account_id(account_id);
+        }
+        Ok(client)
+    }
+
     pub fn with_bearer_token(mut self, token: impl Into<String>) -> Self {
         self.bearer_token = Some(token.into());
         self
@@ -262,6 +280,21 @@ impl Client {
         let req = self.http.get(&url).headers(self.headers());
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         let payload: RateLimitStatusPayload = self.decode_json(&url, &ct, &body)?;
+        Ok(Self::rate_limit_snapshots_from_payload(payload))
+    }
+
+    pub async fn get_rate_limits_many_detailed(
+        &self,
+    ) -> std::result::Result<Vec<RateLimitSnapshot>, RequestError> {
+        let url = match self.path_style {
+            PathStyle::CodexApi => format!("{}/api/codex/usage", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/wham/usage", self.base_url),
+        };
+        let req = self.http.get(&url).headers(self.headers());
+        let (body, ct) = self.exec_request_detailed(req, "GET", &url).await?;
+        let payload: RateLimitStatusPayload = self
+            .decode_json(&url, &ct, &body)
+            .map_err(RequestError::from)?;
         Ok(Self::rate_limit_snapshots_from_payload(payload))
     }
 

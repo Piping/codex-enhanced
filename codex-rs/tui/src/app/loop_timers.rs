@@ -1114,7 +1114,7 @@ impl App {
         }
 
         self.refresh_loop_timers_panel_if_active();
-        self.record_loop_timer_started(&timer_id, &timer.prompt)
+        Vec::new()
     }
 
     pub(crate) fn finish_loop_timer(
@@ -1322,6 +1322,22 @@ impl App {
         });
     }
 
+    pub(crate) fn stop_active_loop_runs(&mut self) -> usize {
+        let active_ids = self
+            .loop_timers
+            .active_runs
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let stopped_count = active_ids.len();
+        for timer_id in active_ids {
+            self.stop_loop_timer_run(&timer_id);
+        }
+        self.sync_background_loop_status();
+        self.refresh_loop_timers_panel_if_active();
+        stopped_count
+    }
+
     fn stop_all_loop_timer_tasks(&mut self) {
         for handle in self
             .loop_timers
@@ -1360,43 +1376,6 @@ impl App {
             .entry(thread_id)
             .or_default()
             .push(cell.clone());
-    }
-
-    fn record_loop_timer_started(
-        &mut self,
-        timer_id: &str,
-        prompt: &str,
-    ) -> Vec<Arc<dyn HistoryCell>> {
-        let Some(primary_thread_id) = self.primary_thread_id else {
-            return Vec::new();
-        };
-
-        let message = self
-            .loop_timers
-            .timers
-            .get(timer_id)
-            .map(|timer| {
-                format!(
-                    "Loop {} ({}) is running in background: {}",
-                    loop_id_prefix(&timer.id),
-                    timer.schedule.display(),
-                    prompt_prefix(prompt),
-                )
-            })
-            .unwrap_or_else(|| {
-                format!(
-                    "Loop {} is running in background: {}",
-                    loop_id_prefix(timer_id),
-                    prompt_prefix(prompt),
-                )
-            });
-        let cell: Arc<dyn HistoryCell> = Arc::new(new_info_event(message, /*hint*/ None));
-        self.record_thread_history_cell(primary_thread_id, cell.clone());
-        if self.active_thread_id == Some(primary_thread_id) {
-            vec![cell]
-        } else {
-            Vec::new()
-        }
     }
 
     fn sync_background_loop_status(&mut self) {
@@ -1580,13 +1559,9 @@ mod tests {
     use codex_core::config::types::TuiLoopCompletionMirrorMode;
     use codex_core::config_loader::CloudRequirementsLoader;
     use codex_core::config_loader::LoaderOverrides;
-    use codex_loop::LoopMode;
-    use codex_loop::LoopSchedule;
-    use codex_loop::PersistedLoopTimer;
     use codex_otel::SessionTelemetry;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::SessionSource;
-    use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::text::Line;
     use std::collections::HashMap;
@@ -1785,42 +1760,5 @@ mod tests {
             .get(&primary_thread_id)
             .expect("primary thread history should be recorded");
         assert_eq!(stored.len(), 2);
-    }
-
-    #[tokio::test]
-    async fn record_loop_timer_started_replays_background_notice() {
-        let mut app = make_test_app().await;
-        let primary_thread_id = ThreadId::new();
-        app.primary_thread_id = Some(primary_thread_id);
-        app.active_thread_id = Some(primary_thread_id);
-        app.loop_timers.timers.insert(
-            "timer-1".to_string(),
-            PersistedLoopTimer {
-                id: "timer-1".to_string(),
-                mode: LoopMode::Persistent,
-                prompt: "check status".to_string(),
-                action: None,
-                schedule: LoopSchedule::Interval {
-                    display: "5m".to_string(),
-                    seconds: 300,
-                },
-                enabled: true,
-                rollout_path: None,
-                created_at_unix_seconds: 0,
-                last_scheduled_at_unix_seconds: None,
-                last_completed_at_unix_seconds: None,
-            },
-        );
-
-        let cells = app.record_loop_timer_started("timer-1", "check status");
-        assert_eq!(cells.len(), 1);
-
-        let rendered = cells[0]
-            .display_lines(80)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert_snapshot!("loop_timer_background_notice", rendered);
     }
 }

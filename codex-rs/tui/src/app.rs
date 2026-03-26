@@ -34,7 +34,10 @@ use crate::multi_agents::format_agent_picker_item_name;
 use crate::multi_agents::next_agent_shortcut_matches;
 use crate::multi_agents::previous_agent_shortcut_matches;
 use crate::pager_overlay::Overlay;
-use crate::rate_limits::fetch_rate_limits;
+use crate::rate_limits::ManagedAccountQuotaOutcome;
+use crate::rate_limits::ManagedAccountQuotaUpdate;
+use crate::rate_limits::fetch_managed_account_quota;
+use crate::rate_limits::fetch_managed_account_quota_from_auth_dot_json;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
@@ -46,6 +49,8 @@ use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use chrono::Utc;
 use codex_accounts::AccountPoolStore;
+use codex_accounts::AccountRateLimitSnapshot;
+use codex_accounts::AccountRateLimitWindow;
 use codex_accounts::ManagedAccountAuthStore;
 use codex_accounts::activate_managed_account;
 use codex_accounts::persist_current_managed_account_snapshot;
@@ -2298,6 +2303,10 @@ impl App {
 
         match state {
             Ok(state) => {
+                let active_account_id = state.active_account_id.clone();
+                let live_usage_summary = self
+                    .chat_widget
+                    .current_live_managed_account_usage_summary();
                 for account in &state.accounts {
                     let mut description_parts = Vec::new();
                     if let Some(masked_email) = &account.masked_email {
@@ -2306,8 +2315,19 @@ impl App {
                     if let Some(plan_label) = &account.plan_label {
                         description_parts.push(plan_label.clone());
                     }
-                    if let Some(usage_summary) = account.usage_summary() {
+                    let usage_summary = if active_account_id.as_deref() == Some(account.id.as_str())
+                    {
+                        live_usage_summary
+                            .clone()
+                            .or_else(|| account.usage_summary())
+                    } else {
+                        account.usage_summary()
+                    };
+                    if let Some(usage_summary) = usage_summary {
                         description_parts.push(usage_summary);
+                    }
+                    if let Some(invalid_reason) = &account.invalid_reason {
+                        description_parts.push(format!("invalid: {invalid_reason}"));
                     }
                     if let Some(cooldown_until) = account.cooldown_until {
                         description_parts.push(format!("cooldown until {cooldown_until}"));
@@ -2342,6 +2362,17 @@ impl App {
                             "Fetch the latest quota for the active ChatGPT account.".to_string(),
                         ),
                         actions: vec![Box::new(|tx| tx.send(AppEvent::RefreshManagedAccountQuota))],
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    });
+                    items.push(SelectionItem {
+                        name: "Refresh All Quota".to_string(),
+                        description: Some(
+                            "Fetch the latest quota for every managed ChatGPT account.".to_string(),
+                        ),
+                        actions: vec![Box::new(|tx| {
+                            tx.send(AppEvent::RefreshAllManagedAccountsQuota)
+                        })],
                         dismiss_on_select: false,
                         ..Default::default()
                     });
@@ -2493,6 +2524,39 @@ impl App {
 
         match state {
             Ok(state) => {
+                let invalid_accounts: Vec<_> = state
+                    .accounts
+                    .iter()
+                    .filter(|account| account.is_invalid())
+                    .collect();
+                let active_invalid_exists = invalid_accounts
+                    .iter()
+                    .any(|account| state.active_account_id.as_deref() == Some(account.id.as_str()));
+                items.push(SelectionItem {
+                    name: "Delete All Invalid".to_string(),
+                    description: Some(if invalid_accounts.is_empty() {
+                        "No invalid managed accounts are marked yet. Run Refresh All Quota first."
+                            .to_string()
+                    } else {
+                        format!(
+                            "Remove {} invalid managed account snapshot(s).",
+                            invalid_accounts.len()
+                        )
+                    }),
+                    is_disabled: invalid_accounts.is_empty() || active_invalid_exists,
+                    disabled_reason: if invalid_accounts.is_empty() {
+                        Some("Refresh all accounts before bulk deletion".to_string())
+                    } else if active_invalid_exists {
+                        Some("Switch away before deleting active invalid accounts".to_string())
+                    } else {
+                        None
+                    },
+                    actions: vec![Box::new(|tx| {
+                        tx.send(AppEvent::DeleteAllInvalidManagedAccounts)
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                });
                 for account in &state.accounts {
                     let account_id = account.id.clone();
                     let display_name = account.display_name().to_string();
@@ -2501,6 +2565,9 @@ impl App {
                     description_parts.push(account.id.clone());
                     if let Some(masked_email) = &account.masked_email {
                         description_parts.push(masked_email.clone());
+                    }
+                    if let Some(invalid_reason) = &account.invalid_reason {
+                        description_parts.push(format!("invalid: {invalid_reason}"));
                     }
                     if is_active {
                         description_parts.push("active".to_string());
@@ -2587,25 +2654,144 @@ impl App {
         let app_event_tx = self.app_event_tx.clone();
         let auth_manager = Arc::clone(&self.auth_manager);
         let base_url = self.config.chatgpt_base_url.clone();
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
 
         tokio::spawn(async move {
             let result = match auth_manager.auth().await {
-                Some(auth) if auth.is_chatgpt_auth() => Ok(fetch_rate_limits(base_url, auth).await),
+                Some(auth) if auth.is_chatgpt_auth() => match auth.get_account_id() {
+                    Some(account_id) => {
+                        let display_name = match store.load() {
+                            Ok(state) => state
+                                .accounts
+                                .iter()
+                                .find(|account| account.id == account_id)
+                                .map(|account| account.display_name().to_string())
+                                .unwrap_or_else(|| account_id.clone()),
+                            Err(_) => account_id.clone(),
+                        };
+                        Ok(vec![ManagedAccountQuotaUpdate {
+                            account_id,
+                            display_name,
+                            outcome: fetch_managed_account_quota(base_url, auth).await,
+                        }])
+                    }
+                    None => Err("The active managed account is missing an account id.".to_string()),
+                },
                 Some(_) => Err("The active managed account does not use ChatGPT auth.".to_string()),
                 None => Err("No active managed account is available to refresh.".to_string()),
             };
-            app_event_tx.send(AppEvent::ManagedAccountQuotaRefreshed(result));
+            app_event_tx.send(AppEvent::ManagedAccountsQuotaRefreshed(result));
+        });
+    }
+
+    fn refresh_all_managed_accounts_quota(&mut self) {
+        let app_event_tx = self.app_event_tx.clone();
+        let base_url = self.config.chatgpt_base_url.clone();
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        let auth_store = ManagedAccountAuthStore::new(self.config.codex_home.clone());
+
+        tokio::spawn(async move {
+            let result = match store.load() {
+                Ok(state) => {
+                    let mut updates = Vec::new();
+                    for account in state.accounts {
+                        match auth_store.load_account_auth(&account.id) {
+                            Ok(auth) => updates.push(ManagedAccountQuotaUpdate {
+                                account_id: account.id.clone(),
+                                display_name: account.display_name().to_string(),
+                                outcome: fetch_managed_account_quota_from_auth_dot_json(
+                                    base_url.clone(),
+                                    &auth,
+                                )
+                                .await,
+                            }),
+                            Err(err) => updates.push(ManagedAccountQuotaUpdate {
+                                account_id: account.id.clone(),
+                                display_name: account.display_name().to_string(),
+                                outcome: ManagedAccountQuotaOutcome::Error(format!(
+                                    "failed to load saved auth snapshot: {err}"
+                                )),
+                            }),
+                        }
+                    }
+                    Ok(updates)
+                }
+                Err(err) => Err(format!("Failed to load managed account pool: {err}")),
+            };
+            app_event_tx.send(AppEvent::ManagedAccountsQuotaRefreshed(result));
         });
     }
 
     fn finish_managed_account_quota_refresh(
         &mut self,
-        result: Result<Vec<RateLimitSnapshot>, String>,
+        result: Result<Vec<ManagedAccountQuotaUpdate>, String>,
     ) {
         match result {
-            Ok(snapshots) => {
-                for snapshot in snapshots {
-                    self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+            Ok(updates) => {
+                let store = AccountPoolStore::new(self.config.codex_home.clone());
+                let active_account_id = store.load().ok().and_then(|state| state.active_account_id);
+                if let Err(err) = store.update(|state| {
+                    for update in &updates {
+                        match &update.outcome {
+                            ManagedAccountQuotaOutcome::Refreshed(snapshots) => {
+                                for snapshot in snapshots {
+                                    self.apply_managed_account_rate_limit_snapshot(
+                                        state,
+                                        &update.account_id,
+                                        snapshot,
+                                    );
+                                }
+                            }
+                            ManagedAccountQuotaOutcome::Invalid(reason) => {
+                                state.set_invalid_reason(&update.account_id, Some(reason.clone()));
+                            }
+                            ManagedAccountQuotaOutcome::Error(_) => {}
+                        }
+                    }
+                }) {
+                    self.chat_widget
+                        .add_to_history(history_cell::new_error_event(format!(
+                            "Failed to persist managed account quota refresh: {err}"
+                        )));
+                }
+
+                let mut refreshed_count = 0usize;
+                let mut invalid_count = 0usize;
+                for update in updates {
+                    match update.outcome {
+                        ManagedAccountQuotaOutcome::Refreshed(snapshots) => {
+                            refreshed_count += 1;
+                            if active_account_id.as_deref() == Some(update.account_id.as_str()) {
+                                for snapshot in snapshots {
+                                    self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+                                }
+                            }
+                        }
+                        ManagedAccountQuotaOutcome::Invalid(reason) => {
+                            invalid_count += 1;
+                            self.chat_widget
+                                .add_to_history(history_cell::new_warning_event(format!(
+                                    "Managed account {} is invalid: {reason}",
+                                    update.display_name
+                                )));
+                        }
+                        ManagedAccountQuotaOutcome::Error(err) => {
+                            self.chat_widget
+                                .add_to_history(history_cell::new_error_event(format!(
+                                    "Failed to refresh managed account quota for {}: {err}",
+                                    update.display_name
+                                )));
+                        }
+                    }
+                }
+                if refreshed_count > 0 || invalid_count > 0 {
+                    self.chat_widget
+                        .add_to_history(history_cell::new_info_event(
+                            format!(
+                                "Managed account quota refresh complete: {refreshed_count} updated, {invalid_count} invalid."
+                            ),
+                            None,
+                        ));
                 }
             }
             Err(err) => {
@@ -2616,6 +2802,94 @@ impl App {
             }
         }
         self.open_accounts_panel();
+    }
+
+    fn delete_all_invalid_managed_accounts(&mut self) {
+        let store = AccountPoolStore::new(self.config.codex_home.clone());
+        let state = match store.load() {
+            Ok(state) => state,
+            Err(err) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(format!(
+                        "Failed to load managed account pool: {err}"
+                    )));
+                return;
+            }
+        };
+
+        let active_invalid_exists = state.accounts.iter().any(|account| {
+            account.is_invalid() && state.active_account_id.as_deref() == Some(account.id.as_str())
+        });
+        if active_invalid_exists {
+            self.chat_widget
+                .add_to_history(history_cell::new_error_event(
+                    "Switch to another managed account before deleting active invalid accounts."
+                        .to_string(),
+                ));
+            self.open_managed_account_delete_panel();
+            return;
+        }
+
+        let invalid_accounts: Vec<_> = state
+            .accounts
+            .iter()
+            .filter(|account| account.is_invalid())
+            .map(|account| (account.id.clone(), account.display_name().to_string()))
+            .collect();
+        if invalid_accounts.is_empty() {
+            self.chat_widget
+                .add_to_history(history_cell::new_info_event(
+                    "No invalid managed accounts to delete.".to_string(),
+                    None,
+                ));
+            self.open_managed_account_delete_panel();
+            return;
+        }
+
+        let auth_store = ManagedAccountAuthStore::new(self.config.codex_home.clone());
+        let mut deleted_account_ids = Vec::new();
+        let mut deleted_display_names = Vec::new();
+        for (account_id, display_name) in invalid_accounts {
+            match auth_store.delete_account_auth(&account_id) {
+                Ok(()) => {
+                    deleted_account_ids.push(account_id);
+                    deleted_display_names.push(display_name);
+                }
+                Err(err) => {
+                    self.chat_widget
+                        .add_to_history(history_cell::new_error_event(format!(
+                            "Failed to remove managed account auth snapshot for {display_name}: {err}"
+                        )));
+                }
+            }
+        }
+
+        if deleted_account_ids.is_empty() {
+            self.open_managed_account_delete_panel();
+            return;
+        }
+
+        if let Err(err) = store.update(|state| {
+            for account_id in &deleted_account_ids {
+                state.remove_account(account_id);
+            }
+        }) {
+            self.chat_widget
+                .add_to_history(history_cell::new_error_event(format!(
+                    "Failed to delete invalid managed accounts: {err}"
+                )));
+            return;
+        }
+
+        self.chat_widget
+            .add_to_history(history_cell::new_info_event(
+                format!(
+                    "Deleted invalid managed accounts: {}.",
+                    deleted_display_names.join(", ")
+                ),
+                None,
+            ));
+        self.open_managed_account_delete_panel();
     }
 
     fn set_managed_account_active(&mut self, account_id: String) {
@@ -2776,6 +3050,20 @@ impl App {
                 None,
             ));
         self.open_managed_account_delete_panel();
+    }
+
+    fn apply_managed_account_rate_limit_snapshot(
+        &self,
+        state: &mut codex_accounts::AccountPoolState,
+        account_id: &str,
+        snapshot: &RateLimitSnapshot,
+    ) {
+        let plan_label = snapshot
+            .plan_type
+            .map(|plan_type| format!("{plan_type:?}").to_ascii_lowercase());
+        state.set_plan_label(account_id, plan_label);
+        state.set_invalid_reason(account_id, None);
+        state.apply_rate_limit_snapshot(account_id, &account_rate_limit_snapshot(snapshot));
     }
 
     fn jump_to_transcript_cell(&mut self, tui: &mut tui::Tui, cell_index: usize) {
@@ -3694,6 +3982,9 @@ impl App {
             AppEvent::RefreshManagedAccountQuota => {
                 self.refresh_managed_account_quota();
             }
+            AppEvent::RefreshAllManagedAccountsQuota => {
+                self.refresh_all_managed_accounts_quota();
+            }
             AppEvent::SetManagedAccountActive(account_id) => {
                 self.set_managed_account_active(account_id);
             }
@@ -3715,6 +4006,9 @@ impl App {
             }
             AppEvent::DeleteManagedAccount(account_id) => {
                 self.delete_managed_account(account_id);
+            }
+            AppEvent::DeleteAllInvalidManagedAccounts => {
+                self.delete_all_invalid_managed_accounts();
             }
             AppEvent::NewSession => {
                 self.start_fresh_session_with_summary_hint(tui).await;
@@ -4143,7 +4437,7 @@ impl App {
             AppEvent::RateLimitSnapshotFetched(snapshot) => {
                 self.apply_rate_limit_snapshot_to_accounts(snapshot);
             }
-            AppEvent::ManagedAccountQuotaRefreshed(result) => {
+            AppEvent::ManagedAccountsQuotaRefreshed(result) => {
                 self.finish_managed_account_quota_refresh(result);
             }
             AppEvent::ConnectorsLoaded { result, is_final } => {
@@ -5026,6 +5320,16 @@ impl App {
                 self.open_display_preferences_panel();
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::StopBackgroundLoopRuns => {
+                let stopped_count = self.stop_active_loop_runs();
+                if stopped_count > 0 {
+                    self.chat_widget
+                        .add_to_history(history_cell::new_info_event(
+                            format!("Stopping {stopped_count} background loop run(s)."),
+                            None,
+                        ));
+                }
+            }
             AppEvent::SelectAgentThread(thread_id) => {
                 self.select_agent_thread(tui, thread_id).await?;
             }
@@ -5787,6 +6091,28 @@ impl App {
                 });
             }
         });
+    }
+}
+
+fn account_rate_limit_snapshot(snapshot: &RateLimitSnapshot) -> AccountRateLimitSnapshot {
+    AccountRateLimitSnapshot {
+        limit_name: snapshot.limit_name.clone(),
+        primary: snapshot
+            .primary
+            .as_ref()
+            .map(|window| AccountRateLimitWindow {
+                used_percent: window.used_percent,
+                window_minutes: window.window_minutes,
+                resets_at: window.resets_at,
+            }),
+        secondary: snapshot
+            .secondary
+            .as_ref()
+            .map(|window| AccountRateLimitWindow {
+                used_percent: window.used_percent,
+                window_minutes: window.window_minutes,
+                resets_at: window.resets_at,
+            }),
     }
 }
 

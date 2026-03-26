@@ -365,6 +365,7 @@ use codex_accounts::AccountRateLimitSnapshot;
 use codex_accounts::AccountRateLimitWindow;
 use codex_accounts::LimitSignalKind;
 use codex_accounts::infer_limit_signal;
+use codex_accounts::usage_summary_from_rate_limit_snapshot;
 use codex_core::CodexAuth;
 use codex_file_search::FileMatch;
 use codex_protocol::openai_models::InputModality;
@@ -2701,6 +2702,14 @@ impl ChatWidget {
         }
         self.refresh_status_line();
     }
+
+    pub(crate) fn current_live_managed_account_usage_summary(&self) -> Option<String> {
+        self.latest_codex_rate_limit_snapshot
+            .as_ref()
+            .map(account_rate_limit_snapshot_ref)
+            .and_then(|snapshot| usage_summary_from_rate_limit_snapshot(&snapshot))
+    }
+
     /// Finalize any active exec as failed and stop/clear agent-turn UI state.
     ///
     /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup

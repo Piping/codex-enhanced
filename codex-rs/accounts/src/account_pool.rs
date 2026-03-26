@@ -8,7 +8,7 @@ use crate::account_signal::AccountLimitSignal;
 use crate::account_signal::AccountRateLimitSnapshot;
 
 pub const ACCOUNT_POOL_STATE_RELATIVE_PATH: &str = "accounts/account-pool.json";
-const ACCOUNT_POOL_STATE_VERSION: u32 = 1;
+const ACCOUNT_POOL_STATE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -62,6 +62,8 @@ pub struct AccountRecord {
     pub cooldown_until: Option<i64>,
     pub last_limit_error_at: Option<i64>,
     pub last_selected_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invalid_reason: Option<String>,
     pub usage_windows: Vec<AccountUsageWindow>,
 }
 
@@ -83,6 +85,10 @@ impl AccountRecord {
         }
     }
 
+    pub fn is_invalid(&self) -> bool {
+        self.invalid_reason.is_some()
+    }
+
     pub fn is_available_at(&self, now_ts: i64) -> bool {
         if !self.enabled {
             return false;
@@ -102,27 +108,15 @@ impl AccountRecord {
     }
 
     pub fn usage_summary(&self) -> Option<String> {
-        let windows: Vec<String> = self
-            .usage_windows
-            .iter()
-            .map(|window| {
-                let prefix = match window.kind {
-                    AccountUsageWindowKind::FiveHour => "5h",
-                    AccountUsageWindowKind::Weekly => "week",
-                    AccountUsageWindowKind::Custom => window.label.as_str(),
-                };
-                match window.estimated_limit_units {
-                    Some(limit) => format!("{prefix} {}/{}", window.estimated_used_units, limit),
-                    None => format!("{prefix} {}", window.estimated_used_units),
-                }
-            })
-            .collect();
-        if windows.is_empty() {
-            None
-        } else {
-            Some(windows.join(" · "))
-        }
+        usage_summary_from_windows(&self.usage_windows)
     }
+}
+
+pub fn usage_summary_from_rate_limit_snapshot(
+    snapshot: &AccountRateLimitSnapshot,
+) -> Option<String> {
+    let windows = rate_limit_windows(snapshot);
+    usage_summary_from_windows(&windows)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,6 +179,7 @@ impl AccountPoolState {
             cooldown_until: None,
             last_limit_error_at: None,
             last_selected_at: None,
+            invalid_reason: None,
             usage_windows: Vec::new(),
         });
         if self.active_account_id.is_none() {
@@ -257,7 +252,49 @@ impl AccountPoolState {
         };
         let previous = account.usage_windows.clone();
         account.usage_windows = rate_limit_windows(snapshot);
-        previous != account.usage_windows
+        let usage_changed = previous != account.usage_windows;
+        let invalid_changed = account.invalid_reason.take().is_some();
+        usage_changed || invalid_changed
+    }
+
+    pub fn set_invalid_reason(&mut self, account_id: &str, invalid_reason: Option<String>) -> bool {
+        let Some(account) = self
+            .accounts
+            .iter_mut()
+            .find(|account| account.id == account_id)
+        else {
+            return false;
+        };
+
+        let next_invalid_reason = invalid_reason
+            .map(|reason| reason.trim().to_string())
+            .filter(|reason| !reason.is_empty());
+        let changed = account.invalid_reason != next_invalid_reason;
+        if changed {
+            account.invalid_reason = next_invalid_reason;
+        }
+        if account.invalid_reason.is_some() && !account.usage_windows.is_empty() {
+            account.usage_windows.clear();
+            return true;
+        }
+        changed
+    }
+
+    pub fn set_plan_label(&mut self, account_id: &str, plan_label: Option<String>) -> bool {
+        let Some(account) = self
+            .accounts
+            .iter_mut()
+            .find(|account| account.id == account_id)
+        else {
+            return false;
+        };
+
+        if account.plan_label == plan_label {
+            false
+        } else {
+            account.plan_label = plan_label;
+            true
+        }
     }
 
     pub fn apply_limit_signal(&mut self, account_id: &str, signal: &AccountLimitSignal) -> bool {
@@ -354,6 +391,28 @@ fn rate_limit_windows(snapshot: &AccountRateLimitSnapshot) -> Vec<AccountUsageWi
     windows
 }
 
+fn usage_summary_from_windows(windows: &[AccountUsageWindow]) -> Option<String> {
+    let windows = windows
+        .iter()
+        .map(|window| {
+            let prefix = match window.kind {
+                AccountUsageWindowKind::FiveHour => "5h",
+                AccountUsageWindowKind::Weekly => "week",
+                AccountUsageWindowKind::Custom => window.label.as_str(),
+            };
+            match window.estimated_limit_units {
+                Some(limit) => format!("{prefix} {}/{}", window.estimated_used_units, limit),
+                None => format!("{prefix} {}", window.estimated_used_units),
+            }
+        })
+        .collect::<Vec<_>>();
+    if windows.is_empty() {
+        None
+    } else {
+        Some(windows.join(" · "))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::AccountManagementProfile;
@@ -393,6 +452,7 @@ mod tests {
                 cooldown_until: None,
                 last_limit_error_at: None,
                 last_selected_at: Some(12),
+                invalid_reason: None,
                 usage_windows: vec![AccountUsageWindow {
                     kind: AccountUsageWindowKind::FiveHour,
                     label: "5h".to_string(),
@@ -424,6 +484,7 @@ mod tests {
                 cooldown_until: None,
                 last_limit_error_at: None,
                 last_selected_at: None,
+                invalid_reason: None,
                 usage_windows: Vec::new(),
             }],
         };

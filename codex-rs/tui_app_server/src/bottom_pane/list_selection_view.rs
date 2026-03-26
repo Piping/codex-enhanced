@@ -1112,8 +1112,17 @@ mod tests {
                 footer_note: Some("/tmp/codex-home/accounts.json".dim().into()),
                 items: vec![
                     SelectionItem {
+                        name: "Delete All Invalid".to_string(),
+                        description: Some("Remove 1 invalid managed account snapshot.".to_string()),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
                         name: "Delete Primary".to_string(),
-                        description: Some("workspace-1 · pri***@example.com · active".to_string()),
+                        description: Some(
+                            "workspace-1 · pri***@example.com · invalid: deactivated workspace · active"
+                                .to_string(),
+                        ),
                         is_disabled: true,
                         disabled_reason: Some("Switch away before deleting".to_string()),
                         dismiss_on_select: true,
@@ -1153,7 +1162,9 @@ mod tests {
                     },
                     SelectionItem {
                         name: "Backup".to_string(),
-                        description: Some("bac***@example.com · pro · 5h 4/80".to_string()),
+                        description: Some(
+                            "bac***@example.com · pro · invalid: deactivated workspace".to_string(),
+                        ),
                         dismiss_on_select: true,
                         ..Default::default()
                     },
@@ -1161,6 +1172,14 @@ mod tests {
                         name: "Refresh Quota".to_string(),
                         description: Some(
                             "Fetch the latest quota for the active ChatGPT account.".to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Refresh All Quota".to_string(),
+                        description: Some(
+                            "Fetch the latest quota for every managed ChatGPT account.".to_string(),
                         ),
                         dismiss_on_select: false,
                         ..Default::default()

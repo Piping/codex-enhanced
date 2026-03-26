@@ -11,6 +11,7 @@ pub use account_pool::AccountRecord;
 pub use account_pool::AccountUsageWindow;
 pub use account_pool::AccountUsageWindowKind;
 pub use account_pool::UsageEstimateSource;
+pub use account_pool::usage_summary_from_rate_limit_snapshot;
 pub use account_signal::AccountLimitSignal;
 pub use account_signal::AccountRateLimitSnapshot;
 pub use account_signal::AccountRateLimitWindow;

@@ -145,7 +145,8 @@ impl DefaultAccountRouter {
     }
 
     fn is_healthy(&self, account: &AccountRecord, now_ts: i64) -> bool {
-        account.is_available_at(now_ts)
+        !account.is_invalid()
+            && account.is_available_at(now_ts)
             && account
                 .highest_pressure_permille()
                 .is_none_or(|pressure| pressure < self.usage_threshold_permille)
@@ -203,6 +204,7 @@ mod tests {
             cooldown_until,
             last_limit_error_at: None,
             last_selected_at: None,
+            invalid_reason: None,
             usage_windows: vec![AccountUsageWindow {
                 kind: AccountUsageWindowKind::FiveHour,
                 label: "5h".to_string(),

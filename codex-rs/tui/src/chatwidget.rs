@@ -335,6 +335,7 @@ use codex_accounts::RoutingTrigger;
 use codex_accounts::activate_managed_account;
 use codex_accounts::infer_limit_signal;
 use codex_accounts::persist_current_managed_account_snapshot;
+use codex_accounts::usage_summary_from_rate_limit_snapshot;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
@@ -2300,6 +2301,14 @@ impl ChatWidget {
         }
         self.refresh_status_surfaces();
     }
+
+    pub(crate) fn current_live_managed_account_usage_summary(&self) -> Option<String> {
+        self.latest_codex_rate_limit_snapshot
+            .as_ref()
+            .map(account_rate_limit_snapshot_ref)
+            .and_then(|snapshot| usage_summary_from_rate_limit_snapshot(&snapshot))
+    }
+
     /// Finalize any active exec as failed and stop/clear agent-turn UI state.
     ///
     /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup
@@ -6723,8 +6732,9 @@ impl ChatWidget {
 
     fn clean_background_terminals(&mut self) {
         self.submit_op(Op::CleanBackgroundTerminals);
+        self.app_event_tx.send(AppEvent::StopBackgroundLoopRuns);
         self.add_info_message(
-            "Stopping all background terminals.".to_string(),
+            "Stopping all background terminals and loop runs.".to_string(),
             /*hint*/ None,
         );
     }

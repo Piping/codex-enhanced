@@ -30,6 +30,7 @@ use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::display_preferences::DisplayPreferenceKey;
 use crate::history_cell::HistoryCell;
+use crate::rate_limits::ManagedAccountQuotaUpdate;
 
 use codex_core::config::types::ApprovalsReviewer;
 use codex_features::Feature;
@@ -224,6 +225,8 @@ pub(crate) enum AppEvent {
     OpenManagedAccountDeletePanel,
     /// Refresh cached quota for the current managed ChatGPT account.
     RefreshManagedAccountQuota,
+    /// Refresh cached quota for all managed ChatGPT accounts.
+    RefreshAllManagedAccountsQuota,
     /// Mark a managed account as active in the fork-owned registry.
     SetManagedAccountActive(String),
     /// Open an alias editor for a managed account.
@@ -243,6 +246,8 @@ pub(crate) enum AppEvent {
     },
     /// Delete a managed account from the pool and remove its saved auth snapshot.
     DeleteManagedAccount(String),
+    /// Delete all invalid managed accounts from the pool and remove their saved auth snapshots.
+    DeleteAllInvalidManagedAccounts,
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
     /// Switch the active thread to the selected agent.
@@ -251,6 +256,8 @@ pub(crate) enum AppEvent {
     JumpToTranscriptCell(usize),
     /// Toggle a local TUI-only display preference.
     ToggleDisplayPreference(DisplayPreferenceKey),
+    /// Stop any currently running hidden `/loop` executions.
+    StopBackgroundLoopRuns,
 
     /// Submit an op to the specified thread, regardless of current focus.
     SubmitThreadOp {
@@ -310,7 +317,7 @@ pub(crate) enum AppEvent {
     /// Result of refreshing rate limits
     RateLimitSnapshotFetched(RateLimitSnapshot),
     /// Result of explicitly refreshing managed-account quota from the Accounts panel.
-    ManagedAccountQuotaRefreshed(Result<Vec<RateLimitSnapshot>, String>),
+    ManagedAccountsQuotaRefreshed(Result<Vec<ManagedAccountQuotaUpdate>, String>),
 
     /// Result of prefetching connectors.
     ConnectorsLoaded {
