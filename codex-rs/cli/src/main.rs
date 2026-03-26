@@ -280,6 +280,13 @@ struct LoginCommand {
     config_overrides: CliConfigOverrides,
 
     #[arg(
+        long = "auth",
+        value_name = "ALIAS",
+        help = "Save this ChatGPT login into the managed account pool with the given alias"
+    )]
+    auth: Option<String>,
+
+    #[arg(
         long = "with-api-key",
         help = "Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`)"
     )]
@@ -805,6 +812,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                             login_cli.config_overrides,
                             login_cli.issuer_base_url,
                             login_cli.client_id,
+                            login_cli.auth,
                         )
                         .await;
                     } else if login_cli.api_key.is_some() {
@@ -813,10 +821,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                         );
                         std::process::exit(1);
                     } else if login_cli.with_api_key {
+                        if login_cli.auth.is_some() {
+                            eprintln!("The --auth flag is only supported for ChatGPT login flows.");
+                            std::process::exit(1);
+                        }
                         let api_key = read_api_key_from_stdin();
                         run_login_with_api_key(login_cli.config_overrides, api_key).await;
                     } else {
-                        run_login_with_chatgpt(login_cli.config_overrides).await;
+                        run_login_with_chatgpt(login_cli.config_overrides, login_cli.auth).await;
                     }
                 }
             }

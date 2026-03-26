@@ -457,6 +457,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         create_exec_command_tool(true, false),
         create_write_stdin_tool(),
         PLAN_TOOL.clone(),
+        create_question_tool(CollaborationModesConfig::default()),
         create_request_user_input_tool(CollaborationModesConfig::default()),
         create_apply_patch_freeform_tool(),
         ToolSpec::WebSearch {
@@ -575,6 +576,7 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
     else {
         panic!("spawn_agent should use object params");
     };
+    assert!(properties.contains_key("cwd"));
     assert!(properties.contains_key("task_name"));
     assert_eq!(required.as_ref(), None);
     let output_schema = output_schema
@@ -830,6 +832,7 @@ fn test_build_specs_agent_job_worker_tools_enabled() {
             "report_agent_job_result",
         ],
     );
+    assert_lacks_tool_name(&tools, "question");
     assert_lacks_tool_name(&tools, "request_user_input");
 }
 
@@ -849,6 +852,11 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+    let question_tool = find_tool(&tools, "question");
+    assert_eq!(
+        question_tool.spec,
+        create_question_tool(CollaborationModesConfig::default())
+    );
     let request_user_input_tool = find_tool(&tools, "request_user_input");
     assert_eq!(
         request_user_input_tool.spec,
@@ -867,6 +875,13 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+    let question_tool = find_tool(&tools, "question");
+    assert_eq!(
+        question_tool.spec,
+        create_question_tool(CollaborationModesConfig {
+            default_mode_request_user_input: true,
+        })
+    );
     let request_user_input_tool = find_tool(&tools, "request_user_input");
     assert_eq!(
         request_user_input_tool.spec,
@@ -1353,6 +1368,7 @@ fn test_build_specs_gpt5_codex_default() {
         "shell_command",
         &[
             "update_plan",
+            "question",
             "request_user_input",
             "apply_patch",
             "web_search",
@@ -1376,6 +1392,7 @@ fn test_build_specs_gpt51_codex_default() {
         "shell_command",
         &[
             "update_plan",
+            "question",
             "request_user_input",
             "apply_patch",
             "web_search",
@@ -1401,6 +1418,7 @@ fn test_build_specs_gpt5_codex_unified_exec_web_search() {
             "exec_command",
             "write_stdin",
             "update_plan",
+            "question",
             "request_user_input",
             "apply_patch",
             "web_search",
@@ -1426,6 +1444,7 @@ fn test_build_specs_gpt51_codex_unified_exec_web_search() {
             "exec_command",
             "write_stdin",
             "update_plan",
+            "question",
             "request_user_input",
             "apply_patch",
             "web_search",
@@ -1449,6 +1468,7 @@ fn test_gpt_5_1_codex_max_defaults() {
         "shell_command",
         &[
             "update_plan",
+            "question",
             "request_user_input",
             "apply_patch",
             "web_search",
@@ -1472,6 +1492,7 @@ fn test_codex_5_1_mini_defaults() {
         "shell_command",
         &[
             "update_plan",
+            "question",
             "request_user_input",
             "apply_patch",
             "web_search",
@@ -1495,6 +1516,7 @@ fn test_gpt_5_defaults() {
         "shell",
         &[
             "update_plan",
+            "question",
             "request_user_input",
             "web_search",
             "view_image",
@@ -1517,6 +1539,7 @@ fn test_gpt_5_1_defaults() {
         "shell_command",
         &[
             "update_plan",
+            "question",
             "request_user_input",
             "apply_patch",
             "web_search",
@@ -1542,6 +1565,7 @@ fn test_gpt_5_1_codex_max_unified_exec_web_search() {
             "exec_command",
             "write_stdin",
             "update_plan",
+            "question",
             "request_user_input",
             "apply_patch",
             "web_search",

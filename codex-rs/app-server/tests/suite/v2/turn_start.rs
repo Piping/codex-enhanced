@@ -586,7 +586,10 @@ async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
     let payload = request.body_json();
     assert_eq!(payload["model"].as_str(), Some("mock-model-collab"));
     let payload_text = payload.to_string();
-    assert!(payload_text.contains("The `request_user_input` tool is available in Default mode."));
+    assert!(
+        payload_text
+            .contains("The `question` tool is available in Default mode. The legacy `request_user_input` tool is unavailable in Default mode and will return an error.")
+    );
 
     Ok(())
 }
@@ -671,7 +674,11 @@ async fn turn_start_uses_thread_feature_overrides_for_collaboration_mode_instruc
 
     let request = response_mock.single_request();
     let payload_text = request.body_json().to_string();
-    assert!(payload_text.contains("The `request_user_input` tool is available in Default mode."));
+    assert!(
+        payload_text.contains(
+            "The `question` and `request_user_input` tools are available in Default mode."
+        )
+    );
 
     Ok(())
 }

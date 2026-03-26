@@ -736,6 +736,58 @@ pub struct ModelAvailabilityNuxConfig {
     pub shown_count: HashMap<String, u32>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum TuiLoopCompletionMirrorMode {
+    #[default]
+    PromptAndResponse,
+    ResponseOnly,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiLoopConfig {
+    /// Controls what `/loop` mirrors back into the main thread after a scheduled run finishes.
+    /// Defaults to `prompt-and-response`.
+    #[serde(default)]
+    pub completion_mirror_mode: TuiLoopCompletionMirrorMode,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiDisplayPreferences {
+    /// Show MCP/custom tool result bodies in transcript cells.
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub show_tool_results: bool,
+
+    /// Show command execution transcript cells.
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub show_exec_commands: bool,
+
+    /// Show "Waited for ..." transcript messages for background terminal interactions.
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub show_waited_messages: bool,
+
+    /// Show patch/edit diff summaries in transcript cells.
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub show_patch_diffs: bool,
+}
+
+impl Default for TuiDisplayPreferences {
+    fn default() -> Self {
+        Self {
+            show_tool_results: true,
+            show_exec_commands: true,
+            show_waited_messages: true,
+            show_patch_diffs: true,
+        }
+    }
+}
+
 /// Collection of settings that are specific to the TUI.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -796,6 +848,14 @@ pub struct Tui {
     /// Startup tooltip availability NUX state persisted by the TUI.
     #[serde(default)]
     pub model_availability_nux: ModelAvailabilityNuxConfig,
+
+    /// Controls how completed `/loop` runs are mirrored back into the main thread.
+    #[serde(default, rename = "loop")]
+    pub loop_config: TuiLoopConfig,
+
+    /// Transcript visibility preferences that affect only TUI rendering.
+    #[serde(default)]
+    pub display_preferences: TuiDisplayPreferences,
 }
 
 const fn default_true() -> bool {

@@ -996,6 +996,9 @@ UI guidance for IDEs: surface an approval dialog as soon as the request arrives.
 
 ### request_user_input
 
+The built-in `question` tool and the legacy `request_user_input` tool both use this request/response flow.
+By default, `question` is available in both Default and Plan mode; `request_user_input` remains a legacy compatibility tool that is always available in Plan mode and only available in Default mode when `default_mode_request_user_input` is enabled.
+
 When the client responds to `item/tool/requestUserInput`, the server emits `serverRequest/resolved` with `{ threadId, requestId }`. If the pending request is cleared by turn start, turn completion, or turn interruption before the client answers, the server emits the same notification for that cleanup.
 
 ### MCP server elicitations

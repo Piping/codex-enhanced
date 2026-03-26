@@ -34,7 +34,8 @@ fn default_mode_instructions_replace_mode_names_placeholder() {
     let expected_availability_message =
         request_user_input_availability_message(ModeKind::Default, true);
     assert!(default_instructions.contains(&expected_availability_message));
-    assert!(default_instructions.contains("prefer using the `request_user_input` tool"));
+    assert!(default_instructions.contains("prefer using the `question` tool"));
+    assert!(default_instructions.contains("Use `question` when you need a larger structured form"));
 }
 
 #[test]
@@ -44,8 +45,11 @@ fn default_mode_instructions_use_plain_text_questions_when_feature_disabled() {
         .expect("default preset should include instructions")
         .expect("default instructions should be set");
 
-    assert!(!default_instructions.contains("prefer using the `request_user_input` tool"));
-    assert!(
-        default_instructions.contains("ask the user directly with a concise plain-text question")
-    );
+    assert!(default_instructions.contains(
+        "The `question` tool is available in Default mode. The legacy `request_user_input` tool is unavailable in Default mode and will return an error."
+    ));
+    assert!(default_instructions.contains("prefer using the `question` tool"));
+    assert!(default_instructions.contains(
+        "For a single simple clarification, ask the user directly with a concise plain-text question"
+    ));
 }

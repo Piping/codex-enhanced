@@ -84,21 +84,23 @@ fn request_user_input_availability_message(
 ) -> String {
     let mode_name = mode.display_name();
     if mode.allows_request_user_input()
-        || (default_mode_request_user_input && mode == ModeKind::Default)
+        || (mode == ModeKind::Default && default_mode_request_user_input)
     {
-        format!("The `request_user_input` tool is available in {mode_name} mode.")
+        format!("The `question` and `request_user_input` tools are available in {mode_name} mode.")
+    } else if mode == ModeKind::Default {
+        "The `question` tool is available in Default mode. The legacy `request_user_input` tool is unavailable in Default mode and will return an error.".to_string()
     } else {
         format!(
-            "The `request_user_input` tool is unavailable in {mode_name} mode. If you call it while in {mode_name} mode, it will return an error."
+            "The `question` and `request_user_input` tools are unavailable in {mode_name} mode. If you call either tool while in {mode_name} mode, it will return an error."
         )
     }
 }
 
 fn asking_questions_guidance_message(default_mode_request_user_input: bool) -> String {
     if default_mode_request_user_input {
-        "In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, prefer using the `request_user_input` tool rather than writing a multiple choice question as a textual assistant message. Never write a multiple choice question as a textual assistant message.".to_string()
+        "In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, prefer using the `question` tool (or the legacy `request_user_input` tool) rather than writing a multiple choice question as a textual assistant message. Use `question` when you need a larger structured form or a mix of choices and freeform fields. Never write a multiple choice question as a textual assistant message.".to_string()
     } else {
-        "In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.".to_string()
+        "In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, prefer using the `question` tool rather than writing a multiple choice question as a textual assistant message. Use `question` when you need a larger structured form or a mix of choices and freeform fields. For a single simple clarification, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.".to_string()
     }
 }
 
