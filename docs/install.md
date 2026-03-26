@@ -39,6 +39,13 @@ cargo run --bin codex -- "explain this codebase to me"
 just fmt
 just fix -p <crate-you-touched>
 
+# For the default lightweight verification pass (tui, ext, cli):
+just verify-fast
+# For `/loop`-focused TUI edits, use the narrower loop path:
+just verify-tui-loop
+# Or target a specific crate/target explicitly:
+just verify-fast-crate -p <crate-you-touched>
+
 # Run the relevant tests (project-specific is fastest), for example:
 cargo test -p codex-tui
 # If you have cargo-nextest installed, `just test` runs the test suite via nextest:

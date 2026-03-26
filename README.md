@@ -1,60 +1,128 @@
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
-<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
-<p align="center">
-  <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
-</p>
-</br>
-If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE.</a>
-</br>If you want the desktop app experience, run <code>codex app</code> or visit <a href="https://chatgpt.com/codex?app-landing-page=true">the Codex App page</a>.
-</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>.</p>
+# Codex Enhanced
 
----
+Codex Enhanced is a standalone public distribution of Codex focused on
+multi-account ChatGPT operations, fullscreen TUI workflow improvements, and a
+smaller long-term fork maintenance surface.
 
-## Quickstart
+This repository is maintained as its own GitHub project instead of a GitHub
+fork. It tracks upstream Codex where practical, while keeping product-specific
+behavior behind a dedicated extension layer so future changes can converge on
+plugins instead of repeated invasive rebases.
 
-### Installing and running Codex CLI
+## Why This Version Exists
 
-Install globally with your preferred package manager:
+Upstream Codex already provides a strong local coding agent. The main problem
+this project solves is operational:
 
-```shell
-# Install using npm
-npm install -g @openai/codex
+- switching between multiple ChatGPT accounts should not require manual file
+  juggling
+- rate-limit and usage-limit handling should be able to fail over to another
+  account automatically
+- fullscreen TUI workflows should expose session and account operations in one
+  operator-facing control surface
+- fork-specific behavior should move toward a stable extension boundary instead
+  of expanding the patch set in core runtime code
+
+## What Is Included
+
+- Managed account storage under `~/.codex/accounts`
+- `codex login --auth <alias>` for capturing multiple ChatGPT logins into named
+  account slots
+- Account pool metadata with stable IDs, aliases, cooldown state, and inferred
+  usage windows
+- Threshold-based account routing and one-shot retry on explicit
+  limit/rejection failures for normal user turns in the fullscreen TUI path
+- A `Ctrl-P` control panel with:
+  - global session picker
+  - account selection
+  - alias rename submenu
+  - current-session fork entry point
+- A dedicated `codex-rs/ext` crate for fork-owned extension state and host
+  compatibility groundwork
+
+## Current Scope
+
+The current milestone is a practical MVP for daily use, not the final extension
+architecture.
+
+Implemented now:
+
+- managed ChatGPT account registry and auth snapshot layout
+- account activation and alias management in the TUI
+- control-panel-driven session and account operations
+- inferred cooldown recording from explicit limit errors
+- login-time account registration
+
+Planned next:
+
+- broader automatic account routing coverage beyond the current fullscreen TUI
+  path
+- observable switch reasons and richer operator status views
+- hook/interceptor expansion
+- capability-negotiated WASM plugins built on top of `codex-ext`
+
+## Repository Layout
+
+- [codex-rs/ext](./codex-rs/ext)  
+  Fork-owned extension crate for account pool state, auth snapshots, and future
+  plugin host compatibility.
+- [codex-rs/tui](./codex-rs/tui)  
+  Fullscreen local TUI implementation.
+- [codex-rs/tui_app_server](./codex-rs/tui_app_server)  
+  App-server-backed TUI implementation that mirrors relevant UX changes.
+- [docs/fork-extension-mvp.md](./docs/fork-extension-mvp.md)  
+  Fork proposal, MVP design, and phased roadmap.
+
+## Build And Run
+
+Build the Rust CLI locally:
+
+```bash
+cd codex-rs
+cargo build -p codex-cli
+./target/debug/codex
 ```
 
-```shell
-# Install using Homebrew
-brew install --cask codex
+Install it into your shell path:
+
+```bash
+cd codex-rs
+cargo build --release -p codex-cli
+sudo ln -sf "$(pwd)/target/release/codex" /usr/local/bin/codex
+codex --help
 ```
 
-Then simply run `codex` to get started.
+## Managed Account Quick Start
 
-<details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
+Register multiple ChatGPT logins into the managed account pool:
 
-Each GitHub Release contains many executables, but in practice, you likely want one of these:
+```bash
+codex login --auth primary
+codex login --auth backup
+codex login status
+```
 
-- macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
-- Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
+Start Codex, then use:
 
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
+- `Ctrl-P -> Sessions` to open the global session picker
+- `Ctrl-P -> Accounts` to switch the active managed account
+- `Ctrl-P -> Accounts -> Rename` to rename account aliases
 
-</details>
+Managed account state is stored under:
 
-### Using Codex with your ChatGPT plan
+```text
+~/.codex/accounts/
+├── account-pool.json
+└── <account-id>/
+    └── auth.json
+```
 
-Run `codex` and select **Sign in with ChatGPT**. We recommend signing into your ChatGPT account to use Codex as part of your Plus, Pro, Team, Edu, or Enterprise plan. [Learn more about what's included in your ChatGPT plan](https://help.openai.com/en/articles/11369540-codex-in-chatgpt).
+## Upstream Relationship
 
-You can also use Codex with an API key, but this requires [additional setup](https://developers.openai.com/codex/auth#sign-in-with-an-api-key).
+This project is based on OpenAI Codex and keeps upstream history so changes can
+be rebased and audited cleanly. The maintenance goal is to keep the fork-owned
+delta small, explicit, and increasingly isolated behind `codex-ext`.
 
-## Docs
+## License
 
-- [**Codex Documentation**](https://developers.openai.com/codex)
-- [**Contributing**](./docs/contributing.md)
-- [**Installing & building**](./docs/install.md)
-- [**Open source fund**](./docs/open-source-fund.md)
-
-This repository is licensed under the [Apache-2.0 License](LICENSE).
+This repository remains licensed under the [Apache-2.0 License](LICENSE).

@@ -57,9 +57,7 @@ jobs:
       run:
         working-directory: codex-rs
     env:
-      # 2026-03-04: temporarily change releases to use thin LTO because
-      # Ubuntu ARM is timing out at 60 minutes.
-      CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'thin' }}
+      CARGO_PROFILE_RELEASE_LTO: fat
 
     strategy:
       fail-fast: false
@@ -386,7 +384,7 @@ jobs:
     needs: tag-check
     uses: ./.github/workflows/rust-release-windows.yml
     with:
-      release-lto: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
+      release-lto: fat
     secrets: inherit
 
   argument-comment-lint-release-assets:

@@ -1,0 +1,154 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36" version="29.6.6">
+  <diagram id="codex-runtime-stack-swimlanes" name="Codex Runtime Stack Swimlanes">
+    <mxGraphModel dx="1971" dy="836" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2400" pageHeight="1600" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=24;fontStyle=1;" value="Codex Rust Workspace: TUI / App Server / Core / Protocol" vertex="1">
+          <mxGeometry height="30" width="980" x="110" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=12;fontColor=#666666;" value="Horizontal swimlanes show the main ownership boundaries. Native TUI can talk to core directly; richer clients can go through app-server." vertex="1">
+          <mxGeometry height="20" width="1220" x="110" y="54" as="geometry" />
+        </mxCell>
+        <mxCell id="lane_tui" parent="1" style="swimlane;html=1;startSize=34;rounded=0;horizontal=1;collapsible=0;container=1;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;" value="TUI Layer" vertex="1">
+          <mxGeometry height="170" width="1870" x="110" y="110" as="geometry" />
+        </mxCell>
+        <mxCell id="tui_box_ui" parent="lane_tui" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#b85450;fontSize=14;" value="App + ChatWidget + BottomPane&#xa;Slash commands, key chords, popups, transcript rendering" vertex="1">
+          <mxGeometry height="70" width="320" x="30" y="56" as="geometry" />
+        </mxCell>
+        <mxCell id="tui_box_events" parent="lane_tui" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#b85450;fontSize=14;" value="AppEvent loop&#xa;Routes UI intent into thread operations and local state changes" vertex="1">
+          <mxGeometry height="70" width="320" x="390" y="56" as="geometry" />
+        </mxCell>
+        <mxCell id="tui_box_paths" parent="lane_tui" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#b85450;fontSize=14;" value="Frontend split&#xa;1. `tui` uses core directly&#xa;2. `tui_app_server` and IDE clients use app-server" vertex="1">
+          <mxGeometry height="70" width="360" x="750" y="56" as="geometry" />
+        </mxCell>
+        <mxCell id="tui_note" parent="lane_tui" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=13;" value="Owns local interaction semantics: composer, overlays, menu trees, history presentation, and thread-local UX." vertex="1">
+          <mxGeometry height="40" width="980" x="1150" as="geometry" />
+        </mxCell>
+        <mxCell id="lane_server" parent="1" style="swimlane;html=1;startSize=34;rounded=0;horizontal=1;collapsible=0;container=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" value="App Server Layer" vertex="1">
+          <mxGeometry height="190" width="1870" x="110" y="320" as="geometry" />
+        </mxCell>
+        <mxCell id="server_box_transport" parent="lane_server" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6c8ebf;fontSize=14;" value="Transport&#xa;stdio / websocket&#xa;JSON-RPC framing and connection lifecycle" vertex="1">
+          <mxGeometry height="80" width="290" x="30" y="64" as="geometry" />
+        </mxCell>
+        <mxCell id="server_box_processor" parent="lane_server" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6c8ebf;fontSize=14;" value="`codex_message_processor`&#xa;Maps RPC requests to core operations&#xa;Tracks subscriptions and emits notifications" vertex="1">
+          <mxGeometry height="80" width="420" x="360" y="64" as="geometry" />
+        </mxCell>
+        <mxCell id="server_box_api" parent="lane_server" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6c8ebf;fontSize=14;" value="Thread / Turn / Command APIs&#xa;`thread/start`, `thread/resume`, `turn/start`, `command/exec`, config APIs" vertex="1">
+          <mxGeometry height="80" width="430" x="820" y="64" as="geometry" />
+        </mxCell>
+        <mxCell id="server_box_notifications" parent="lane_server" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6c8ebf;fontSize=14;" value="Notification fan-out&#xa;`thread/*`, `turn/*`, `item/*`, approval and MCP status updates" vertex="1">
+          <mxGeometry height="80" width="380" x="1290" y="64" as="geometry" />
+        </mxCell>
+        <mxCell id="server_note" parent="lane_server" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=13;" value="Main purpose: provide a stable service boundary for rich clients without reimplementing core execution logic." vertex="1">
+          <mxGeometry height="36" width="460" x="1190" as="geometry" />
+        </mxCell>
+        <mxCell id="lane_core" parent="1" style="swimlane;html=1;startSize=34;rounded=0;horizontal=1;collapsible=0;container=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" value="Core Layer" vertex="1">
+          <mxGeometry height="210" width="1870" x="110" y="550" as="geometry" />
+        </mxCell>
+        <mxCell id="core_box_threads" parent="lane_core" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#82b366;fontSize=14;" value="Thread and session runtime&#xa;`thread_manager`, rollouts, resume/fork, session sources" vertex="1">
+          <mxGeometry height="80" width="360" x="30" y="74" as="geometry" />
+        </mxCell>
+        <mxCell id="core_box_tasks" parent="lane_core" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#82b366;fontSize=14;" value="Task orchestration&#xa;`Op` handling, user turns, review, compact, interrupts, realtime" vertex="1">
+          <mxGeometry height="80" width="380" x="430" y="74" as="geometry" />
+        </mxCell>
+        <mxCell id="core_box_tools" parent="lane_core" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#82b366;fontSize=14;" value="Tools and runtime policy&#xa;tool specs, handlers, approvals, sandboxing, shell, apply_patch" vertex="1">
+          <mxGeometry height="80" width="420" x="850" y="74" as="geometry" />
+        </mxCell>
+        <mxCell id="core_box_clients" parent="lane_core" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#82b366;fontSize=14;" value="Model / client integration&#xa;responses client, reasoning stream, tool routing, event emission" vertex="1">
+          <mxGeometry height="80" width="400" x="1310" y="74" as="geometry" />
+        </mxCell>
+        <mxCell id="core_note" parent="lane_core" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=13;" value="This is the real execution substrate. Both native TUI and app-server eventually converge here." vertex="1">
+          <mxGeometry height="36" width="390" x="1180" as="geometry" />
+        </mxCell>
+        <mxCell id="lane_protocol" parent="1" style="swimlane;html=1;startSize=34;rounded=0;horizontal=1;collapsible=0;container=1;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;" value="Protocol Layer" vertex="1">
+          <mxGeometry height="210" width="1870" x="110" y="800" as="geometry" />
+        </mxCell>
+        <mxCell id="proto_box_internal" parent="lane_protocol" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#d6b656;fontSize=14;" value="`codex-protocol`&#xa;Internal shared types: `Op`, `EventMsg`, `SessionSource`, `ThreadId`, `TurnItem`" vertex="1">
+          <mxGeometry height="84" width="460" x="30" y="74" as="geometry" />
+        </mxCell>
+        <mxCell id="proto_box_server" parent="lane_protocol" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#d6b656;fontSize=14;" value="`codex-app-server-protocol`&#xa;JSON-RPC request / response / notification schema for `thread/*`, `turn/*`, `command/*`" vertex="1">
+          <mxGeometry height="84" width="520" x="540" y="74" as="geometry" />
+        </mxCell>
+        <mxCell id="proto_box_contract" parent="lane_protocol" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#d6b656;fontSize=14;" value="Why this layer exists&#xa;Keeps the execution/runtime contract sharable across crates instead of burying it in TUI or server code" vertex="1">
+          <mxGeometry height="84" width="520" x="1110" y="74" as="geometry" />
+        </mxCell>
+        <mxCell id="proto_note" parent="lane_protocol" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=13;" value="Bottom line: protocol types are the vocabulary that lets TUI, core, and app-server compose without duplicating state models." vertex="1">
+          <mxGeometry height="34" width="450" x="1070" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_tui_native" edge="1" parent="1" source="tui_box_events" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;labelBackgroundColor=none;" target="core_box_threads" value="native CLI path">
+          <mxGeometry relative="1" x="-0.1685" y="-10" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="660" y="270" />
+              <mxPoint x="80" y="270" />
+              <mxPoint x="80" y="664" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_tui_server" edge="1" parent="1" source="tui_box_paths" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;labelBackgroundColor=none;" target="server_box_transport" value="server-backed path">
+          <mxGeometry relative="1" x="-0.1716" y="-10" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="1040" y="300" />
+              <mxPoint x="285" y="300" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_server_flow1" edge="1" parent="1" source="server_box_transport" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;labelBackgroundColor=none;" target="server_box_processor" value="JSON-RPC requests">
+          <mxGeometry relative="1" y="14" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_server_flow2" edge="1" parent="1" source="server_box_processor" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;labelBackgroundColor=none;" target="core_box_tasks" value="translate to core ops">
+          <mxGeometry relative="1" x="-0.175" y="60" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="680" y="580" />
+              <mxPoint x="680" y="580" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_server_flow3" edge="1" parent="1" source="server_box_processor" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;labelBackgroundColor=none;" target="server_box_api" value="thread/turn surface">
+          <mxGeometry relative="1" y="14" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_server_flow4" edge="1" parent="1" source="core_box_clients" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;labelBackgroundColor=none;" value="notifications back to clients">
+          <mxGeometry relative="1" x="-0.0152" y="80" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="1880" y="664" />
+              <mxPoint x="1880" y="430" />
+              <mxPoint x="1780" y="430" />
+            </Array>
+            <mxPoint x="1780" y="430" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_core_proto_internal" edge="1" parent="1" source="core_box_tasks" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;labelBackgroundColor=none;" target="proto_box_internal" value="runtime event / op types">
+          <mxGeometry relative="1" y="-19" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_tui_proto_internal" edge="1" parent="1" source="proto_box_internal" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;dashed=1;endArrow=block;endFill=1;labelBackgroundColor=none;" target="tui_box_ui" value="rendered items and ids">
+          <mxGeometry relative="1" x="0.8325" y="21" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="20" y="916" />
+              <mxPoint x="20" y="201" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_server_proto_wire" edge="1" parent="1" source="server_box_api" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;labelBackgroundColor=none;" target="proto_box_server" value="wire schema">
+          <mxGeometry relative="1" x="-0.4113" y="-10" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="1145" y="530" />
+              <mxPoint x="940" y="530" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
