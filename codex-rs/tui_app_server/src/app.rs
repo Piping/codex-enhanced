@@ -10757,6 +10757,7 @@ guardian_approval = true
             initial_plan_type: app.chat_widget.current_plan_type(),
             model: Some(app.chat_widget.current_model().to_string()),
             startup_tooltip_override: None,
+            display_preferences: app.display_preferences.clone(),
             status_line_invalid_items_warned: app.status_line_invalid_items_warned.clone(),
             session_telemetry: app.session_telemetry.clone(),
         });

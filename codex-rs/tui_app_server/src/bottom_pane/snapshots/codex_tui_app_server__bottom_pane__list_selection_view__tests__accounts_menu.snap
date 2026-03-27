@@ -10,14 +10,18 @@ expression: render_lines(&view)
                         plus · 5h 12/80 · week  
                         34/240                  
   2. Backup             bac***@example.com ·    
-                        pro · 5h 4/80           
+                        pro · invalid:          
+                        deactivated workspace   
   3. Refresh Quota      Fetch the latest quota  
                         for the active ChatGPT  
                         account.                
-  4. Rename             Open alias rename       
+  4. Refresh All Quota  Fetch the latest quota  
+                        for every managed       
+                        ChatGPT account.        
+  5. Rename             Open alias rename       
                         actions for managed     
                         accounts.               
-  5. Delete             Open deletion actions   
+  6. Delete             Open deletion actions   
                         for managed accounts.   
                                                 
   /tmp/codex-home/accounts.json                 

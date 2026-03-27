@@ -6,14 +6,23 @@ expression: render_lines(&view)
   Delete                                        
   Delete saved snapshots for 2 managed account  
                                                 
-› 1. Delete Primary (disabled)  workspace-1 ·   
+› 1. Delete All Invalid         Remove 1        
+                                invalid         
+                                managed         
+                                account         
+                                snapshot.       
+     Delete Primary (disabled)  workspace-1 ·   
                                 pri***@example  
-                                .com · active   
+                                .com ·          
+                                invalid:        
+                                deactivated     
+                                workspace ·     
+                                active          
                                 (disabled:      
                                 Switch away     
                                 before          
                                 deleting)       
-  2. Delete Backup              workspace-2 ·   
+  3. Delete Backup              workspace-2 ·   
                                 bac***@example  
                                 .com            
                                                 
