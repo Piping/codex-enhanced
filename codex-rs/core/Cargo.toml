@@ -40,6 +40,7 @@ codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
 codex-login = { workspace = true }
 codex-loop = { workspace = true }
+codex-loop-runtime = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-git-utils = { workspace = true }

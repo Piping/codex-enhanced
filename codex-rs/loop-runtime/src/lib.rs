@@ -6,6 +6,23 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
 
+mod manage;
+mod service;
+
+pub use manage::DeleteLoopResult;
+pub use manage::LoopInfo;
+pub use manage::LoopSummary;
+pub use manage::UpdateLoopRequest;
+pub use manage::delete_loop;
+pub use manage::get_loop;
+pub use manage::list_loops;
+pub use manage::update_loop;
+pub use service::CreateLoopRequest;
+pub use service::CreateLoopResult;
+pub use service::CreateLoopServiceError;
+pub use service::CreateLoopTriggerRequest;
+pub use service::create_loop;
+
 #[derive(Debug)]
 pub struct LoopRuntimeOverrides {
     pub cwd: Option<AbsolutePathBuf>,

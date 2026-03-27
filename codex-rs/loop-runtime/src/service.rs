@@ -1,11 +1,3 @@
-use crate::function_tool::FunctionCallError;
-use crate::tools::context::FunctionToolOutput;
-use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolPayload;
-use crate::tools::handlers::parse_arguments;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
-use async_trait::async_trait;
 use chrono::Utc;
 use codex_loop::LoopContextMode;
 use codex_loop::LoopMode;
@@ -17,6 +9,7 @@ use codex_loop::LoopTriggerKind;
 use codex_loop::PersistedLoopExecutionSettings;
 use codex_loop::PersistedLoopTimer;
 use codex_loop::PersistedLoopTimersFile;
+use codex_loop::PersistedLoopTriggerQueuesFile;
 use codex_loop::load_loop_timers;
 use codex_loop::load_loop_trigger_queues;
 use codex_loop::loop_timers_path;
@@ -29,149 +22,132 @@ use codex_loop::validate_loop_id;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::fmt;
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Deserialize)]
-struct CreateLoopArgs {
-    id: Option<String>,
-    prompt: String,
-    action: Option<String>,
-    context_mode: LoopContextMode,
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct CreateLoopRequest {
+    pub id: Option<String>,
+    pub prompt: String,
+    pub action: Option<String>,
+    pub context_mode: LoopContextMode,
+    pub response_mode: LoopResponseMode,
+    pub security_mode: LoopSecurityMode,
+    pub cwd: Option<String>,
     #[serde(default)]
-    response_mode: LoopResponseMode,
-    #[serde(default)]
-    security_mode: LoopSecurityMode,
-    cwd: Option<String>,
-    writable_roots: Option<Vec<String>>,
-    trigger: CreateLoopTriggerArgs,
+    pub writable_roots: Vec<String>,
+    pub trigger: CreateLoopTriggerRequest,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-enum CreateLoopTriggerArgs {
+pub enum CreateLoopTriggerRequest {
     Timer { schedule: String },
     BeforeTurn,
     AfterTurn,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
-struct CreateLoopResult {
-    id: String,
-    context_mode: LoopContextMode,
-    response_mode: LoopResponseMode,
-    security_mode: LoopSecurityMode,
-    trigger_kind: String,
-    timers_path: String,
-    trigger_queue_path: String,
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct CreateLoopResult {
+    pub id: String,
+    pub context_mode: LoopContextMode,
+    pub response_mode: LoopResponseMode,
+    pub security_mode: LoopSecurityMode,
+    pub trigger_kind: String,
+    pub timers_path: String,
+    pub trigger_queue_path: String,
 }
 
-pub struct CreateLoopHandler;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CreateLoopServiceError {
+    InvalidRequest(String),
+    Io(String),
+    Internal(String),
+}
 
-#[async_trait]
-impl ToolHandler for CreateLoopHandler {
-    type Output = FunctionToolOutput;
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
-    }
-
-    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
-        true
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation { payload, turn, .. } = invocation;
-
-        let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "create_loop handler received unsupported payload".to_string(),
-                ));
+impl fmt::Display for CreateLoopServiceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidRequest(message) | Self::Io(message) | Self::Internal(message) => {
+                write!(f, "{message}")
             }
-        };
-
-        let args: CreateLoopArgs = parse_arguments(&arguments)?;
-        let result = create_loop_in_workspace(args, turn.cwd.as_path())?;
-        let text = serde_json::to_string(&result).map_err(|err| {
-            FunctionCallError::Fatal(format!("failed to serialize create_loop response: {err}"))
-        })?;
-        Ok(FunctionToolOutput::from_text(text, Some(true)))
+        }
     }
 }
 
-fn create_loop_in_workspace(
-    args: CreateLoopArgs,
+impl std::error::Error for CreateLoopServiceError {}
+
+pub fn create_loop(
+    request: CreateLoopRequest,
     workspace_cwd: &Path,
-) -> Result<CreateLoopResult, FunctionCallError> {
-    let prompt = args.prompt.trim();
+) -> Result<CreateLoopResult, CreateLoopServiceError> {
+    let prompt = request.prompt.trim();
     if prompt.is_empty() {
-        return Err(FunctionCallError::RespondToModel(
+        return Err(CreateLoopServiceError::InvalidRequest(
             "prompt must not be empty".to_string(),
         ));
     }
 
-    let id = args
+    let id = request
         .id
         .as_deref()
         .map(str::trim)
         .filter(|id| !id.is_empty());
-    match args.context_mode {
+    match request.context_mode {
         LoopContextMode::Persistent => {
             let Some(id) = id else {
-                return Err(FunctionCallError::RespondToModel(
+                return Err(CreateLoopServiceError::InvalidRequest(
                     "persistent loops require an id".to_string(),
                 ));
             };
-            validate_loop_id(id).map_err(FunctionCallError::RespondToModel)?;
+            validate_loop_id(id).map_err(CreateLoopServiceError::InvalidRequest)?;
         }
         LoopContextMode::Embed | LoopContextMode::Ephemeral => {
             if id.is_some() {
-                return Err(FunctionCallError::RespondToModel(
+                return Err(CreateLoopServiceError::InvalidRequest(
                     "only persistent loops may set id".to_string(),
                 ));
             }
         }
     }
 
-    let trigger_kind = match args.trigger {
-        CreateLoopTriggerArgs::Timer { schedule } => LoopTriggerKind::Timer {
+    let trigger_kind = match request.trigger {
+        CreateLoopTriggerRequest::Timer { schedule } => LoopTriggerKind::Timer {
             schedule: parse_loop_schedule(schedule.trim())
-                .map_err(FunctionCallError::RespondToModel)?,
+                .map_err(CreateLoopServiceError::InvalidRequest)?,
         },
-        CreateLoopTriggerArgs::BeforeTurn => LoopTriggerKind::BeforeTurn,
-        CreateLoopTriggerArgs::AfterTurn => LoopTriggerKind::AfterTurn,
+        CreateLoopTriggerRequest::BeforeTurn => LoopTriggerKind::BeforeTurn,
+        CreateLoopTriggerRequest::AfterTurn => LoopTriggerKind::AfterTurn,
     };
 
-    let writable_roots = args.writable_roots.unwrap_or_default();
     let execution = PersistedLoopExecutionSettings {
-        cwd: args
+        cwd: request
             .cwd
             .as_deref()
             .filter(|cwd| !cwd.trim().is_empty())
             .map(|cwd| parse_loop_cwd(cwd, workspace_cwd))
             .transpose()
-            .map_err(FunctionCallError::RespondToModel)?,
-        writable_roots: if writable_roots.is_empty() {
+            .map_err(CreateLoopServiceError::InvalidRequest)?,
+        writable_roots: if request.writable_roots.is_empty() {
             Vec::new()
         } else {
-            parse_loop_writable_roots(&writable_roots.join("\n"), workspace_cwd)
-                .map_err(FunctionCallError::RespondToModel)?
+            parse_loop_writable_roots(&request.writable_roots.join("\n"), workspace_cwd)
+                .map_err(CreateLoopServiceError::InvalidRequest)?
         },
     };
 
-    match args.security_mode {
+    match request.security_mode {
         LoopSecurityMode::Inherited => {
             if !execution.writable_roots.is_empty() {
-                return Err(FunctionCallError::RespondToModel(
+                return Err(CreateLoopServiceError::InvalidRequest(
                     "writable_roots requires security_mode set to specified_directory".to_string(),
                 ));
             }
         }
         LoopSecurityMode::SpecifiedDirectory => {
             if execution.writable_roots.is_empty() {
-                return Err(FunctionCallError::RespondToModel(
+                return Err(CreateLoopServiceError::InvalidRequest(
                     "specified_directory requires at least one writable root".to_string(),
                 ));
             }
@@ -182,9 +158,9 @@ fn create_loop_in_workspace(
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let mut timers_file = load_loop_timers(workspace_cwd)
-        .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
+        .map_err(|err| CreateLoopServiceError::Io(err.to_string()))?;
     if timers_file.timers.iter().any(|timer| timer.id == timer_id) {
-        return Err(FunctionCallError::RespondToModel(format!(
+        return Err(CreateLoopServiceError::InvalidRequest(format!(
             "loop `{timer_id}` already exists"
         )));
     }
@@ -192,21 +168,21 @@ fn create_loop_in_workspace(
     let created_at = Utc::now().timestamp();
     timers_file.timers.push(PersistedLoopTimer {
         id: timer_id.clone(),
-        mode: if matches!(args.context_mode, LoopContextMode::Persistent) {
+        mode: if matches!(request.context_mode, LoopContextMode::Persistent) {
             LoopMode::Persistent
         } else {
             LoopMode::OneShot
         },
         prompt: prompt.to_string(),
-        action: args
+        action: request
             .action
             .as_deref()
             .map(str::trim)
             .filter(|action| !action.is_empty())
             .map(ToOwned::to_owned),
-        context_mode: args.context_mode,
-        response_mode: args.response_mode,
-        security_mode: args.security_mode,
+        context_mode: request.context_mode,
+        response_mode: request.response_mode,
+        security_mode: request.security_mode,
         execution,
         schedule: match &trigger_kind {
             LoopTriggerKind::Timer { schedule } => schedule.clone(),
@@ -231,7 +207,7 @@ fn create_loop_in_workspace(
         .sort_by(|left, right| left.id.cmp(&right.id));
 
     let mut queues = load_loop_trigger_queues(workspace_cwd)
-        .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
+        .map_err(|err| CreateLoopServiceError::Io(err.to_string()))?;
     let timers_by_id = timers_file
         .timers
         .iter()
@@ -244,9 +220,9 @@ fn create_loop_in_workspace(
 
     Ok(CreateLoopResult {
         id: timer_id,
-        context_mode: args.context_mode,
-        response_mode: args.response_mode,
-        security_mode: args.security_mode,
+        context_mode: request.context_mode,
+        response_mode: request.response_mode,
+        security_mode: request.security_mode,
         trigger_kind: match trigger_kind {
             LoopTriggerKind::Timer { .. } => "timer".to_string(),
             LoopTriggerKind::BeforeTurn => "before_turn".to_string(),
@@ -262,36 +238,47 @@ fn create_loop_in_workspace(
 fn persist_loop_files(
     workspace_cwd: &Path,
     timers_file: &PersistedLoopTimersFile,
-    queues: &codex_loop::PersistedLoopTriggerQueuesFile,
-) -> Result<(), FunctionCallError> {
+    queues: &PersistedLoopTriggerQueuesFile,
+) -> Result<(), CreateLoopServiceError> {
     let timers_path = loop_timers_path(workspace_cwd);
     let trigger_queues_path = loop_trigger_queues_path(workspace_cwd);
     if let Some(parent) = timers_path.parent() {
         fs::create_dir_all(parent).map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
+            CreateLoopServiceError::Io(format!(
                 "failed to create loop workspace metadata directory: {err}"
             ))
         })?;
     }
     let timers_json = serde_json::to_string_pretty(timers_file).map_err(|err| {
-        FunctionCallError::Fatal(format!("failed to serialize loop timers: {err}"))
+        CreateLoopServiceError::Internal(format!("failed to serialize loop timers: {err}"))
     })?;
     fs::write(&timers_path, timers_json).map_err(|err| {
-        FunctionCallError::RespondToModel(format!("failed to persist loop timers: {err}"))
+        CreateLoopServiceError::Io(format!("failed to persist loop timers: {err}"))
     })?;
 
     let queues_json = serde_json::to_string_pretty(queues).map_err(|err| {
-        FunctionCallError::Fatal(format!("failed to serialize loop trigger queues: {err}"))
+        CreateLoopServiceError::Internal(format!("failed to serialize loop trigger queues: {err}"))
     })?;
     fs::write(&trigger_queues_path, queues_json).map_err(|err| {
-        FunctionCallError::RespondToModel(format!("failed to persist loop trigger queues: {err}"))
+        CreateLoopServiceError::Io(format!("failed to persist loop trigger queues: {err}"))
     })?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::CreateLoopRequest;
+    use super::CreateLoopResult;
+    use super::CreateLoopServiceError;
+    use super::CreateLoopTriggerRequest;
+    use super::create_loop;
+    use codex_loop::LoopContextMode;
+    use codex_loop::LoopResponseMode;
+    use codex_loop::LoopSecurityMode;
+    use codex_loop::load_loop_timers;
+    use codex_loop::load_loop_trigger_queues;
+    use codex_loop::loop_timers_path;
+    use codex_loop::loop_trigger_queues_path;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
@@ -301,8 +288,8 @@ mod tests {
         let docs = temp.path().join("docs");
         fs::create_dir_all(&docs).expect("create docs");
 
-        let result = create_loop_in_workspace(
-            CreateLoopArgs {
+        let result = create_loop(
+            CreateLoopRequest {
                 id: Some("director".to_string()),
                 prompt: "review progress".to_string(),
                 action: None,
@@ -310,8 +297,8 @@ mod tests {
                 response_mode: LoopResponseMode::Assistant,
                 security_mode: LoopSecurityMode::SpecifiedDirectory,
                 cwd: Some("docs".to_string()),
-                writable_roots: Some(vec!["docs".to_string()]),
-                trigger: CreateLoopTriggerArgs::AfterTurn,
+                writable_roots: vec!["docs".to_string()],
+                trigger: CreateLoopTriggerRequest::AfterTurn,
             },
             temp.path(),
         )
@@ -346,7 +333,10 @@ mod tests {
         let queues = load_loop_trigger_queues(temp.path()).expect("load queues");
         assert_eq!(queues.queues.len(), 3);
         assert_eq!(
-            queue_entries_for_phase_for_test(&queues, "after_turn"),
+            codex_loop::queue_entries_for_phase(&queues, codex_loop::LoopTriggerPhase::AfterTurn)
+                .iter()
+                .map(|entry| (entry.loop_id.clone(), entry.binding_id.clone()))
+                .collect::<Vec<_>>(),
             vec![("director".to_string(), "trigger-1".to_string())]
         );
     }
@@ -354,8 +344,8 @@ mod tests {
     #[test]
     fn create_loop_rejects_non_persistent_ids() {
         let temp = tempdir().expect("create tempdir");
-        let err = create_loop_in_workspace(
-            CreateLoopArgs {
+        let err = create_loop(
+            CreateLoopRequest {
                 id: Some("temp-worker".to_string()),
                 prompt: "check status".to_string(),
                 action: None,
@@ -363,8 +353,8 @@ mod tests {
                 response_mode: LoopResponseMode::Assistant,
                 security_mode: LoopSecurityMode::Inherited,
                 cwd: None,
-                writable_roots: None,
-                trigger: CreateLoopTriggerArgs::BeforeTurn,
+                writable_roots: Vec::new(),
+                trigger: CreateLoopTriggerRequest::BeforeTurn,
             },
             temp.path(),
         )
@@ -372,15 +362,15 @@ mod tests {
 
         assert_eq!(
             err,
-            FunctionCallError::RespondToModel("only persistent loops may set id".to_string())
+            CreateLoopServiceError::InvalidRequest("only persistent loops may set id".to_string())
         );
     }
 
     #[test]
     fn create_loop_rejects_missing_specified_directory_roots() {
         let temp = tempdir().expect("create tempdir");
-        let err = create_loop_in_workspace(
-            CreateLoopArgs {
+        let err = create_loop(
+            CreateLoopRequest {
                 id: None,
                 prompt: "check status".to_string(),
                 action: None,
@@ -388,8 +378,8 @@ mod tests {
                 response_mode: LoopResponseMode::User,
                 security_mode: LoopSecurityMode::SpecifiedDirectory,
                 cwd: None,
-                writable_roots: None,
-                trigger: CreateLoopTriggerArgs::BeforeTurn,
+                writable_roots: Vec::new(),
+                trigger: CreateLoopTriggerRequest::BeforeTurn,
             },
             temp.path(),
         )
@@ -397,25 +387,9 @@ mod tests {
 
         assert_eq!(
             err,
-            FunctionCallError::RespondToModel(
+            CreateLoopServiceError::InvalidRequest(
                 "specified_directory requires at least one writable root".to_string()
             )
         );
-    }
-
-    fn queue_entries_for_phase_for_test(
-        queues: &codex_loop::PersistedLoopTriggerQueuesFile,
-        phase: &str,
-    ) -> Vec<(String, String)> {
-        let phase = match phase {
-            "timer" => codex_loop::LoopTriggerPhase::Timer,
-            "before_turn" => codex_loop::LoopTriggerPhase::BeforeTurn,
-            "after_turn" => codex_loop::LoopTriggerPhase::AfterTurn,
-            _ => panic!("unexpected phase"),
-        };
-        codex_loop::queue_entries_for_phase(queues, phase)
-            .iter()
-            .map(|entry| (entry.loop_id.clone(), entry.binding_id.clone()))
-            .collect()
     }
 }

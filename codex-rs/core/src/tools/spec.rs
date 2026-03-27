@@ -212,44 +212,6 @@ fn close_agent_output_schema() -> JsonValue {
     })
 }
 
-fn create_loop_output_schema() -> JsonValue {
-    json!({
-        "type": "object",
-        "properties": {
-            "id": {
-                "type": "string",
-                "description": "The created loop id."
-            },
-            "context_mode": {
-                "type": "string",
-                "description": "The loop context mode."
-            },
-            "response_mode": {
-                "type": "string",
-                "description": "How loop results will be delivered to the main thread."
-            },
-            "security_mode": {
-                "type": "string",
-                "description": "The loop execution security mode."
-            },
-            "trigger_kind": {
-                "type": "string",
-                "description": "The created trigger kind."
-            },
-            "timers_path": {
-                "type": "string",
-                "description": "Workspace-local path to the persisted loop timer file."
-            },
-            "trigger_queue_path": {
-                "type": "string",
-                "description": "Workspace-local path to the persisted trigger queue file."
-            }
-        },
-        "required": ["id", "context_mode", "response_mode", "security_mode", "trigger_kind", "timers_path", "trigger_queue_path"],
-        "additionalProperties": false
-    })
-}
-
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ShellCommandBackendConfig {
     Classic,
@@ -1737,120 +1699,230 @@ fn create_close_agent_tool() -> ToolSpec {
 }
 
 fn create_loop_tool() -> ToolSpec {
-    let trigger_properties = BTreeMap::from([
-        (
-            "kind".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Trigger kind. Use `timer`, `before_turn`, or `after_turn`.".to_string(),
-                ),
-            },
-        ),
-        (
-            "schedule".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Timer schedule when `kind` is `timer`. Accepts interval strings like `5m` and cron expressions."
-                        .to_string(),
-                ),
-            },
-        ),
-    ]);
-    let properties = BTreeMap::from([
-        (
-            "id".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Stable loop id. Required for `persistent` loops. Omit for `embed` and `ephemeral` loops."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
+    let trigger_schema = JsonSchema::Object {
+        properties: BTreeMap::from([
+            (
+                "kind".to_string(),
+                JsonSchema::String {
+                    description: Some(
+                        "Trigger type. Use `timer`, `before_turn`, or `after_turn`."
+                            .to_string(),
+                    ),
+                },
+            ),
+            (
+                "schedule".to_string(),
+                JsonSchema::String {
+                    description: Some(
+                        "Timer schedule such as `10m` or a cron string. Required when kind is `timer`."
+                            .to_string(),
+                    ),
+                },
+            ),
+        ]),
+        required: Some(vec!["kind".to_string()]),
+        additional_properties: Some(false.into()),
+    };
+
+    let create_schema = JsonSchema::Object {
+        properties: BTreeMap::from([
+            (
+                "id".to_string(),
+                JsonSchema::String {
+                    description: Some(
+                        "Loop id. Required for persistent loops. Omit for embed or ephemeral loops."
+                            .to_string(),
+                    ),
+                },
+            ),
+            (
+                "prompt".to_string(),
+                JsonSchema::String {
+                    description: Some("Loop prompt to execute.".to_string()),
+                },
+            ),
+            (
+                "action".to_string(),
+                JsonSchema::String {
+                    description: Some(
+                        "Optional extra action text appended when the loop emits a user message."
+                            .to_string(),
+                    ),
+                },
+            ),
+            (
+                "context_mode".to_string(),
+                JsonSchema::String {
+                    description: Some(
+                        "Loop context mode. Use `embed`, `ephemeral`, or `persistent`."
+                            .to_string(),
+                    ),
+                },
+            ),
+            (
+                "response_mode".to_string(),
+                JsonSchema::String {
+                    description: Some(
+                        "How loop results are delivered. Use `assistant` or `user`."
+                            .to_string(),
+                    ),
+                },
+            ),
+            (
+                "security_mode".to_string(),
+                JsonSchema::String {
+                    description: Some(
+                        "Loop execution security. Use `inherited` or `specified_directory`."
+                            .to_string(),
+                    ),
+                },
+            ),
+            (
+                "cwd".to_string(),
+                JsonSchema::String {
+                    description: Some(
+                        "Optional working directory for the loop. Relative paths resolve against the current workspace."
+                            .to_string(),
+                    ),
+                },
+            ),
+            (
+                "writable_roots".to_string(),
+                JsonSchema::Array {
+                    items: Box::new(JsonSchema::String { description: None }),
+                    description: Some(
+                        "Writable directories when security_mode is `specified_directory`. Relative paths resolve against the current workspace."
+                            .to_string(),
+                    ),
+                },
+            ),
+            ("trigger".to_string(), trigger_schema.clone()),
+        ]),
+        required: Some(vec![
             "prompt".to_string(),
-            JsonSchema::String {
-                description: Some("The loop prompt to execute.".to_string()),
-            },
-        ),
-        (
-            "action".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional extra action text appended when the loop emits a user message."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
             "context_mode".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Loop context mode. Use `embed`, `ephemeral`, or `persistent`."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
             "response_mode".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "How loop results should be delivered. Use `assistant` or `user`."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
             "security_mode".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Loop execution security. Use `inherited` or `specified_directory`."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "cwd".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional working directory for the loop. Relative paths resolve against the current workspace."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "writable_roots".to_string(),
-            JsonSchema::Array {
-                items: Box::new(JsonSchema::String { description: None }),
-                description: Some(
-                    "Writable directories when `security_mode` is `specified_directory`. Relative paths resolve against the current workspace."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
             "trigger".to_string(),
-            JsonSchema::Object {
-                properties: trigger_properties,
-                required: Some(vec!["kind".to_string()]),
-                additional_properties: Some(false.into()),
-            },
-        ),
-    ]);
+        ]),
+        additional_properties: Some(false.into()),
+    };
+
+    let update_schema = JsonSchema::Object {
+        properties: BTreeMap::from([
+            (
+                "prompt".to_string(),
+                JsonSchema::String {
+                    description: Some("Optional new loop prompt.".to_string()),
+                },
+            ),
+            (
+                "action".to_string(),
+                JsonSchema::String {
+                    description: Some(
+                        "Optional new action text. Pass null to clear the current action."
+                            .to_string(),
+                    ),
+                },
+            ),
+            (
+                "context_mode".to_string(),
+                JsonSchema::String {
+                    description: Some(
+                        "Optional new context mode. Use `embed`, `ephemeral`, or `persistent`."
+                            .to_string(),
+                    ),
+                },
+            ),
+            (
+                "response_mode".to_string(),
+                JsonSchema::String {
+                    description: Some(
+                        "Optional new response mode. Use `assistant` or `user`."
+                            .to_string(),
+                    ),
+                },
+            ),
+            (
+                "security_mode".to_string(),
+                JsonSchema::String {
+                    description: Some(
+                        "Optional new security mode. Use `inherited` or `specified_directory`."
+                            .to_string(),
+                    ),
+                },
+            ),
+            (
+                "cwd".to_string(),
+                JsonSchema::String {
+                    description: Some(
+                        "Optional new working directory. Pass null to clear the current override."
+                            .to_string(),
+                    ),
+                },
+            ),
+            (
+                "writable_roots".to_string(),
+                JsonSchema::Array {
+                    items: Box::new(JsonSchema::String { description: None }),
+                    description: Some(
+                        "Optional writable directories replacement when using `specified_directory`."
+                            .to_string(),
+                    ),
+                },
+            ),
+            (
+                "enabled".to_string(),
+                JsonSchema::Boolean {
+                    description: Some("Optional enabled flag.".to_string()),
+                },
+            ),
+            (
+                "trigger_bindings".to_string(),
+                JsonSchema::Array {
+                    items: Box::new(trigger_schema),
+                    description: Some(
+                        "Optional full replacement for the loop trigger bindings."
+                            .to_string(),
+                    ),
+                },
+            ),
+        ]),
+        required: None,
+        additional_properties: Some(false.into()),
+    };
+
     ToolSpec::Function(ResponsesApiTool {
-        name: "create_loop".to_string(),
-        description: "Create a workspace loop agent for later execution. Loops can run with `embed`, `ephemeral`, or `persistent` context and can trigger on `timer`, `before_turn`, or `after_turn`. This tool only creates a new loop; it does not update or delete existing loops.".to_string(),
+        name: "loop".to_string(),
+        description: "Manage workspace-local loop agents. Use this tool to create, list, inspect, update, or delete loops in the current workspace. The tool writes shared loop metadata so TUI Loop Manager and other loop services stay in sync.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec![
-                "prompt".to_string(),
-                "context_mode".to_string(),
-                "trigger".to_string(),
+            properties: BTreeMap::from([
+                (
+                    "op".to_string(),
+                    JsonSchema::String {
+                        description: Some(
+                            "Loop operation to perform. Use `create`, `list`, `info`, `update`, or `delete`."
+                                .to_string(),
+                        ),
+                    },
+                ),
+                (
+                    "id".to_string(),
+                    JsonSchema::String {
+                        description: Some(
+                            "Loop id for `info`, `update`, or `delete`.".to_string(),
+                        ),
+                    },
+                ),
+                ("create".to_string(), create_schema),
+                ("update".to_string(), update_schema),
             ]),
+            required: Some(vec!["op".to_string()]),
             additional_properties: Some(false.into()),
         },
-        output_schema: Some(create_loop_output_schema()),
+        output_schema: None,
     })
 }
 
@@ -2834,12 +2906,12 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::ArtifactsHandler;
     use crate::tools::handlers::CodeModeExecuteHandler;
     use crate::tools::handlers::CodeModeWaitHandler;
-    use crate::tools::handlers::CreateLoopHandler;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::JsReplHandler;
     use crate::tools::handlers::JsReplResetHandler;
     use crate::tools::handlers::ListDirHandler;
+    use crate::tools::handlers::LoopToolHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
@@ -3284,8 +3356,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
+        builder.register_handler("loop", Arc::new(LoopToolHandler));
         builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandler));
-        builder.register_handler("create_loop", Arc::new(CreateLoopHandler));
         builder.register_handler("send_input", Arc::new(SendInputHandler));
         builder.register_handler("wait_agent", Arc::new(WaitAgentHandler));
         builder.register_handler("close_agent", Arc::new(CloseAgentHandler));

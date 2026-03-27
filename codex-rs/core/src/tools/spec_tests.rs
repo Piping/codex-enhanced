@@ -521,7 +521,7 @@ fn test_build_specs_collab_tools_enabled() {
     assert_contains_tool_names(
         &tools,
         &[
-            "create_loop",
+            "loop",
             "spawn_agent",
             "send_input",
             "wait_agent",
@@ -530,47 +530,6 @@ fn test_build_specs_collab_tools_enabled() {
     );
     assert_lacks_tool_name(&tools, "spawn_agents_on_csv");
     assert_lacks_tool_name(&tools, "list_agents");
-
-    let create_loop = find_tool(&tools, "create_loop");
-    let ToolSpec::Function(ResponsesApiTool {
-        parameters,
-        output_schema,
-        ..
-    }) = &create_loop.spec
-    else {
-        panic!("create_loop should be a function tool");
-    };
-    let JsonSchema::Object {
-        properties,
-        required,
-        ..
-    } = parameters
-    else {
-        panic!("create_loop should use object params");
-    };
-    assert!(properties.contains_key("prompt"));
-    assert!(properties.contains_key("context_mode"));
-    assert!(properties.contains_key("trigger"));
-    assert_eq!(
-        required.as_ref(),
-        Some(&vec![
-            "prompt".to_string(),
-            "context_mode".to_string(),
-            "trigger".to_string(),
-        ])
-    );
-    assert_eq!(
-        output_schema.as_ref().expect("create_loop output schema")["required"],
-        json!([
-            "id",
-            "context_mode",
-            "response_mode",
-            "security_mode",
-            "trigger_kind",
-            "timers_path",
-            "trigger_queue_path"
-        ])
-    );
 }
 
 #[test]
@@ -594,7 +553,6 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
     assert_contains_tool_names(
         &tools,
         &[
-            "create_loop",
             "spawn_agent",
             "send_message",
             "assign_task",
@@ -748,6 +706,7 @@ fn test_build_specs_enable_fanout_enables_agent_jobs_and_collab_tools() {
     assert_contains_tool_names(
         &tools,
         &[
+            "loop",
             "spawn_agent",
             "send_input",
             "wait_agent",

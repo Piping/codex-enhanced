@@ -43,6 +43,11 @@ install:
     rustup show active-toolchain
     cargo fetch
 
+# Recursively clean Rust build artifacts older than 1 day.
+[no-cd]
+sweep:
+    cargo sweep --recursive --time 1 ./codex-rs
+
 # Run post-edit validation tests with cargo-nextest.
 test:
     {{sccache_prefix}} cargo nextest run --no-fail-fast

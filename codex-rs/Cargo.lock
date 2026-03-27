@@ -1934,6 +1934,7 @@ dependencies = [
  "codex-instructions",
  "codex-login",
  "codex-loop",
+ "codex-loop-runtime",
  "codex-network-proxy",
  "codex-otel",
  "codex-plugin",
@@ -2376,11 +2377,15 @@ dependencies = [
 name = "codex-loop-runtime"
 version = "0.1.8"
 dependencies = [
+ "chrono",
  "codex-loop",
  "codex-protocol",
  "codex-utils-absolute-path",
  "pretty_assertions",
+ "serde",
+ "serde_json",
  "tempfile",
+ "uuid",
 ]
 
 [[package]]
