@@ -2069,6 +2069,7 @@ impl App {
                     );
                     if timers.is_empty() {
                         self.loop_timers.after_turn_scheduler.note_round_completed();
+                        self.sync_background_loop_status();
                         continue;
                     }
                     self.sync_background_loop_status();
@@ -3331,6 +3332,7 @@ mod tests {
     use codex_loop::LoopSchedule;
     use codex_loop::PersistedLoopExecutionSettings;
     use codex_loop::PersistedLoopTimer;
+    use codex_loop::PersistedLoopTriggerQueues;
     use codex_otel::SessionTelemetry;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::SessionSource;
@@ -3561,5 +3563,20 @@ mod tests {
                 ),
             })
         );
+    }
+
+    #[tokio::test]
+    async fn empty_after_turn_config_clears_background_loop_status() {
+        let mut app = make_test_app().await;
+        app.primary_thread_id = Some(ThreadId::new());
+        app.loop_timers.workspace_cwd = Some(app.config.cwd.clone());
+        app.loop_timers.timers.clear();
+        app.loop_timers.trigger_queues = PersistedLoopTriggerQueues::default();
+
+        app.handle_primary_thread_turn_complete_for_loops(Some("done".to_string()))
+            .await;
+
+        assert_eq!(app.loop_timers.after_turn_scheduler.status_label(), None);
+        assert_eq!(app.chat_widget.background_loop_status_text(), None);
     }
 }

@@ -5752,6 +5752,16 @@ impl ChatWidget {
         self.refresh_background_loop_status_surface();
     }
 
+    #[cfg(test)]
+    pub(crate) fn background_loop_status_text(&self) -> Option<String> {
+        self.background_loop_status.as_ref().map(|status| {
+            status.details.as_ref().map_or_else(
+                || status.header.clone(),
+                |details| format!("{}\n{details}", status.header),
+            )
+        })
+    }
+
     pub(crate) fn handle_paste(&mut self, text: String) {
         self.bottom_pane.handle_paste(text);
     }
