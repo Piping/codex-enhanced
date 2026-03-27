@@ -16,6 +16,9 @@ use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_chatgpt::connectors::AppInfo;
+use codex_clawbot::ProviderEvent;
+use codex_clawbot::ProviderKind;
+use codex_clawbot::ProviderSessionRef;
 use codex_file_search::FileMatch;
 use codex_loop::LoopContextMode;
 use codex_loop::LoopResponseMode;
@@ -85,6 +88,16 @@ pub(crate) enum LoopTimerTriggerSource {
     Manual,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClawbotFeishuConfigField {
+    AppId,
+    AppSecret,
+    VerificationToken,
+    EncryptKey,
+    BotOpenId,
+    BotUserId,
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
@@ -95,6 +108,59 @@ pub(crate) enum AppEvent {
     OpenThreadPanel,
     /// Open the account pool panel inside the control panel flow.
     OpenAccountsPanel,
+    /// Open the clawbot runtime panel inside the control panel flow.
+    OpenClawbotPanel,
+    /// Open the clawbot sessions submenu inside clawbot.
+    OpenClawbotSessionsPanel,
+    /// Open the Feishu configuration panel inside clawbot.
+    OpenClawbotConfigPanel,
+    /// Open a prompt to manually bind a Feishu session id to the current thread.
+    OpenClawbotManualBindPrompt,
+    /// Open the actions panel for a discovered clawbot session.
+    OpenClawbotSessionActions {
+        session: ProviderSessionRef,
+    },
+    /// Open a prompt to edit one Feishu config field.
+    OpenClawbotFeishuConfigPrompt {
+        field: ClawbotFeishuConfigField,
+    },
+    /// Persist one Feishu config field to the workspace clawbot config.
+    SaveClawbotFeishuConfigValue {
+        field: ClawbotFeishuConfigField,
+        value: String,
+    },
+    /// Persist a manual Feishu session id binding to the current thread.
+    SaveClawbotManualBindSessionId {
+        session_id: String,
+    },
+    /// Bind a clawbot session to the current thread.
+    ClawbotConnectCurrentThread {
+        session: ProviderSessionRef,
+    },
+    /// Remove the thread binding for a clawbot session.
+    ClawbotDisconnect {
+        session: ProviderSessionRef,
+    },
+    /// Clear cached unread messages for a clawbot session.
+    ClawbotFlushCachedMessages {
+        session: ProviderSessionRef,
+    },
+    /// Retry the provider runtime connection and persist the new status.
+    ClawbotRetryConnection {
+        provider: ProviderKind,
+    },
+    /// Scan the provider session list and refresh persisted clawbot sessions.
+    ClawbotScanSessions {
+        provider: ProviderKind,
+    },
+    /// Clear unbound provider sessions while preserving active bindings.
+    ClawbotClearSessions {
+        provider: ProviderKind,
+    },
+    /// Apply one normalized provider event emitted by the clawbot runtime task.
+    ClawbotProviderEvent {
+        event: Box<ProviderEvent>,
+    },
     /// Open the loop timers panel inside the control panel flow.
     OpenLoopTimersPanel,
     /// Open the workspace trigger-queue panel inside Loop Manager.

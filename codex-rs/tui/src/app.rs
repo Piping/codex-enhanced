@@ -71,6 +71,8 @@ use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::RequestId;
 use codex_arg0::Arg0DispatchPaths;
+use codex_clawbot::ProviderKind;
+use codex_clawbot::ProviderOutboundTextMessage;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ForkSnapshot;
@@ -152,6 +154,7 @@ use uuid::Uuid;
 
 mod agent_navigation;
 mod btw;
+mod clawbot;
 mod display_preferences_menu;
 mod jump_navigation;
 mod key_chord;
@@ -163,6 +166,7 @@ mod thread_menu;
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::btw::BtwSessionState;
+use self::clawbot::control_panel_clawbot_item;
 use self::display_preferences_menu::control_panel_show_hide_item;
 use self::display_preferences_menu::display_preferences_items;
 use self::jump_navigation::build_jump_catalog;
@@ -993,6 +997,8 @@ pub(crate) struct App {
     btw_session: Option<BtwSessionState>,
     loop_timers: LoopTimersState,
     primary_loop_generated_turn_in_flight: bool,
+    clawbot_outbound_tx: Option<mpsc::UnboundedSender<ProviderOutboundTextMessage>>,
+    clawbot_provider_tasks: HashMap<ProviderKind, JoinHandle<()>>,
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
@@ -1941,6 +1947,10 @@ impl App {
         } else {
             None
         };
+        let clawbot_terminal_event = match &event.msg {
+            EventMsg::TurnComplete(_) | EventMsg::Error(_) => Some(event.clone()),
+            _ => None,
+        };
         let (sender, store) = {
             let channel = self.ensure_thread_channel(thread_id);
             (channel.sender.clone(), Arc::clone(&channel.store))
@@ -1982,6 +1992,10 @@ impl App {
         }
         if refresh_pending_thread_approvals {
             self.refresh_pending_thread_approvals().await;
+        }
+        if let Some(event) = clawbot_terminal_event {
+            self.handle_clawbot_thread_terminal_event(thread_id, &event.msg)
+                .await;
         }
         match primary_loop_event {
             Some(PrimaryLoopEvent::TurnComplete(last_agent_message)) => {
@@ -2153,6 +2167,7 @@ impl App {
                 dismiss_on_select: false,
                 ..Default::default()
             },
+            control_panel_clawbot_item(),
             control_panel_thread_item(),
             SelectionItem {
                 name: "Loop Manager".to_string(),
@@ -3639,6 +3654,8 @@ impl App {
             btw_session: None,
             loop_timers: LoopTimersState::default(),
             primary_loop_generated_turn_in_flight: false,
+            clawbot_outbound_tx: None,
+            clawbot_provider_tasks: HashMap::new(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -3678,6 +3695,11 @@ impl App {
                     tx,
                 );
             }
+        }
+
+        if let Err(error) = app.bootstrap_clawbot_runtime().await {
+            app.chat_widget
+                .add_error_message(format!("Failed to start clawbot runtime: {error}"));
         }
 
         let tui_events = tui.event_stream();
@@ -3884,6 +3906,67 @@ impl App {
             }
             AppEvent::OpenAccountsPanel => {
                 self.open_accounts_panel();
+            }
+            AppEvent::OpenClawbotPanel => {
+                self.open_clawbot_panel();
+            }
+            AppEvent::OpenClawbotSessionsPanel => {
+                self.open_clawbot_sessions_panel();
+            }
+            AppEvent::OpenClawbotConfigPanel => {
+                self.open_clawbot_config_panel();
+            }
+            AppEvent::OpenClawbotManualBindPrompt => {
+                self.open_clawbot_manual_bind_prompt();
+            }
+            AppEvent::OpenClawbotSessionActions { session } => {
+                self.open_clawbot_session_actions(session);
+            }
+            AppEvent::OpenClawbotFeishuConfigPrompt { field } => {
+                self.open_clawbot_feishu_config_prompt(field)
+                    .map_err(|error| color_eyre::eyre::eyre!("{error}"))?;
+            }
+            AppEvent::SaveClawbotFeishuConfigValue { field, value } => {
+                self.save_clawbot_feishu_config_value(field, value)
+                    .map_err(|error| color_eyre::eyre::eyre!("{error}"))?;
+            }
+            AppEvent::SaveClawbotManualBindSessionId { session_id } => {
+                self.save_clawbot_manual_bind_session_id(session_id)
+                    .await
+                    .map_err(|error| color_eyre::eyre::eyre!("{error}"))?;
+            }
+            AppEvent::ClawbotConnectCurrentThread { session } => {
+                self.clawbot_connect_current_thread(session)
+                    .await
+                    .map_err(|error| color_eyre::eyre::eyre!("{error}"))?;
+            }
+            AppEvent::ClawbotDisconnect { session } => {
+                self.clawbot_disconnect(session)
+                    .map_err(|error| color_eyre::eyre::eyre!("{error}"))?;
+            }
+            AppEvent::ClawbotFlushCachedMessages { session } => {
+                self.clawbot_flush_cached_messages(session)
+                    .await
+                    .map_err(|error| color_eyre::eyre::eyre!("{error}"))?;
+            }
+            AppEvent::ClawbotRetryConnection { provider } => {
+                self.clawbot_retry_connection(provider)
+                    .await
+                    .map_err(|error| color_eyre::eyre::eyre!("{error}"))?;
+            }
+            AppEvent::ClawbotScanSessions { provider } => {
+                self.clawbot_scan_sessions(provider)
+                    .await
+                    .map_err(|error| color_eyre::eyre::eyre!("{error}"))?;
+            }
+            AppEvent::ClawbotClearSessions { provider } => {
+                self.clawbot_clear_sessions(provider)
+                    .map_err(|error| color_eyre::eyre::eyre!("{error}"))?;
+            }
+            AppEvent::ClawbotProviderEvent { event } => {
+                self.handle_clawbot_provider_event(*event)
+                    .await
+                    .map_err(|error| color_eyre::eyre::eyre!("{error}"))?;
             }
             AppEvent::OpenThreadPanel => {
                 self.open_thread_panel();
@@ -6296,6 +6379,15 @@ mod tests {
     use crate::history_cell::new_session_info;
     use crate::multi_agents::AgentPickerThreadEntry;
     use assert_matches::assert_matches;
+    use codex_clawbot::CachedUnreadMessage;
+    use codex_clawbot::ClawbotStore;
+    use codex_clawbot::FeishuConfig;
+    use codex_clawbot::ProviderKind;
+    use codex_clawbot::ProviderOutboundTextMessage;
+    use codex_clawbot::ProviderSession;
+    use codex_clawbot::ProviderSessionRef;
+    use codex_clawbot::SessionBinding;
+    use codex_clawbot::SessionStatus;
     use codex_core::CodexAuth;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
@@ -6309,6 +6401,7 @@ mod tests {
     use codex_protocol::openai_models::ModelAvailabilityNux;
     use codex_protocol::protocol::AgentMessageDeltaEvent;
     use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::SandboxPolicy;
@@ -8597,6 +8690,378 @@ guardian_approval = true
         assert!(!app.chat_widget.has_active_view());
     }
 
+    #[tokio::test]
+    async fn clawbot_panel_sessions_row_emits_open_sessions_panel_event() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        app.open_clawbot_panel();
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_matches!(
+            app_event_rx.try_recv(),
+            Ok(AppEvent::OpenClawbotSessionsPanel)
+        );
+    }
+
+    #[tokio::test]
+    async fn clawbot_panel_configuration_row_emits_open_config_panel_event() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        app.open_clawbot_panel();
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_matches!(
+            app_event_rx.try_recv(),
+            Ok(AppEvent::OpenClawbotConfigPanel)
+        );
+    }
+
+    #[tokio::test]
+    async fn clawbot_sessions_panel_retry_connection_row_emits_event() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        app.open_clawbot_sessions_panel();
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_matches!(
+            app_event_rx.try_recv(),
+            Ok(AppEvent::ClawbotRetryConnection {
+                provider: ProviderKind::Feishu
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn clawbot_sessions_panel_manual_bind_row_emits_prompt_event() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        app.active_thread_id = Some(ThreadId::new());
+        app.open_clawbot_sessions_panel();
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_matches!(
+            app_event_rx.try_recv(),
+            Ok(AppEvent::OpenClawbotManualBindPrompt)
+        );
+    }
+
+    #[tokio::test]
+    async fn clawbot_sessions_panel_scan_row_emits_event() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        app.active_thread_id = Some(ThreadId::new());
+        app.open_clawbot_sessions_panel();
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_matches!(
+            app_event_rx.try_recv(),
+            Ok(AppEvent::ClawbotScanSessions {
+                provider: ProviderKind::Feishu
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn clawbot_sessions_panel_clear_row_emits_event() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let tempdir = tempdir().expect("tempdir");
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+        app.active_thread_id = Some(ThreadId::new());
+
+        let store = ClawbotStore::new(app.config.cwd.clone());
+        store
+            .save_sessions(&[ProviderSession {
+                provider: ProviderKind::Feishu,
+                session_id: "chat_clear".to_string(),
+                display_name: Some("tracker".to_string()),
+                unread_count: 1,
+                last_message_at: Some(10),
+                status: SessionStatus::Discovered,
+                bound_thread_id: None,
+            }])
+            .expect("save sessions");
+        store
+            .save_unread_messages(&[CachedUnreadMessage {
+                provider: ProviderKind::Feishu,
+                session_id: "chat_clear".to_string(),
+                message_id: "msg_1".to_string(),
+                text: "hello".to_string(),
+                received_at: 11,
+            }])
+            .expect("save unread messages");
+
+        app.open_clawbot_sessions_panel();
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_matches!(
+            app_event_rx.try_recv(),
+            Ok(AppEvent::ClawbotClearSessions {
+                provider: ProviderKind::Feishu
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn clawbot_session_actions_connect_current_thread_emits_event() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let tempdir = tempdir().expect("tempdir");
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+        app.active_thread_id = Some(ThreadId::new());
+
+        let store = ClawbotStore::new(app.config.cwd.clone());
+        store
+            .save_sessions(&[ProviderSession {
+                provider: ProviderKind::Feishu,
+                session_id: "chat_1".to_string(),
+                display_name: Some("Alice".to_string()),
+                unread_count: 2,
+                last_message_at: Some(10),
+                status: SessionStatus::Discovered,
+                bound_thread_id: None,
+            }])
+            .expect("save sessions");
+
+        let session = ProviderSessionRef::new(ProviderKind::Feishu, "chat_1");
+        app.open_clawbot_session_actions(session.clone());
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_matches!(
+            app_event_rx.try_recv(),
+            Ok(AppEvent::ClawbotConnectCurrentThread { session: emitted })
+                if emitted == session
+        );
+    }
+
+    #[tokio::test]
+    async fn clawbot_session_actions_flush_cached_messages_emits_event() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let tempdir = tempdir().expect("tempdir");
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+
+        let store = ClawbotStore::new(app.config.cwd.clone());
+        store
+            .save_sessions(&[ProviderSession {
+                provider: ProviderKind::Feishu,
+                session_id: "chat_2".to_string(),
+                display_name: Some("Bob".to_string()),
+                unread_count: 3,
+                last_message_at: Some(10),
+                status: SessionStatus::Bound,
+                bound_thread_id: Some("thread_123".to_string()),
+            }])
+            .expect("save sessions");
+
+        let session = ProviderSessionRef::new(ProviderKind::Feishu, "chat_2");
+        app.open_clawbot_session_actions(session.clone());
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_matches!(
+            app_event_rx.try_recv(),
+            Ok(AppEvent::ClawbotFlushCachedMessages { session: emitted })
+                if emitted == session
+        );
+    }
+
+    fn persist_clawbot_binding(store: &ClawbotStore, thread_id: ThreadId, session_id: &str) {
+        store
+            .save_sessions(&[ProviderSession {
+                provider: ProviderKind::Feishu,
+                session_id: session_id.to_string(),
+                display_name: Some("Alice".to_string()),
+                unread_count: 0,
+                last_message_at: Some(10),
+                status: SessionStatus::Bound,
+                bound_thread_id: Some(thread_id.to_string()),
+            }])
+            .expect("save sessions");
+        store
+            .save_bindings(&[SessionBinding {
+                provider: ProviderKind::Feishu,
+                session_id: session_id.to_string(),
+                thread_id: thread_id.to_string(),
+                created_at: 1,
+                updated_at: 2,
+            }])
+            .expect("save bindings");
+    }
+
+    #[tokio::test]
+    async fn bound_thread_turn_complete_forwards_final_reply_to_clawbot_session() -> Result<()> {
+        let mut app = make_test_app().await;
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+        let thread_id = ThreadId::new();
+        persist_clawbot_binding(
+            &ClawbotStore::new(app.config.cwd.clone()),
+            thread_id,
+            "chat_3",
+        );
+
+        let (outbound_tx, mut outbound_rx) = unbounded_channel::<ProviderOutboundTextMessage>();
+        app.clawbot_outbound_tx = Some(outbound_tx);
+
+        app.enqueue_thread_event(
+            thread_id,
+            Event {
+                id: "turn-complete".to_string(),
+                msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                    turn_id: "turn-1".to_string(),
+                    last_agent_message: Some("Final reply".to_string()),
+                }),
+            },
+        )
+        .await?;
+
+        let outbound = time::timeout(Duration::from_millis(50), outbound_rx.recv())
+            .await
+            .expect("timed out waiting for clawbot outbound reply")
+            .expect("clawbot outbound channel closed unexpectedly");
+        assert_eq!(
+            outbound,
+            ProviderOutboundTextMessage {
+                session: ProviderSessionRef::new(ProviderKind::Feishu, "chat_3"),
+                text: "Final reply".to_string(),
+            }
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bound_thread_error_forwards_short_failure_reply_to_clawbot_session() -> Result<()> {
+        let mut app = make_test_app().await;
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+        let thread_id = ThreadId::new();
+        persist_clawbot_binding(
+            &ClawbotStore::new(app.config.cwd.clone()),
+            thread_id,
+            "chat_4",
+        );
+
+        let (outbound_tx, mut outbound_rx) = unbounded_channel::<ProviderOutboundTextMessage>();
+        app.clawbot_outbound_tx = Some(outbound_tx);
+
+        app.enqueue_thread_event(
+            thread_id,
+            Event {
+                id: "turn-error".to_string(),
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "\nnetwork timeout while calling tool\nstack trace".to_string(),
+                    codex_error_info: None,
+                }),
+            },
+        )
+        .await?;
+
+        let outbound = time::timeout(Duration::from_millis(50), outbound_rx.recv())
+            .await
+            .expect("timed out waiting for clawbot failure reply")
+            .expect("clawbot outbound channel closed unexpectedly");
+        assert_eq!(
+            outbound,
+            ProviderOutboundTextMessage {
+                session: ProviderSessionRef::new(ProviderKind::Feishu, "chat_4"),
+                text: "Request failed: network timeout while calling tool".to_string(),
+            }
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn save_clawbot_feishu_config_value_persists_workspace_config() -> Result<()> {
+        let mut app = make_test_app().await;
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+
+        app.save_clawbot_feishu_config_value(
+            crate::app_event::ClawbotFeishuConfigField::AppId,
+            "cli_test".to_string(),
+        )
+        .expect("save app id");
+        app.save_clawbot_feishu_config_value(
+            crate::app_event::ClawbotFeishuConfigField::AppSecret,
+            "secret_test".to_string(),
+        )
+        .expect("save app secret");
+
+        assert_eq!(
+            ClawbotStore::new(app.config.cwd.clone())
+                .load_config()
+                .expect("load clawbot config")
+                .feishu,
+            Some(FeishuConfig {
+                app_id: "cli_test".to_string(),
+                app_secret: "secret_test".to_string(),
+                verification_token: None,
+                encrypt_key: None,
+                bot_open_id: None,
+                bot_user_id: None,
+            })
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn save_clawbot_manual_bind_session_id_persists_placeholder_binding() -> Result<()> {
+        let mut app = make_test_app().await;
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
+
+        app.save_clawbot_manual_bind_session_id("oc_manual_session".to_string())
+            .await
+            .expect("manual bind");
+
+        let snapshot = ClawbotStore::new(app.config.cwd.clone())
+            .load_snapshot()
+            .expect("load snapshot");
+        assert_eq!(snapshot.bindings.len(), 1);
+        assert_eq!(
+            snapshot.bindings[0].session_ref(),
+            ProviderSessionRef::new(ProviderKind::Feishu, "oc_manual_session")
+        );
+        assert_eq!(snapshot.bindings[0].thread_id, thread_id.to_string());
+        assert_eq!(
+            snapshot.sessions[0],
+            ProviderSession {
+                provider: ProviderKind::Feishu,
+                session_id: "oc_manual_session".to_string(),
+                display_name: None,
+                unread_count: 0,
+                last_message_at: None,
+                status: SessionStatus::Bound,
+                bound_thread_id: Some(thread_id.to_string()),
+            }
+        );
+        Ok(())
+    }
+
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
@@ -8650,6 +9115,8 @@ guardian_approval = true
             btw_session: None,
             loop_timers: LoopTimersState::default(),
             primary_loop_generated_turn_in_flight: false,
+            clawbot_outbound_tx: None,
+            clawbot_provider_tasks: HashMap::new(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -8719,6 +9186,8 @@ guardian_approval = true
                 btw_session: None,
                 loop_timers: LoopTimersState::default(),
                 primary_loop_generated_turn_in_flight: false,
+                clawbot_outbound_tx: None,
+                clawbot_provider_tasks: HashMap::new(),
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
                 agent_navigation: AgentNavigationState::default(),

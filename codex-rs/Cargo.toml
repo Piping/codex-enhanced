@@ -20,6 +20,7 @@ members = [
     "cloud-tasks",
     "cloud-tasks-client",
     "cli",
+    "clawbot",
     "connectors",
     "config",
     "shell-command",
@@ -123,6 +124,7 @@ codex-async-utils = { path = "async-utils" }
 codex-backend-client = { path = "backend-client" }
 codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli" }
+codex-clawbot = { path = "clawbot" }
 codex-client = { path = "codex-client" }
 codex-cloud-requirements = { path = "cloud-requirements" }
 codex-connectors = { path = "connectors" }

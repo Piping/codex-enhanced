@@ -37,6 +37,7 @@ codex-backend-client = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-client = { workspace = true }
 codex-btw = { workspace = true }
+codex-clawbot = { workspace = true }
 codex-cloud-requirements = { workspace = true }
 codex-core = { workspace = true }
 codex-exec-server = { workspace = true }

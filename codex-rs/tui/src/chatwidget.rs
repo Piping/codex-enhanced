@@ -40,6 +40,7 @@ use std::time::Instant;
 use url::Url;
 
 use self::realtime::PendingSteerCompareKey;
+use crate::app_event::ClawbotFeishuConfigField;
 use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(not(target_os = "linux"))]
 use crate::audio_device::list_realtime_audio_device_names;
@@ -5507,6 +5508,44 @@ impl ChatWidget {
                 });
             }),
         );
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_clawbot_feishu_config_prompt(
+        &mut self,
+        field: ClawbotFeishuConfigField,
+        current_value: String,
+    ) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            field.prompt_title(),
+            field.prompt_placeholder(),
+            Some(field.prompt_context_label()),
+            Box::new(move |value: String| {
+                tx.send(AppEvent::SaveClawbotFeishuConfigValue { field, value });
+            }),
+        )
+        .with_initial_text(current_value);
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_clawbot_manual_bind_prompt(
+        &mut self,
+        current_value: String,
+        current_thread_label: String,
+    ) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Bind Feishu Session ID".to_string(),
+            "Paste a Feishu chat_id and press Enter".to_string(),
+            Some(format!("Current thread: {current_thread_label}")),
+            Box::new(move |session_id: String| {
+                tx.send(AppEvent::SaveClawbotManualBindSessionId { session_id });
+            }),
+        )
+        .with_initial_text(current_value);
 
         self.bottom_pane.show_view(Box::new(view));
     }

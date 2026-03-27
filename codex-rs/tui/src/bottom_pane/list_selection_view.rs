@@ -1285,7 +1285,7 @@ mod tests {
         ListSelectionView::new(
             SelectionViewParams {
                 title: Some("Control Panel".to_string()),
-                subtitle: Some("5 features available.".to_string()),
+                subtitle: Some("6 features available.".to_string()),
                 footer_hint: Some(standard_popup_hint_line()),
                 items: vec![
                     SelectionItem {
@@ -1302,6 +1302,16 @@ mod tests {
                         description: None,
                         selected_description: Some("Resume or switch saved chats.".to_string()),
                         dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Clawbot".to_string(),
+                        description: None,
+                        selected_description: Some(
+                            "Inspect the workspace-local IM gateway and session bindings."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: false,
                         ..Default::default()
                     },
                     SelectionItem {
@@ -1328,6 +1338,267 @@ mod tests {
                         description: None,
                         selected_description: Some(
                             "Toggle local TUI-only transcript and UI visibility settings."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            tx,
+        )
+    }
+
+    fn make_clawbot_view() -> ListSelectionView {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Clawbot".to_string()),
+                subtitle: Some("Feishu private chat bridge · 3 sessions discovered.".to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
+                footer_path: Some("/workspace/project/.codex/clawbot".to_string()),
+                items: vec![
+                    SelectionItem {
+                        name: "Sessions".to_string(),
+                        description: Some(
+                            "connected · 3 total · 1 bound".to_string(),
+                        ),
+                        selected_description: Some(
+                            "Inspect Feishu session status and run scan / clear operations."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Configuration".to_string(),
+                        description: Some("No Feishu credentials saved yet.".to_string()),
+                        selected_description: Some(
+                            "Edit and persist workspace-local Feishu credentials.".to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Bindings".to_string(),
+                        description: Some("1 session-thread binding persisted.".to_string()),
+                        selected_description: Some(
+                            "Each binding maps one external IM session to one Codex thread."
+                                .to_string(),
+                        ),
+                        is_disabled: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Unread Cache".to_string(),
+                        description: Some(
+                            "2 cached inbound messages awaiting binding or replay."
+                                .to_string(),
+                        ),
+                        selected_description: Some(
+                            "Unbound sessions accumulate unread messages here until the operator connects them."
+                                .to_string(),
+                        ),
+                        is_disabled: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            tx,
+        )
+    }
+
+    fn make_clawbot_sessions_view() -> ListSelectionView {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Clawbot".to_string()),
+                subtitle: Some("Sessions".to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
+                footer_path: Some("/workspace/project/.codex/clawbot".to_string()),
+                items: vec![
+                    SelectionItem {
+                        name: "Status".to_string(),
+                        description: Some("connected · 3 total · 1 bound".to_string()),
+                        selected_description: Some(
+                            "Inspect Feishu session status and manage scan / clear operations."
+                                .to_string(),
+                        ),
+                        is_disabled: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Retry Connection".to_string(),
+                        description: Some(
+                            "Reconnect the Feishu gateway and refresh websocket delivery."
+                                .to_string(),
+                        ),
+                        selected_description: Some(
+                            "Restart the Feishu runtime task and persist the refreshed connection state."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Manual Bind Session ID".to_string(),
+                        description: Some(
+                            "Bind a Feishu chat_id directly to thread 019d2e2d-6647-71f2-97bb-f5943c1f120c."
+                                .to_string(),
+                        ),
+                        selected_description: Some(
+                            "Use this when a Feishu p2p session is not visible in the discovered session list."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Scan Sessions".to_string(),
+                        description: Some(
+                            "Refresh the discovered Feishu session list from the provider API."
+                                .to_string(),
+                        ),
+                        selected_description: Some(
+                            "Use the current Feishu credentials to rescan sessions and refresh status."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Clear Sessions".to_string(),
+                        description: Some(
+                            "Remove 2 unbound sessions and 2 cached unread messages."
+                                .to_string(),
+                        ),
+                        selected_description: Some(
+                            "Bound sessions and persisted bindings are preserved.".to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Dequan Zhang".to_string(),
+                        description: Some(
+                            "bound · 0 unread · thread 019d2e2d-6647-71f2-97bb-f5943c1f120c"
+                                .to_string(),
+                        ),
+                        selected_description: Some(
+                            "Manage binding and unread cache for this session.".to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "tracker".to_string(),
+                        description: Some("discovered · 2 unread · unbound".to_string()),
+                        selected_description: Some(
+                            "Connect this discovered session to the current thread.".to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            tx,
+        )
+    }
+
+    fn make_clawbot_config_view() -> ListSelectionView {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Clawbot".to_string()),
+                subtitle: Some("Feishu Configuration".to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
+                footer_path: Some("/workspace/project/.codex/clawbot/config.toml".to_string()),
+                items: vec![
+                    SelectionItem {
+                        name: "App ID".to_string(),
+                        description: Some("Configured · cli_a1b2c3".to_string()),
+                        selected_description: Some(
+                            "Edit this required Feishu credential and persist it under .codex/clawbot."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "App Secret".to_string(),
+                        description: Some("Configured · ********cret".to_string()),
+                        selected_description: Some(
+                            "Edit this required Feishu credential and persist it under .codex/clawbot."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Verification Token".to_string(),
+                        description: Some("Not set".to_string()),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Encrypt Key".to_string(),
+                        description: Some("Not set".to_string()),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Bot Open ID".to_string(),
+                        description: Some("Configured · ou_bot_1234".to_string()),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Bot User ID".to_string(),
+                        description: Some("Not set".to_string()),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            tx,
+        )
+    }
+
+    fn make_clawbot_session_actions_view() -> ListSelectionView {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Clawbot".to_string()),
+                subtitle: Some("Session Actions · Alice".to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
+                footer_path: Some("/workspace/project/.codex/clawbot".to_string()),
+                items: vec![
+                    SelectionItem {
+                        name: "Disconnect".to_string(),
+                        description: Some(
+                            "Remove the persisted thread binding and stop routing this session."
+                                .to_string(),
+                        ),
+                        selected_description: Some(
+                            "Unread cache is preserved; only the session-thread binding is removed."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Flush Cached Messages".to_string(),
+                        description: Some("Clear 3 cached inbound messages for this session.".to_string()),
+                        selected_description: Some(
+                            "This drains the persisted unread cache for the selected session."
                                 .to_string(),
                         ),
                         dismiss_on_select: false,
@@ -1700,6 +1971,30 @@ mod tests {
     fn control_panel_menu_snapshot() {
         let view = make_control_panel_view();
         assert_snapshot!("control_panel_menu", render_lines(&view));
+    }
+
+    #[test]
+    fn clawbot_menu_snapshot() {
+        let view = make_clawbot_view();
+        assert_snapshot!("clawbot_menu", render_lines(&view));
+    }
+
+    #[test]
+    fn clawbot_sessions_menu_snapshot() {
+        let view = make_clawbot_sessions_view();
+        assert_snapshot!("clawbot_sessions_menu", render_lines(&view));
+    }
+
+    #[test]
+    fn clawbot_config_menu_snapshot() {
+        let view = make_clawbot_config_view();
+        assert_snapshot!("clawbot_config_menu", render_lines(&view));
+    }
+
+    #[test]
+    fn clawbot_session_actions_menu_snapshot() {
+        let view = make_clawbot_session_actions_view();
+        assert_snapshot!("clawbot_session_actions_menu", render_lines(&view));
     }
 
     #[test]

@@ -3027,6 +3027,8 @@ mod tests {
             btw_session: None,
             loop_timers: super::LoopTimersState::default(),
             primary_loop_generated_turn_in_flight: false,
+            clawbot_outbound_tx: None,
+            clawbot_provider_tasks: HashMap::new(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
