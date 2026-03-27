@@ -106,16 +106,18 @@ impl AfterTurnSchedulerState {
         if !self.round_in_flight && pending_rounds == 0 && pending_followups == 0 {
             return None;
         }
+        if self.round_in_flight
+            && let Some(loop_label) = self.current_loop_label.as_ref()
+        {
+            return Some(loop_label.clone());
+        }
         let status = if self.round_in_flight {
             "running"
         } else {
             "queued"
         };
         Some(format!(
-            "after-turn queue ({status}) · {} · {pending_rounds} round(s) · {pending_followups} follow-up(s)",
-            self.current_loop_label
-                .as_deref()
-                .unwrap_or("waiting for next loop")
+            "after-turn queue ({status}) · {pending_rounds} round(s) · {pending_followups} follow-up(s)"
         ))
     }
 }
