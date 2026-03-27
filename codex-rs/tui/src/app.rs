@@ -159,7 +159,7 @@ mod display_preferences_menu;
 mod jump_navigation;
 mod key_chord;
 mod loop_create;
-mod loop_timers;
+pub(crate) mod loop_timers;
 mod pending_interactive_replay;
 mod thread_menu;
 
@@ -996,9 +996,9 @@ pub(crate) struct App {
     windows_sandbox: WindowsSandboxState,
     btw_session: Option<BtwSessionState>,
     loop_timers: LoopTimersState,
-    primary_loop_generated_turn_in_flight: bool,
     clawbot_outbound_tx: Option<mpsc::UnboundedSender<ProviderOutboundTextMessage>>,
     clawbot_provider_tasks: HashMap<ProviderKind, JoinHandle<()>>,
+    clawbot_thread_history_cells: HashMap<ThreadId, Vec<Arc<dyn HistoryCell>>>,
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
@@ -2003,7 +2003,7 @@ impl App {
                     .await;
             }
             Some(PrimaryLoopEvent::Error) => {
-                self.note_primary_thread_error_for_loops();
+                self.note_primary_thread_error_for_loops().await;
             }
             None => {}
         }
@@ -3215,6 +3215,8 @@ impl App {
         self.primary_session_configured = None;
         self.pending_primary_events.clear();
         self.loop_timers.thread_history_cells.clear();
+        self.loop_timers.after_turn_scheduler.clear();
+        self.clawbot_thread_history_cells.clear();
         self.chat_widget.set_pending_thread_approvals(Vec::new());
         self.sync_active_agent_label();
     }
@@ -3359,6 +3361,7 @@ impl App {
             self.handle_codex_event_replay(event);
         }
         self.replay_loop_history_cells_for_active_thread();
+        self.replay_clawbot_history_cells_for_active_thread();
         self.chat_widget
             .set_queue_autosend_suppressed(/*suppressed*/ false);
         if resume_restored_queue {
@@ -3653,9 +3656,9 @@ impl App {
             windows_sandbox: WindowsSandboxState::default(),
             btw_session: None,
             loop_timers: LoopTimersState::default(),
-            primary_loop_generated_turn_in_flight: false,
             clawbot_outbound_tx: None,
             clawbot_provider_tasks: HashMap::new(),
+            clawbot_thread_history_cells: HashMap::new(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -4192,10 +4195,20 @@ impl App {
                 for cell in completion.cells {
                     self.append_visible_history_cell(tui, cell);
                 }
-                if let Some(followup_user_message) = completion.followup_user_message {
-                    self.submit_loop_user_message_to_primary(followup_user_message)
+                if let Some(followup_user_turn) = completion.followup_user_turn {
+                    let _ = self
+                        .submit_loop_user_message_to_primary(followup_user_turn)
                         .await;
                 }
+                self.refresh_status_surfaces();
+            }
+            AppEvent::PrimaryAfterTurnRoundCompleted { result } => {
+                self.finish_primary_after_turn_round(result.map(|result| *result))
+                    .await;
+                self.refresh_status_surfaces();
+            }
+            AppEvent::PrimaryAfterTurnRoundProgress { loop_label } => {
+                self.note_primary_after_turn_round_progress(loop_label);
                 self.refresh_status_surfaces();
             }
             AppEvent::UndoLastUserMessage => {
@@ -9114,9 +9127,9 @@ guardian_approval = true
             windows_sandbox: WindowsSandboxState::default(),
             btw_session: None,
             loop_timers: LoopTimersState::default(),
-            primary_loop_generated_turn_in_flight: false,
             clawbot_outbound_tx: None,
             clawbot_provider_tasks: HashMap::new(),
+            clawbot_thread_history_cells: HashMap::new(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -9185,9 +9198,9 @@ guardian_approval = true
                 windows_sandbox: WindowsSandboxState::default(),
                 btw_session: None,
                 loop_timers: LoopTimersState::default(),
-                primary_loop_generated_turn_in_flight: false,
                 clawbot_outbound_tx: None,
                 clawbot_provider_tasks: HashMap::new(),
+                clawbot_thread_history_cells: HashMap::new(),
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
                 agent_navigation: AgentNavigationState::default(),

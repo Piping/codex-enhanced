@@ -31,6 +31,7 @@ use codex_protocol::protocol::RateLimitSnapshot;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
 
+use crate::app::loop_timers::after_turn_scheduler::AfterTurnRoundResult;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
@@ -160,6 +161,14 @@ pub(crate) enum AppEvent {
     /// Apply one normalized provider event emitted by the clawbot runtime task.
     ClawbotProviderEvent {
         event: Box<ProviderEvent>,
+    },
+    /// Apply one completed after-turn loop round that was executed off the main UI path.
+    PrimaryAfterTurnRoundCompleted {
+        result: Result<Box<AfterTurnRoundResult>, String>,
+    },
+    /// Update the currently running loop label inside an after-turn round.
+    PrimaryAfterTurnRoundProgress {
+        loop_label: String,
     },
     /// Open the loop timers panel inside the control panel flow.
     OpenLoopTimersPanel,

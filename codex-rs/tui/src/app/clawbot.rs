@@ -16,6 +16,7 @@ use codex_clawbot::feishu_failure_reply_text;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use self::sessions::CLAWBOT_SESSIONS_PANEL_VIEW_ID;
@@ -26,6 +27,8 @@ use crate::app_event::ClawbotFeishuConfigField;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+use crate::history_cell;
+use crate::history_cell::HistoryCell;
 
 const CLAWBOT_PANEL_VIEW_ID: &str = "fork-clawbot-panel";
 const CLAWBOT_CONFIG_PANEL_VIEW_ID: &str = "fork-clawbot-config-panel";
@@ -352,8 +355,15 @@ impl App {
             .into_iter()
             .filter(|message| message.session_ref() == session)
             .collect::<Vec<_>>();
+        let session_label = snapshot
+            .sessions
+            .iter()
+            .find(|candidate| candidate.session_ref() == session)
+            .and_then(|candidate| candidate.display_name.clone())
+            .unwrap_or_else(|| session.session_id.clone());
 
         for cached_message in &cached_messages {
+            self.insert_clawbot_origin_info_cell(thread_id, &session_label);
             self.submit_clawbot_message_to_thread(thread_id, cached_message.text.clone())
                 .await?;
         }
@@ -675,6 +685,43 @@ impl App {
         }
     }
 
+    pub(crate) fn replay_clawbot_history_cells_for_active_thread(&mut self) {
+        let Some(thread_id) = self.active_thread_id else {
+            return;
+        };
+        let Some(cells) = self.clawbot_thread_history_cells.get(&thread_id) else {
+            return;
+        };
+        let width = 80;
+        for cell in cells {
+            self.transcript_cells.push(cell.clone());
+            let mut display = cell.display_lines(width);
+            if !display.is_empty() {
+                if !cell.is_stream_continuation() {
+                    if self.has_emitted_history_lines {
+                        display.insert(0, ratatui::text::Line::default());
+                    } else {
+                        self.has_emitted_history_lines = true;
+                    }
+                }
+                self.deferred_history_lines.extend(display);
+            }
+        }
+    }
+
+    fn insert_clawbot_origin_info_cell(&mut self, thread_id: ThreadId, session_label: &str) {
+        let stored_cell: Arc<dyn HistoryCell> = Arc::new(clawbot_origin_info_cell(session_label));
+        self.clawbot_thread_history_cells
+            .entry(thread_id)
+            .or_default()
+            .push(stored_cell);
+        if self.active_thread_id == Some(thread_id) {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                clawbot_origin_info_cell(session_label),
+            )));
+        }
+    }
+
     async fn submit_clawbot_message_to_thread(
         &mut self,
         thread_id: ThreadId,
@@ -862,4 +909,11 @@ fn truncate_value(value: &str, max_chars: usize) -> String {
     } else {
         truncated
     }
+}
+
+fn clawbot_origin_info_cell(session_label: &str) -> history_cell::PlainHistoryCell {
+    history_cell::new_info_event(
+        "Feishu message".to_string(),
+        Some(session_label.to_string()),
+    )
 }
