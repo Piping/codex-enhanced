@@ -1,7 +1,3 @@
-use codex_core::config::Config;
-use codex_protocol::protocol::ReadOnlyAccess;
-use codex_protocol::protocol::SandboxPolicy;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -15,43 +11,6 @@ pub struct PersistedLoopExecutionSettings {
     pub cwd: Option<PathBuf>,
     #[serde(default)]
     pub writable_roots: Vec<PathBuf>,
-}
-
-pub fn apply_loop_execution_settings(
-    config: &mut Config,
-    settings: &PersistedLoopExecutionSettings,
-    workspace_cwd: &Path,
-) -> Result<String, String> {
-    let resolved_cwd = settings
-        .cwd
-        .as_ref()
-        .map(|cwd| resolve_absolute_path(cwd, workspace_cwd))
-        .transpose()?;
-    if let Some(cwd) = resolved_cwd {
-        config.cwd = cwd;
-    }
-
-    if !settings.writable_roots.is_empty() {
-        let writable_roots = resolve_writable_roots(settings, workspace_cwd)?;
-        let network_access = config
-            .permissions
-            .sandbox_policy
-            .get()
-            .has_full_network_access();
-        config
-            .permissions
-            .sandbox_policy
-            .set(SandboxPolicy::WorkspaceWrite {
-                writable_roots,
-                read_only_access: ReadOnlyAccess::FullAccess,
-                network_access,
-                exclude_tmpdir_env_var: true,
-                exclude_slash_tmp: true,
-            })
-            .map_err(|err| format!("Failed to configure `/loop` writable roots: {err}"))?;
-    }
-
-    Ok(loop_developer_instructions(settings))
 }
 
 pub fn loop_execution_summary(
@@ -98,6 +57,7 @@ pub fn parse_loop_writable_roots(
     input: &str,
     workspace_cwd: &Path,
 ) -> Result<Vec<PathBuf>, String> {
+    let workspace_cwd = canonical_workspace_root(workspace_cwd)?;
     let mut seen = BTreeSet::new();
     let mut writable_roots = Vec::new();
 
@@ -106,7 +66,7 @@ pub fn parse_loop_writable_roots(
         if trimmed.is_empty() {
             continue;
         }
-        let absolute = resolve_pathbuf(PathBuf::from(trimmed), workspace_cwd)?;
+        let absolute = resolve_pathbuf(PathBuf::from(trimmed), &workspace_cwd)?;
         let metadata = fs::metadata(&absolute)
             .map_err(|err| format!("Writable directory `{trimmed}` is unavailable: {err}"))?;
         if !metadata.is_dir() {
@@ -115,7 +75,7 @@ pub fn parse_loop_writable_roots(
             ));
         }
 
-        let persisted = normalize_persisted_path(absolute.as_path(), workspace_cwd);
+        let persisted = normalize_persisted_path(absolute.as_path(), &workspace_cwd);
         if seen.insert(persisted.clone()) {
             writable_roots.push(persisted);
         }
@@ -125,70 +85,27 @@ pub fn parse_loop_writable_roots(
 }
 
 pub fn parse_loop_cwd(input: &str, workspace_cwd: &Path) -> Result<PathBuf, String> {
+    let workspace_cwd = canonical_workspace_root(workspace_cwd)?;
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err("Working directory cannot be empty.".to_string());
     }
-    let absolute = resolve_pathbuf(PathBuf::from(trimmed), workspace_cwd)?;
+    let absolute = resolve_pathbuf(PathBuf::from(trimmed), &workspace_cwd)?;
     let metadata = fs::metadata(&absolute)
         .map_err(|err| format!("Working directory `{trimmed}` is unavailable: {err}"))?;
     if !metadata.is_dir() {
         return Err(format!("Working directory `{trimmed}` is not a directory."));
     }
-    Ok(normalize_persisted_path(absolute.as_path(), workspace_cwd))
+    Ok(normalize_persisted_path(absolute.as_path(), &workspace_cwd))
 }
 
-fn loop_developer_instructions(settings: &PersistedLoopExecutionSettings) -> String {
-    let mut parts = vec![
-        "This is a hidden `/loop` execution thread.".to_string(),
-        "Use the current main-thread context only as background.".to_string(),
-        "Keep work scoped to this scheduled task.".to_string(),
-    ];
-    if let Some(cwd) = &settings.cwd {
-        parts.push(format!(
-            "Use `{}` as the execution working directory.",
-            cwd.display()
-        ));
-    } else {
-        parts.push(
-            "Use the same working directory as the parent thread unless the runtime overrides it."
-                .to_string(),
-        );
-    }
-    if settings.writable_roots.is_empty() {
-        parts.push(
-            "Use the same permissions and tool access as the parent thread unless the runtime overrides them."
-                .to_string(),
-        );
-    } else {
-        let writable_roots = settings
-            .writable_roots
-            .iter()
-            .map(|path| path.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        parts.push(format!(
-            "Only write files inside these directories: {writable_roots}."
-        ));
-    }
-    parts.join(" ")
-}
-
-fn resolve_writable_roots(
-    settings: &PersistedLoopExecutionSettings,
-    workspace_cwd: &Path,
-) -> Result<Vec<AbsolutePathBuf>, String> {
-    settings
-        .writable_roots
-        .iter()
-        .map(|path| resolve_absolute_path(path, workspace_cwd))
-        .collect()
-}
-
-fn resolve_absolute_path(path: &Path, workspace_cwd: &Path) -> Result<AbsolutePathBuf, String> {
-    let absolute = resolve_pathbuf(path.to_path_buf(), workspace_cwd)?;
-    AbsolutePathBuf::from_absolute_path(absolute.clone())
-        .map_err(|err| format!("Invalid path `{}`: {err}", absolute.display()))
+fn canonical_workspace_root(workspace_cwd: &Path) -> Result<PathBuf, String> {
+    fs::canonicalize(workspace_cwd).map_err(|err| {
+        format!(
+            "Workspace root `{}` is unavailable: {err}",
+            workspace_cwd.display()
+        )
+    })
 }
 
 fn resolve_pathbuf(path: PathBuf, workspace_cwd: &Path) -> Result<PathBuf, String> {
@@ -210,5 +127,44 @@ fn normalize_persisted_path(path: &Path, workspace_cwd: &Path) -> PathBuf {
         }
     } else {
         path.to_path_buf()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_loop_cwd;
+    use super::parse_loop_writable_roots;
+    use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
+
+    #[test]
+    fn parse_loop_cwd_persists_workspace_relative_path() {
+        let workspace = tempdir().expect("workspace tempdir");
+        let docs = workspace.path().join("docs");
+        std::fs::create_dir_all(&docs).expect("create docs");
+
+        let cwd = parse_loop_cwd("docs", workspace.path()).expect("parse cwd");
+
+        assert_eq!(cwd, std::path::PathBuf::from("docs"));
+    }
+
+    #[test]
+    fn parse_loop_writable_roots_persist_workspace_relative_paths() {
+        let workspace = tempdir().expect("workspace tempdir");
+        let docs = workspace.path().join("docs");
+        let notes = workspace.path().join("notes");
+        std::fs::create_dir_all(&docs).expect("create docs");
+        std::fs::create_dir_all(&notes).expect("create notes");
+
+        let writable_roots =
+            parse_loop_writable_roots("docs\nnotes", workspace.path()).expect("parse roots");
+
+        assert_eq!(
+            writable_roots,
+            vec![
+                std::path::PathBuf::from("docs"),
+                std::path::PathBuf::from("notes"),
+            ]
+        );
     }
 }

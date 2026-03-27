@@ -155,6 +155,7 @@ mod btw;
 mod display_preferences_menu;
 mod jump_navigation;
 mod key_chord;
+mod loop_create;
 mod loop_timers;
 mod pending_interactive_replay;
 mod thread_menu;
@@ -991,6 +992,7 @@ pub(crate) struct App {
     windows_sandbox: WindowsSandboxState,
     btw_session: Option<BtwSessionState>,
     loop_timers: LoopTimersState,
+    primary_loop_generated_turn_in_flight: bool,
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
@@ -1918,6 +1920,21 @@ impl App {
     async fn enqueue_thread_event(&mut self, thread_id: ThreadId, event: Event) -> Result<()> {
         let refresh_pending_thread_approvals =
             ThreadEventStore::event_can_change_pending_thread_approvals(&event);
+        enum PrimaryLoopEvent {
+            TurnComplete(Option<String>),
+            Error,
+        }
+        let primary_loop_event = if Some(thread_id) == self.primary_thread_id {
+            match &event.msg {
+                EventMsg::TurnComplete(turn_complete) => Some(PrimaryLoopEvent::TurnComplete(
+                    turn_complete.last_agent_message.clone(),
+                )),
+                EventMsg::Error(_) => Some(PrimaryLoopEvent::Error),
+                _ => None,
+            }
+        } else {
+            None
+        };
         let inactive_interactive_request = if self.active_thread_id != Some(thread_id) {
             self.interactive_request_for_thread_event(thread_id, &event)
                 .await
@@ -1965,6 +1982,16 @@ impl App {
         }
         if refresh_pending_thread_approvals {
             self.refresh_pending_thread_approvals().await;
+        }
+        match primary_loop_event {
+            Some(PrimaryLoopEvent::TurnComplete(last_agent_message)) => {
+                self.handle_primary_thread_turn_complete_for_loops(last_agent_message)
+                    .await;
+            }
+            Some(PrimaryLoopEvent::Error) => {
+                self.note_primary_thread_error_for_loops();
+            }
+            None => {}
         }
         Ok(())
     }
@@ -2790,7 +2817,7 @@ impl App {
                             format!(
                                 "Managed account quota refresh complete: {refreshed_count} updated, {invalid_count} invalid."
                             ),
-                            None,
+                            /*hint*/ None,
                         ));
                 }
             }
@@ -2840,7 +2867,7 @@ impl App {
             self.chat_widget
                 .add_to_history(history_cell::new_info_event(
                     "No invalid managed accounts to delete.".to_string(),
-                    None,
+                    /*hint*/ None,
                 ));
             self.open_managed_account_delete_panel();
             return;
@@ -2887,7 +2914,7 @@ impl App {
                     "Deleted invalid managed accounts: {}.",
                     deleted_display_names.join(", ")
                 ),
-                None,
+                /*hint*/ None,
             ));
         self.open_managed_account_delete_panel();
     }
@@ -3047,7 +3074,7 @@ impl App {
         self.chat_widget
             .add_to_history(history_cell::new_info_event(
                 format!("Deleted managed account {display_name}."),
-                None,
+                /*hint*/ None,
             ));
         self.open_managed_account_delete_panel();
     }
@@ -3062,7 +3089,7 @@ impl App {
             .plan_type
             .map(|plan_type| format!("{plan_type:?}").to_ascii_lowercase());
         state.set_plan_label(account_id, plan_label);
-        state.set_invalid_reason(account_id, None);
+        state.set_invalid_reason(account_id, /*invalid_reason*/ None);
         state.apply_rate_limit_snapshot(account_id, &account_rate_limit_snapshot(snapshot));
     }
 
@@ -3611,6 +3638,7 @@ impl App {
             windows_sandbox: WindowsSandboxState::default(),
             btw_session: None,
             loop_timers: LoopTimersState::default(),
+            primary_loop_generated_turn_in_flight: false,
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -3863,6 +3891,27 @@ impl App {
             AppEvent::OpenLoopTimersPanel => {
                 self.open_loop_timers_panel();
             }
+            AppEvent::OpenLoopTriggerQueuesPanel => {
+                self.open_loop_trigger_queues_panel();
+            }
+            AppEvent::OpenLoopTriggerQueuePhase { phase } => {
+                self.open_loop_trigger_queue_phase_panel(phase);
+            }
+            AppEvent::OpenLoopTriggerQueueEntryActions {
+                phase,
+                loop_id,
+                binding_id,
+            } => {
+                self.open_loop_trigger_queue_entry_actions(phase, loop_id, binding_id);
+            }
+            AppEvent::MoveLoopTriggerQueueEntry {
+                phase,
+                loop_id,
+                binding_id,
+                move_up,
+            } => {
+                self.move_loop_trigger_queue_entry(phase, loop_id, binding_id, move_up);
+            }
             AppEvent::OpenLoopExecutionPanel { timer_id } => {
                 self.open_loop_execution_panel(timer_id);
             }
@@ -3875,11 +3924,41 @@ impl App {
             AppEvent::OpenCreateLoopTimerMenu => {
                 self.open_create_loop_timer_menu();
             }
-            AppEvent::OpenCreateOneShotLoopPrompt => {
-                self.chat_widget.open_create_one_shot_loop_prompt();
+            AppEvent::StartCreateLoopDraft { context_mode } => {
+                self.start_loop_create_draft(context_mode);
             }
-            AppEvent::OpenCreatePersistentLoopPrompt => {
-                self.chat_widget.open_create_persistent_loop_prompt();
+            AppEvent::SaveCreateLoopId { id } => {
+                self.save_create_loop_id(id);
+            }
+            AppEvent::SaveCreateLoopPrompt { prompt } => {
+                self.save_create_loop_prompt(prompt);
+            }
+            AppEvent::OpenCreateLoopDraftTriggerMenu => {
+                self.open_create_loop_draft_trigger_menu();
+            }
+            AppEvent::OpenCreateLoopTimerSchedulePrompt => {
+                self.chat_widget.open_create_loop_schedule_prompt();
+            }
+            AppEvent::SaveCreateLoopTimerSchedule { schedule } => {
+                self.save_create_loop_timer_schedule(schedule);
+            }
+            AppEvent::SaveCreateLoopBeforeTurnTrigger => {
+                self.save_create_loop_before_turn_trigger();
+            }
+            AppEvent::SaveCreateLoopAfterTurnTrigger => {
+                self.save_create_loop_after_turn_trigger();
+            }
+            AppEvent::OpenCreateLoopDraftResponseMode => {
+                self.open_create_loop_response_mode_menu();
+            }
+            AppEvent::SaveCreateLoopResponseMode { response_mode } => {
+                self.save_create_loop_response_mode(response_mode);
+            }
+            AppEvent::SaveCreateLoopSecurityMode { security_mode } => {
+                self.save_create_loop_security_mode(security_mode);
+            }
+            AppEvent::SaveCreateLoopWritableRoots { writable_roots } => {
+                self.save_create_loop_writable_roots(writable_roots);
             }
             AppEvent::TriggerLoopTimer {
                 timer_id,
@@ -3897,17 +3976,75 @@ impl App {
             AppEvent::OpenLoopTimerActions { timer_id } => {
                 self.open_loop_timer_actions(timer_id);
             }
+            AppEvent::OpenLoopTimerTriggers { timer_id } => {
+                self.open_loop_timer_triggers_panel(timer_id);
+            }
+            AppEvent::OpenCreateLoopTriggerMenu { timer_id } => {
+                self.open_create_loop_trigger_menu(timer_id);
+            }
+            AppEvent::AddLoopBeforeTurnTrigger { timer_id } => {
+                self.add_loop_trigger(timer_id, codex_loop::LoopTriggerKind::BeforeTurn);
+            }
+            AppEvent::AddLoopAfterTurnTrigger { timer_id } => {
+                self.add_loop_trigger(timer_id, codex_loop::LoopTriggerKind::AfterTurn);
+            }
+            AppEvent::OpenCreateLoopTimerTriggerSchedule { timer_id } => {
+                self.open_new_loop_timer_trigger_schedule_editor(timer_id);
+            }
+            AppEvent::SaveNewLoopTimerTriggerSchedule { timer_id, schedule } => {
+                self.save_new_loop_timer_trigger_schedule(timer_id, schedule);
+            }
+            AppEvent::OpenEditLoopTriggerBindingSchedule {
+                timer_id,
+                binding_id,
+            } => {
+                self.open_loop_trigger_binding_schedule_editor(timer_id, binding_id);
+            }
+            AppEvent::OpenLoopTriggerBindingActions {
+                timer_id,
+                binding_id,
+            } => {
+                self.open_loop_trigger_binding_actions(timer_id, binding_id);
+            }
+            AppEvent::SaveLoopTriggerBindingSchedule {
+                timer_id,
+                binding_id,
+                schedule,
+            } => {
+                self.save_loop_trigger_binding_schedule(timer_id, binding_id, schedule);
+            }
+            AppEvent::EnableLoopTriggerBinding {
+                timer_id,
+                binding_id,
+            } => {
+                self.set_loop_trigger_binding_enabled(timer_id, binding_id, /*enabled*/ true);
+            }
+            AppEvent::DisableLoopTriggerBinding {
+                timer_id,
+                binding_id,
+            } => {
+                self.set_loop_trigger_binding_enabled(timer_id, binding_id, /*enabled*/ false);
+            }
+            AppEvent::DeleteLoopTriggerBinding {
+                timer_id,
+                binding_id,
+            } => {
+                self.delete_loop_trigger_binding(timer_id, binding_id);
+            }
             AppEvent::OpenEditLoopTimerPrompt { timer_id } => {
                 self.open_loop_timer_prompt_editor(timer_id);
-            }
-            AppEvent::OpenEditLoopTimerSchedule { timer_id } => {
-                self.open_loop_timer_schedule_editor(timer_id);
             }
             AppEvent::OpenEditLoopTimerAction { timer_id } => {
                 self.open_loop_timer_action_editor(timer_id);
             }
-            AppEvent::OpenEditLoopTimerDeliveryMode { timer_id } => {
-                self.open_loop_timer_delivery_mode_menu(timer_id);
+            AppEvent::OpenEditLoopTimerContextMode { timer_id } => {
+                self.open_loop_timer_context_mode_menu(timer_id);
+            }
+            AppEvent::OpenEditLoopTimerResponseMode { timer_id } => {
+                self.open_loop_timer_response_mode_menu(timer_id);
+            }
+            AppEvent::OpenEditLoopTimerSecurityMode { timer_id } => {
+                self.open_loop_timer_security_mode_menu(timer_id);
             }
             AppEvent::OpenEditLoopWritableRoots { timer_id } => {
                 self.open_loop_writable_roots_editor(timer_id);
@@ -3918,17 +4055,26 @@ impl App {
             AppEvent::SaveLoopTimerPrompt { timer_id, prompt } => {
                 self.save_loop_timer_prompt(timer_id, prompt);
             }
-            AppEvent::SaveLoopTimerSchedule { timer_id, schedule } => {
-                self.save_loop_timer_schedule(timer_id, schedule);
-            }
             AppEvent::SaveLoopTimerAction { timer_id, action } => {
                 self.save_loop_timer_action(timer_id, action);
             }
-            AppEvent::SaveLoopTimerDeliveryMode {
+            AppEvent::SaveLoopTimerContextMode {
                 timer_id,
-                delivery_mode,
+                context_mode,
             } => {
-                self.save_loop_timer_delivery_mode(timer_id, delivery_mode);
+                self.save_loop_timer_context_mode(timer_id, context_mode);
+            }
+            AppEvent::SaveLoopTimerResponseMode {
+                timer_id,
+                response_mode,
+            } => {
+                self.save_loop_timer_response_mode(timer_id, response_mode);
+            }
+            AppEvent::SaveLoopTimerSecurityMode {
+                timer_id,
+                security_mode,
+            } => {
+                self.save_loop_timer_security_mode(timer_id, security_mode);
             }
             AppEvent::SaveLoopWritableRoots {
                 timer_id,
@@ -3964,8 +4110,8 @@ impl App {
                     self.append_visible_history_cell(tui, cell);
                 }
                 if let Some(followup_user_message) = completion.followup_user_message {
-                    self.chat_widget
-                        .submit_loop_followup_user_message(followup_user_message);
+                    self.submit_loop_user_message_to_primary(followup_user_message)
+                        .await;
                 }
                 self.refresh_status_surfaces();
             }
@@ -4342,12 +4488,20 @@ impl App {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => {
+                let (op, loop_cells) = self
+                    .augment_primary_user_turn_with_before_turn_loops(op)
+                    .await;
                 let replay_state_op =
                     ThreadEventStore::op_can_change_pending_replay_state(&op).then(|| op.clone());
                 let submitted = self.chat_widget.submit_op(op);
                 if submitted && let Some(op) = replay_state_op.as_ref() {
                     self.note_active_thread_outbound_op(op).await;
                     self.refresh_pending_thread_approvals().await;
+                }
+                if submitted {
+                    for cell in loop_cells {
+                        self.append_visible_history_cell(tui, cell);
+                    }
                 }
             }
             AppEvent::SubmitThreadOp { thread_id, op } => {
@@ -5326,7 +5480,7 @@ impl App {
                     self.chat_widget
                         .add_to_history(history_cell::new_info_event(
                             format!("Stopping {stopped_count} background loop run(s)."),
-                            None,
+                            /*hint*/ None,
                         ));
                 }
             }
@@ -8495,6 +8649,7 @@ guardian_approval = true
             windows_sandbox: WindowsSandboxState::default(),
             btw_session: None,
             loop_timers: LoopTimersState::default(),
+            primary_loop_generated_turn_in_flight: false,
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -8563,6 +8718,7 @@ guardian_approval = true
                 windows_sandbox: WindowsSandboxState::default(),
                 btw_session: None,
                 loop_timers: LoopTimersState::default(),
+                primary_loop_generated_turn_in_flight: false,
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
                 agent_navigation: AgentNavigationState::default(),

@@ -47,6 +47,7 @@ codex-file-search = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-login = { workspace = true }
 codex-loop = { workspace = true }
+codex-loop-runtime = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-shell-command = { workspace = true }

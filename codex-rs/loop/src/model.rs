@@ -7,10 +7,14 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::command::LoopDeliveryMode;
 use crate::command::LoopMode;
 use crate::command::LoopSchedule;
 use crate::execution::PersistedLoopExecutionSettings;
+use crate::trigger::LoopContextMode;
+use crate::trigger::LoopResponseMode;
+use crate::trigger::LoopSecurityMode;
+use crate::trigger::LoopTriggerBinding;
+use crate::trigger::LoopTriggerKind;
 
 const LOOP_TIMER_FILE_NAME: &str = "loop_timers.json";
 
@@ -29,10 +33,18 @@ pub struct PersistedLoopTimer {
     #[serde(default)]
     pub action: Option<String>,
     #[serde(default)]
-    pub delivery_mode: Option<LoopDeliveryMode>,
+    pub context_mode: LoopContextMode,
+    #[serde(default)]
+    pub response_mode: LoopResponseMode,
+    #[serde(default)]
+    pub security_mode: LoopSecurityMode,
     #[serde(default)]
     pub execution: PersistedLoopExecutionSettings,
+    /// Legacy top-level timer schedule retained for backward compatibility while loops migrate to
+    /// explicit trigger bindings.
     pub schedule: LoopSchedule,
+    #[serde(default)]
+    pub trigger_bindings: Vec<LoopTriggerBinding>,
     pub enabled: bool,
     #[serde(default)]
     pub rollout_path: Option<PathBuf>,
@@ -41,30 +53,45 @@ pub struct PersistedLoopTimer {
     pub last_completed_at_unix_seconds: Option<i64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LoopTimerCompletionPlan {
-    pub summary_message: String,
-    pub mirror_prompt: bool,
-    pub followup_user_message: Option<String>,
+pub fn effective_loop_context_mode(timer: Option<&PersistedLoopTimer>) -> LoopContextMode {
+    timer.map_or(LoopContextMode::default(), |timer| timer.context_mode)
 }
 
-pub fn effective_loop_delivery_mode(timer: Option<&PersistedLoopTimer>) -> LoopDeliveryMode {
+pub fn effective_loop_response_mode(timer: Option<&PersistedLoopTimer>) -> LoopResponseMode {
+    timer.map_or(LoopResponseMode::default(), |timer| timer.response_mode)
+}
+
+pub fn effective_loop_security_mode(timer: Option<&PersistedLoopTimer>) -> LoopSecurityMode {
+    timer.map_or(LoopSecurityMode::default(), |timer| timer.security_mode)
+}
+
+pub fn trigger_bindings(timer: &PersistedLoopTimer) -> Vec<LoopTriggerBinding> {
+    timer.trigger_bindings.clone()
+}
+
+pub fn effective_timer_schedule(timer: &PersistedLoopTimer) -> Option<LoopSchedule> {
     timer
-        .and_then(|timer| timer.delivery_mode)
-        .unwrap_or_default()
+        .trigger_bindings
+        .iter()
+        .find_map(|binding| match &binding.kind {
+            LoopTriggerKind::Timer { schedule } if binding.enabled => Some(schedule.clone()),
+            _ => None,
+        })
 }
 
 pub fn timer_descriptor(timer: &PersistedLoopTimer) -> &'static str {
-    match timer.mode {
-        LoopMode::OneShot => "one-shot",
-        LoopMode::Persistent => "persistent",
+    match timer.context_mode {
+        LoopContextMode::Embed => "embed",
+        LoopContextMode::Ephemeral => "ephemeral",
+        LoopContextMode::Persistent => "persistent",
     }
 }
 
 pub fn loop_item_name(timer: &PersistedLoopTimer) -> String {
-    match timer.mode {
-        LoopMode::OneShot => format!("one-shot {}", prompt_prefix(&timer.prompt)),
-        LoopMode::Persistent => timer.id.clone(),
+    match timer.context_mode {
+        LoopContextMode::Embed => format!("embed #{}", loop_id_prefix(&timer.id)),
+        LoopContextMode::Ephemeral => format!("ephemeral #{}", loop_id_prefix(&timer.id)),
+        LoopContextMode::Persistent => timer.id.clone(),
     }
 }
 
@@ -81,14 +108,6 @@ pub fn prompt_prefix(prompt: &str) -> String {
     }
 }
 
-pub fn build_loop_run_input(prompt: &str, recent_main_messages: &[String]) -> String {
-    if recent_main_messages.is_empty() {
-        return prompt.to_string();
-    }
-    let recent_messages = recent_main_messages.join("\n\n");
-    format!("Recent main-thread messages:\n{recent_messages}\n\nOriginal loop prompt:\n{prompt}")
-}
-
 pub fn build_loop_result_user_message_with_action(result: &str, action: Option<&str>) -> String {
     let Some(action) = action.map(str::trim).filter(|action| !action.is_empty()) else {
         return result.to_string();
@@ -100,9 +119,10 @@ pub fn next_due_for_timer(timer: &PersistedLoopTimer, now: DateTime<Utc>) -> Opt
     if !timer.enabled {
         return None;
     }
+    let schedule = effective_timer_schedule(timer)?;
     match timer.last_scheduled_at_unix_seconds {
-        Some(last_scheduled_at) => Some(timer.schedule.next_due_after(last_scheduled_at, now)),
-        None => Some(timer.schedule.first_due_after_creation(now)),
+        Some(last_scheduled_at) => Some(schedule.next_due_after(last_scheduled_at, now)),
+        None => Some(schedule.first_due_after_creation(now)),
     }
 }
 

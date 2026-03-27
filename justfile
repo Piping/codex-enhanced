@@ -1,5 +1,6 @@
 set working-directory := "codex-rs"
 set positional-arguments
+sccache_prefix := "if command -v sccache >/dev/null 2>&1; then export RUSTC_WRAPPER=sccache; export SCCACHE_CACHE_SIZE=${SCCACHE_CACHE_SIZE:-10G}; fi;"
 
 # Display help
 help:
@@ -8,11 +9,11 @@ help:
 # `codex`
 alias c := codex
 codex *args:
-    cargo run --bin codex -- "$@"
+    {{sccache_prefix}} cargo run --bin codex -- "$@"
 
 # `codex exec`
 exec *args:
-    cargo run --bin codex -- exec "$@"
+    {{sccache_prefix}} cargo run --bin codex -- exec "$@"
 
 # Start codex-exec-server, enable the app-server TUI, and run codex-tui.
 [no-cd]
@@ -21,55 +22,49 @@ tui-with-exec-server *args:
 
 # Run the CLI version of the file-search crate.
 file-search *args:
-    cargo run --bin codex-file-search -- "$@"
+    {{sccache_prefix}} cargo run --bin codex-file-search -- "$@"
 
 # Build the CLI and run the app-server test client
 app-server-test-client *args:
-    cargo build -p codex-cli
-    cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex "$@"
+    {{sccache_prefix}} cargo build -p codex-cli
+    {{sccache_prefix}} cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex "$@"
 
 # format code
 fmt:
     cargo fmt -- --config imports_granularity=Item 2>/dev/null
 
 fix *args:
-    cargo clippy --fix --tests --allow-dirty "$@"
+    {{sccache_prefix}} cargo clippy --fix --tests --allow-dirty "$@"
 
 clippy *args:
-    cargo clippy --tests "$@"
+    {{sccache_prefix}} cargo clippy --tests "$@"
 
 install:
     rustup show active-toolchain
     cargo fetch
 
-# Run `cargo nextest` since it's faster than `cargo test`, though including
-# --no-fail-fast is important to ensure all tests are run.
-#
-# Run `cargo install cargo-nextest` if you don't have it installed.
-# Prefer this for routine local runs; use explicit `cargo test --all-features`
-# only when you specifically need full feature coverage.
+# Run post-edit validation tests with cargo-nextest.
 test:
-    cargo nextest run --no-fail-fast
+    {{sccache_prefix}} cargo nextest run --no-fail-fast
 
-# Run the default lightweight verification pass for tui, ext, and cli.
+# Run the default fast local iteration pass for tui, ext, and cli.
 verify-fast:
-    cargo test -p codex-tui
-    cargo clippy --tests -p codex-tui
-    cargo test -p codex-ext
-    cargo clippy --tests -p codex-ext
-    cargo test -p codex-cli
-    cargo clippy --tests -p codex-cli
+    {{sccache_prefix}} cargo check -p codex-tui
+    {{sccache_prefix}} cargo build -p codex-tui
+    {{sccache_prefix}} cargo check -p codex-ext
+    {{sccache_prefix}} cargo build -p codex-ext
+    {{sccache_prefix}} cargo check -p codex-cli
+    {{sccache_prefix}} cargo build -p codex-cli
 
-# Run a lightweight verification pass for explicitly selected crates/targets.
+# Run a fast local iteration pass for explicitly selected crates/targets.
 verify-fast-crate *args:
-    cargo test "$@"
-    cargo clippy --tests "$@"
+    {{sccache_prefix}} cargo check "$@"
+    {{sccache_prefix}} cargo build "$@"
 
 # Run the narrow `/loop` edit-run verification path for codex-tui.
 verify-tui-loop:
-    cargo check -p codex-tui --tests
-    cargo test -p codex-tui loop_timer_command
-    cargo test -p codex-tui loop_timers
+    {{sccache_prefix}} cargo check -p codex-tui
+    {{sccache_prefix}} cargo build -p codex-tui
 
 # Build and run Codex from source using Bazel.
 # Note we have to use the combination of `[no-cd]` and `--run_under="cd $PWD &&"`
@@ -97,19 +92,19 @@ build-for-release:
 
 # Run the MCP server
 mcp-server-run *args:
-    cargo run -p codex-mcp-server -- "$@"
+    {{sccache_prefix}} cargo run -p codex-mcp-server -- "$@"
 
 # Regenerate the json schema for config.toml from the current config types.
 write-config-schema:
-    cargo run -p codex-core --bin codex-write-config-schema
+    {{sccache_prefix}} cargo run -p codex-core --bin codex-write-config-schema
 
 # Regenerate vendored app-server protocol schema artifacts.
 write-app-server-schema *args:
-    cargo run -p codex-app-server-protocol --bin write_schema_fixtures -- "$@"
+    {{sccache_prefix}} cargo run -p codex-app-server-protocol --bin write_schema_fixtures -- "$@"
 
 [no-cd]
 write-hooks-schema:
-    cargo run --manifest-path ./codex-rs/Cargo.toml -p codex-hooks --bin write_hooks_schema_fixtures
+    {{sccache_prefix}} cargo run --manifest-path ./codex-rs/Cargo.toml -p codex-hooks --bin write_hooks_schema_fixtures
 
 # Run the argument-comment Dylint checks across codex-rs.
 [no-cd]
@@ -122,4 +117,4 @@ argument-comment-lint-from-source *args:
 
 # Tail logs from the state SQLite database
 log *args:
-    if [ "${1:-}" = "--" ]; then shift; fi; cargo run -p codex-state --bin logs_client -- "$@"
+    {{sccache_prefix}} if [ "${1:-}" = "--" ]; then shift; fi; cargo run -p codex-state --bin logs_client -- "$@"

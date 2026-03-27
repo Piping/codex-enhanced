@@ -17,7 +17,10 @@ use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_chatgpt::connectors::AppInfo;
 use codex_file_search::FileMatch;
-use codex_loop::LoopDeliveryMode;
+use codex_loop::LoopContextMode;
+use codex_loop::LoopResponseMode;
+use codex_loop::LoopSecurityMode;
+use codex_loop::LoopTriggerPhase;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::Event;
@@ -94,6 +97,25 @@ pub(crate) enum AppEvent {
     OpenAccountsPanel,
     /// Open the loop timers panel inside the control panel flow.
     OpenLoopTimersPanel,
+    /// Open the workspace trigger-queue panel inside Loop Manager.
+    OpenLoopTriggerQueuesPanel,
+    /// Open the trigger queue entries for a specific phase.
+    OpenLoopTriggerQueuePhase {
+        phase: LoopTriggerPhase,
+    },
+    /// Open actions for one trigger queue entry inside a phase.
+    OpenLoopTriggerQueueEntryActions {
+        phase: LoopTriggerPhase,
+        loop_id: String,
+        binding_id: String,
+    },
+    /// Move a loop trigger queue entry earlier or later within a phase.
+    MoveLoopTriggerQueueEntry {
+        phase: LoopTriggerPhase,
+        loop_id: String,
+        binding_id: String,
+        move_up: bool,
+    },
     /// Open the transcript jump panel inside the control panel flow.
     OpenJumpToMessagePanel,
     /// Open the show/hide settings panel inside the control panel flow.
@@ -108,10 +130,44 @@ pub(crate) enum AppEvent {
     },
     /// Open the loop creation submenu inside Loop Manager.
     OpenCreateLoopTimerMenu,
-    /// Open an editor for creating a one-shot loop timer.
-    OpenCreateOneShotLoopPrompt,
-    /// Open an editor for creating a persistent loop timer.
-    OpenCreatePersistentLoopPrompt,
+    /// Start the step-by-step create flow for a new loop agent.
+    StartCreateLoopDraft {
+        context_mode: LoopContextMode,
+    },
+    /// Persist the loop id for the active create draft.
+    SaveCreateLoopId {
+        id: String,
+    },
+    /// Persist the prompt for the active create draft.
+    SaveCreateLoopPrompt {
+        prompt: String,
+    },
+    /// Open the trigger picker for the active create draft.
+    OpenCreateLoopDraftTriggerMenu,
+    /// Open the timer-schedule prompt for the active create draft.
+    OpenCreateLoopTimerSchedulePrompt,
+    /// Persist a timer trigger schedule for the active create draft.
+    SaveCreateLoopTimerSchedule {
+        schedule: String,
+    },
+    /// Persist a before-turn trigger for the active create draft.
+    SaveCreateLoopBeforeTurnTrigger,
+    /// Persist an after-turn trigger for the active create draft.
+    SaveCreateLoopAfterTurnTrigger,
+    /// Open the response-mode picker for the active create draft.
+    OpenCreateLoopDraftResponseMode,
+    /// Persist the response mode for the active create draft.
+    SaveCreateLoopResponseMode {
+        response_mode: LoopResponseMode,
+    },
+    /// Persist the security mode for the active create draft.
+    SaveCreateLoopSecurityMode {
+        security_mode: LoopSecurityMode,
+    },
+    /// Persist writable directories for the active create draft.
+    SaveCreateLoopWritableRoots {
+        writable_roots: String,
+    },
     /// Execute a due loop timer once.
     TriggerLoopTimer {
         timer_id: String,
@@ -122,20 +178,80 @@ pub(crate) enum AppEvent {
     OpenLoopTimerActions {
         timer_id: String,
     },
-    /// Open a prompt editor for a loop timer.
-    OpenEditLoopTimerPrompt {
+    /// Open the triggers view for a specific loop timer.
+    OpenLoopTimerTriggers {
         timer_id: String,
     },
-    /// Open a schedule editor for a loop timer.
-    OpenEditLoopTimerSchedule {
+    /// Open a create-trigger menu for a loop timer.
+    OpenCreateLoopTriggerMenu {
+        timer_id: String,
+    },
+    /// Add a before-turn trigger to a loop timer.
+    AddLoopBeforeTurnTrigger {
+        timer_id: String,
+    },
+    /// Add an after-turn trigger to a loop timer.
+    AddLoopAfterTurnTrigger {
+        timer_id: String,
+    },
+    /// Open an editor to create a timer trigger for a loop timer.
+    OpenCreateLoopTimerTriggerSchedule {
+        timer_id: String,
+    },
+    /// Persist a newly created timer trigger for a loop timer.
+    SaveNewLoopTimerTriggerSchedule {
+        timer_id: String,
+        schedule: String,
+    },
+    /// Open an editor for an existing timer trigger schedule.
+    OpenEditLoopTriggerBindingSchedule {
+        timer_id: String,
+        binding_id: String,
+    },
+    /// Open actions for an existing loop trigger binding.
+    OpenLoopTriggerBindingActions {
+        timer_id: String,
+        binding_id: String,
+    },
+    /// Persist a new schedule for an existing timer trigger.
+    SaveLoopTriggerBindingSchedule {
+        timer_id: String,
+        binding_id: String,
+        schedule: String,
+    },
+    /// Enable one loop trigger binding.
+    EnableLoopTriggerBinding {
+        timer_id: String,
+        binding_id: String,
+    },
+    /// Disable one loop trigger binding.
+    DisableLoopTriggerBinding {
+        timer_id: String,
+        binding_id: String,
+    },
+    /// Delete one loop trigger binding.
+    DeleteLoopTriggerBinding {
+        timer_id: String,
+        binding_id: String,
+    },
+    /// Open a prompt editor for a loop timer.
+    OpenEditLoopTimerPrompt {
         timer_id: String,
     },
     /// Open an action editor for a loop timer.
     OpenEditLoopTimerAction {
         timer_id: String,
     },
-    /// Open a delivery-mode picker for a loop timer.
-    OpenEditLoopTimerDeliveryMode {
+    /// Open a context-mode picker for a loop timer.
+    OpenEditLoopTimerContextMode {
+        timer_id: String,
+    },
+    /// Open a response-mode picker for a loop timer.
+    OpenEditLoopTimerResponseMode {
+        timer_id: String,
+    },
+    /// Open a security-mode picker for a loop timer.
+    OpenEditLoopTimerSecurityMode {
         timer_id: String,
     },
     /// Open execution settings for a loop timer.
@@ -155,20 +271,25 @@ pub(crate) enum AppEvent {
         timer_id: String,
         prompt: String,
     },
-    /// Persist an updated schedule for a loop timer.
-    SaveLoopTimerSchedule {
-        timer_id: String,
-        schedule: String,
-    },
     /// Persist an updated action for a loop timer.
     SaveLoopTimerAction {
         timer_id: String,
         action: String,
     },
-    /// Persist an updated delivery mode override for a loop timer.
-    SaveLoopTimerDeliveryMode {
+    /// Persist an updated context mode for a loop timer.
+    SaveLoopTimerContextMode {
         timer_id: String,
-        delivery_mode: Option<LoopDeliveryMode>,
+        context_mode: LoopContextMode,
+    },
+    /// Persist an updated response mode for a loop timer.
+    SaveLoopTimerResponseMode {
+        timer_id: String,
+        response_mode: LoopResponseMode,
+    },
+    /// Persist an updated security mode for a loop timer.
+    SaveLoopTimerSecurityMode {
+        timer_id: String,
+        security_mode: LoopSecurityMode,
     },
     /// Persist updated writable directories for a loop timer.
     SaveLoopWritableRoots {
@@ -204,7 +325,7 @@ pub(crate) enum AppEvent {
     LoopTimerCompleted {
         timer_id: String,
         prompt: String,
-        result: Result<String, String>,
+        result: Result<Option<String>, String>,
     },
     /// Final result for a hidden `/btw` discussion.
     BtwCompleted {

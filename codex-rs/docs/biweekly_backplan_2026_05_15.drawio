@@ -1,0 +1,121 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36" version="29.6.5">
+  <diagram id="biweekly-backplan-2026-05-15" name="Backplan 2026-05-15">
+    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2200" pageHeight="1400" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=24;fontStyle=1;" value="5/15 倒排计划（每 2 周一次交付）" vertex="1">
+          <mxGeometry x="40" y="20" width="520" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=12;fontColor=#666666;" value="假设目标交付日为 2026-05-15；当前默认内容可直接在 draw.io 中改成你自己的项目名称、Owner 和验收项。" vertex="1">
+          <mxGeometry x="40" y="52" width="900" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_delivery" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" value="蓝色：交付节点" vertex="1">
+          <mxGeometry x="40" y="95" width="150" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_work" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;" value="黄色：阶段工作" vertex="1">
+          <mxGeometry x="205" y="95" width="150" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_note" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;" value="灰色：备注/依赖" vertex="1">
+          <mxGeometry x="370" y="95" width="150" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="timeline" parent="1" style="shape=line;strokeWidth=3;html=1;strokeColor=#1f2937;" vertex="1">
+          <mxGeometry x="120" y="200" width="1780" height="10" as="geometry" />
+        </mxCell>
+        <mxCell id="dot_1" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#1f2937;strokeColor=#1f2937;" vertex="1">
+          <mxGeometry x="150" y="188" width="24" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="dot_2" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#1f2937;strokeColor=#1f2937;" vertex="1">
+          <mxGeometry x="470" y="188" width="24" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="dot_3" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#1f2937;strokeColor=#1f2937;" vertex="1">
+          <mxGeometry x="790" y="188" width="24" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="dot_4" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#1f2937;strokeColor=#1f2937;" vertex="1">
+          <mxGeometry x="1110" y="188" width="24" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="dot_5" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#1f2937;strokeColor=#1f2937;" vertex="1">
+          <mxGeometry x="1430" y="188" width="24" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="dot_6" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#1f2937;strokeColor=#1f2937;" vertex="1">
+          <mxGeometry x="1750" y="188" width="24" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="date_1" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=13;fontStyle=1;" value="3/6" vertex="1">
+          <mxGeometry x="130" y="220" width="64" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="date_2" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=13;fontStyle=1;" value="3/20" vertex="1">
+          <mxGeometry x="446" y="220" width="72" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="date_3" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=13;fontStyle=1;" value="4/3" vertex="1">
+          <mxGeometry x="770" y="220" width="64" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="date_4" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=13;fontStyle=1;" value="4/17" vertex="1">
+          <mxGeometry x="1086" y="220" width="72" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="date_5" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=13;fontStyle=1;" value="5/1" vertex="1">
+          <mxGeometry x="1410" y="220" width="64" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="date_6" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=13;fontStyle=1;" value="5/15" vertex="1">
+          <mxGeometry x="1726" y="220" width="72" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="delivery_1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;align=center;verticalAlign=middle;" value="交付 1&#xa;项目启动 / 范围冻结" vertex="1">
+          <mxGeometry x="70" y="270" width="180" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="delivery_2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;align=center;verticalAlign=middle;" value="交付 2&#xa;方案评审 / 原型确认" vertex="1">
+          <mxGeometry x="390" y="270" width="180" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="delivery_3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;align=center;verticalAlign=middle;" value="交付 3&#xa;核心能力一版可跑通" vertex="1">
+          <mxGeometry x="710" y="270" width="180" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="delivery_4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;align=center;verticalAlign=middle;" value="交付 4&#xa;联调版 / 缺陷收敛" vertex="1">
+          <mxGeometry x="1030" y="270" width="180" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="delivery_5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;align=center;verticalAlign=middle;" value="交付 5&#xa;UAT / 上线准备" vertex="1">
+          <mxGeometry x="1350" y="270" width="180" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="delivery_6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;align=center;verticalAlign=middle;" value="最终交付&#xa;正式发布 / 验收" vertex="1">
+          <mxGeometry x="1670" y="270" width="180" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="work_1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;verticalAlign=middle;" value="阶段工作&#xa;1. 业务目标澄清&#xa;2. 范围拆分和优先级&#xa;3. Owner / 风险 / 依赖确认" vertex="1">
+          <mxGeometry x="70" y="380" width="180" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="work_2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;verticalAlign=middle;" value="阶段工作&#xa;1. 技术方案评审&#xa;2. 原型或流程图确认&#xa;3. 数据/接口依赖锁定" vertex="1">
+          <mxGeometry x="390" y="380" width="180" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="work_3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;verticalAlign=middle;" value="阶段工作&#xa;1. 核心功能开发&#xa;2. 主流程打通&#xa;3. 首轮自测和冒烟" vertex="1">
+          <mxGeometry x="710" y="380" width="180" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="work_4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;verticalAlign=middle;" value="阶段工作&#xa;1. 系统联调&#xa;2. 缺陷分级处理&#xa;3. 关键指标验证" vertex="1">
+          <mxGeometry x="1030" y="380" width="180" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="work_5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;verticalAlign=middle;" value="阶段工作&#xa;1. UAT 执行&#xa;2. 发布清单确认&#xa;3. 培训/切换预案" vertex="1">
+          <mxGeometry x="1350" y="380" width="180" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="work_6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;verticalAlign=middle;" value="阶段工作&#xa;1. 正式上线&#xa;2. 验收签字&#xa;3. 项目复盘与移交" vertex="1">
+          <mxGeometry x="1670" y="380" width="180" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="note" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;align=left;verticalAlign=middle;" value="备注&#xa;1. 如果只保留未来排期，按当前日期 2026-03-25 看，3/6 和 3/20 已经过期。&#xa;2. 这时要么压缩到更短节奏，要么把目标交付日顺延。&#xa;3. 你可以把每个交付框改成“需求 / 设计 / 开发 / 测试 / 验收”的内部命名。" vertex="1">
+          <mxGeometry x="70" y="540" width="560" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="owner_note" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;align=left;verticalAlign=middle;" value="建议补充字段&#xa;Owner：产品 / 研发 / 测试 / 业务&#xa;验收物：PRD、原型、接口清单、联调报告、UAT 报告、上线清单" vertex="1">
+          <mxGeometry x="670" y="540" width="500" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" edge="1" parent="1" source="delivery_1" target="delivery_2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#6c8ebf;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" edge="1" parent="1" source="delivery_2" target="delivery_3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#6c8ebf;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="delivery_3" target="delivery_4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#6c8ebf;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" edge="1" parent="1" source="delivery_4" target="delivery_5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#6c8ebf;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="delivery_5" target="delivery_6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#6c8ebf;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

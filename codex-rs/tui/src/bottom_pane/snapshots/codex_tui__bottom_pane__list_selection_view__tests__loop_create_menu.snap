@@ -6,10 +6,13 @@ expression: render_lines(&view)
   Loop Manager                                  
   Create loop agent                             
                                                 
-› 1. One-Shot Loop         Schedule a loop that 
-                           keeps firing, but    
-                           uses a fresh hidden  
-                           thread each run.     
-  2. Persistent Loop                           
+› 1. One-Shot Loop    Schedule a loop that      
+                      keeps firing, but uses a  
+                      fresh hidden thread each  
+                      run.                      
+  2. Persistent Loop  Schedule a loop with a    
+                      stable id and a private   
+                      long-lived hidden         
+                      context.                  
                                                 
-  Press enter to confirm or esc to go back      
+  Press enter to confirm or esc to go back

@@ -6,15 +6,33 @@ expression: render_lines(&view)
   Loop Execution                                
   Execution settings · persistent loop          
                                                 
-› 1. Working Directory      CWD: `session       
-                             default (/workspace
-                             /project)`.        
-                             Writable scope:    
-                             session default.   
-  2. Use Session Working                        
-     Directory                                  
-  3. Writable Directories                       
-  4. Use Session Writable                       
-     Scope                                      
+› 1. Working Directory          CWD: `session   
+                                default (/      
+                                workspace/      
+                                project)`.      
+                                Writable        
+                                scope: session  
+                                default.        
+     Use Session Working Direc… Clear the per-  
+                                loop cwd        
+                                override and    
+                                inherit the     
+                                main thread     
+                                working         
+                                directory.      
+  3. Writable Directories       Restrict loop   
+                                file writes to  
+                                specific        
+                                directories.    
+                                Leave empty to  
+                                inherit the     
+                                session scope.  
+     Use Session Writable Scop… Clear the per-  
+                                loop writable-  
+                                directory       
+                                override and    
+                                inherit the     
+                                main thread     
+                                sandbox scope.  
                                                 
-  Press enter to confirm or esc to go back      
+  Press enter to confirm or esc to go back

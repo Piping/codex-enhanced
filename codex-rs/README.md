@@ -101,3 +101,21 @@ This folder is the root of a Cargo workspace. It contains quite a bit of experim
 - [`cli/`](./cli) CLI multitool that provides the aforementioned CLIs via subcommands.
 
 If you want to contribute or inspect behavior in detail, start by reading the module-level `README.md` files under each crate and run the project workspace from the top-level `codex-rs` directory so shared config, features, and build scripts stay aligned.
+
+## Faster Local Rust Iteration
+
+The workspace is tuned for faster local edit-build-test loops:
+
+- `profile.dev` and `profile.test` keep incremental compilation enabled.
+- Local dev/test builds drop debug info to reduce compile and link time.
+- Common `just` recipes automatically enable `sccache` when it is installed.
+- The recommended inner loop is `cargo check` plus a debug `cargo build`; tests,
+  clippy, and other heavier checks are deferred to later validation.
+
+If `sccache` is available on your machine, direct Cargo commands can use it too:
+
+```shell
+RUSTC_WRAPPER=sccache cargo check -p codex-cli
+RUSTC_WRAPPER=sccache cargo build -p codex-cli
+sccache --show-stats
+```

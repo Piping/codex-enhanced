@@ -2105,6 +2105,7 @@ async fn make_chatwidget_manual(
         status_line_branch_lookup_complete: false,
         external_editor_state: ExternalEditorState::Closed,
         realtime_conversation: RealtimeConversationUiState::default(),
+        background_loop_status: None,
         last_rendered_user_message_event: None,
     };
     widget.set_model(&resolved_model);

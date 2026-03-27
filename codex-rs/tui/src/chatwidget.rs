@@ -5533,19 +5533,43 @@ impl ChatWidget {
         self.bottom_pane.show_view(Box::new(view));
     }
 
-    pub(crate) fn open_loop_timer_schedule_editor(
+    pub(crate) fn open_new_loop_trigger_schedule_editor(
         &mut self,
         timer_id: String,
         current_schedule: String,
     ) {
         let tx = self.app_event_tx.clone();
         let view = CustomPromptView::new(
-            "Edit loop schedule".to_string(),
+            "Add loop timer trigger".to_string(),
+            "Type an interval or cron expression and press Enter".to_string(),
+            Some(format!("Loop: {timer_id}")),
+            Box::new(move |schedule: String| {
+                tx.send(AppEvent::SaveNewLoopTimerTriggerSchedule {
+                    timer_id: timer_id.clone(),
+                    schedule,
+                });
+            }),
+        )
+        .with_initial_text(current_schedule);
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_loop_trigger_schedule_editor(
+        &mut self,
+        timer_id: String,
+        binding_id: String,
+        current_schedule: String,
+    ) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Edit loop trigger schedule".to_string(),
             "Type a new interval or cron expression and press Enter".to_string(),
             Some(format!("Loop: {timer_id}")),
             Box::new(move |schedule: String| {
-                tx.send(AppEvent::SaveLoopTimerSchedule {
+                tx.send(AppEvent::SaveLoopTriggerBindingSchedule {
                     timer_id: timer_id.clone(),
+                    binding_id: binding_id.clone(),
                     schedule,
                 });
             }),
@@ -5617,36 +5641,60 @@ impl ChatWidget {
         self.bottom_pane.show_view(Box::new(view));
     }
 
-    pub(crate) fn open_create_one_shot_loop_prompt(&mut self) {
+    pub(crate) fn open_create_loop_id_prompt(&mut self) {
         let tx = self.app_event_tx.clone();
         let view = CustomPromptView::new(
-            "Create one-shot loop".to_string(),
-            "Example: 5m summarize what changed".to_string(),
-            Some("Enter `<time> <prompt>`".to_string()),
-            Box::new(move |spec: String| {
-                tx.send(AppEvent::CreateLoopTimer { spec });
+            "Create loop agent".to_string(),
+            "Example: director".to_string(),
+            Some("Step 1 of 6 · Enter a persistent loop id".to_string()),
+            Box::new(move |id: String| {
+                tx.send(AppEvent::SaveCreateLoopId { id });
             }),
         );
 
         self.bottom_pane.show_view(Box::new(view));
     }
 
-    pub(crate) fn open_create_persistent_loop_prompt(&mut self) {
+    pub(crate) fn open_create_loop_prompt(&mut self) {
         let tx = self.app_event_tx.clone();
         let view = CustomPromptView::new(
-            "Create persistent loop".to_string(),
-            "Example: director 30m review overall progress".to_string(),
-            Some("Enter `<id> <time> <prompt>`".to_string()),
-            Box::new(move |spec: String| {
-                tx.send(AppEvent::CreateLoopTimer { spec });
+            "Create loop agent".to_string(),
+            "Describe what this loop should monitor or decide".to_string(),
+            Some("Next step: configure the initial trigger".to_string()),
+            Box::new(move |prompt: String| {
+                tx.send(AppEvent::SaveCreateLoopPrompt { prompt });
             }),
         );
 
         self.bottom_pane.show_view(Box::new(view));
     }
 
-    pub(crate) fn submit_loop_followup_user_message(&mut self, message: String) {
-        self.queue_user_message(UserMessage::from(message));
+    pub(crate) fn open_create_loop_schedule_prompt(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Create loop agent".to_string(),
+            "Example: 5m or */15 * * * *".to_string(),
+            Some("Configure the timer trigger schedule".to_string()),
+            Box::new(move |schedule: String| {
+                tx.send(AppEvent::SaveCreateLoopTimerSchedule { schedule });
+            }),
+        );
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_create_loop_writable_roots_prompt(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Create loop agent".to_string(),
+            "Enter one writable directory per line".to_string(),
+            Some("Security mode is Specified Directory".to_string()),
+            Box::new(move |writable_roots: String| {
+                tx.send(AppEvent::SaveCreateLoopWritableRoots { writable_roots });
+            }),
+        );
+
+        self.bottom_pane.show_view(Box::new(view));
     }
 
     pub(crate) fn sync_background_loop_status(&mut self, running_loops: Vec<String>) {

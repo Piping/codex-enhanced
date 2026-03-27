@@ -76,53 +76,6 @@ pub enum LoopMode {
     Persistent,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "kebab-case")]
-pub enum LoopDeliveryMode {
-    #[default]
-    AssistantOnly,
-    ResultAsUser,
-    AssistantThenActionUser,
-}
-
-impl LoopDeliveryMode {
-    pub const USER_SELECTABLE: [Self; 3] = [
-        Self::AssistantOnly,
-        Self::ResultAsUser,
-        Self::AssistantThenActionUser,
-    ];
-
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::AssistantOnly => "As Assistant Message",
-            Self::ResultAsUser => "As User Message",
-            Self::AssistantThenActionUser => "As User Message + Action",
-        }
-    }
-
-    pub fn description(self) -> &'static str {
-        match self {
-            Self::AssistantOnly => {
-                "Default. Mirror the latest loop result into the main thread as an assistant message."
-            }
-            Self::ResultAsUser => {
-                "Submit the latest loop result back into the main thread as a user message."
-            }
-            Self::AssistantThenActionUser => {
-                "Submit the latest loop result back into the main thread as a user message, with the configured action appended at the end."
-            }
-        }
-    }
-
-    pub fn short_label(self) -> &'static str {
-        match self {
-            Self::AssistantOnly => "assistant message",
-            Self::ResultAsUser => "user message",
-            Self::AssistantThenActionUser => "user message + action",
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoopCommand {
     Focus {
@@ -320,7 +273,7 @@ mod tests {
             parse_loop_schedule("*/5 * * * *").expect("schedule"),
             LoopSchedule::Cron {
                 display: "*/5 * * * *".to_string(),
-                normalized: "0 */5 * * * *".to_string(),
+                normalized: "0 */5 * * * * *".to_string(),
             }
         );
     }

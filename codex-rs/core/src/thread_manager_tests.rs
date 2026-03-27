@@ -276,7 +276,7 @@ async fn start_thread_with_history_and_source_uses_requested_session_source() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config();
     config.codex_home = temp_dir.path().join("codex-home");
-    config.cwd = config.codex_home.clone();
+    config.cwd = config.codex_home.abs();
     config.ephemeral = true;
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
 
@@ -284,6 +284,9 @@ async fn start_thread_with_history_and_source_uses_requested_session_source() {
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
         config.codex_home.clone(),
+        Arc::new(codex_exec_server::EnvironmentManager::new(
+            /*exec_server_url*/ None,
+        )),
     );
 
     let thread = manager

@@ -88,6 +88,7 @@ members = [
     "artifacts",
     "btw",
     "loop",
+    "loop-runtime",
     "threadmessages",
 ]
 resolver = "2"
@@ -144,6 +145,7 @@ codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
 codex-loop = { path = "loop" }
+codex-loop-runtime = { path = "loop-runtime" }
 codex-mcp-server = { path = "mcp-server" }
 codex-network-proxy = { path = "network-proxy" }
 codex-ollama = { path = "ollama" }
@@ -413,23 +415,29 @@ ignored = [
 ]
 
 [profile.dev]
-incremental = false
+# CI disables incremental compilation for better cache reuse, but local
+# edit-build-test loops are much faster when dev builds can reuse artifacts.
+debug = 0
+incremental = true
 lto = false
 
 [profile.dev.package."*"]
-incremental = false
+incremental = true
 
 [profile.dev.build-override]
-incremental = false
+debug = 0
+incremental = true
 
 [profile.test]
-incremental = false
+debug = 0
+incremental = true
 
 [profile.test.package."*"]
-incremental = false
+incremental = true
 
 [profile.test.build-override]
-incremental = false
+debug = 0
+incremental = true
 
 [profile.release]
 lto = false

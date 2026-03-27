@@ -39,6 +39,7 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
+use core_test_support::PathExt;
 use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
@@ -333,7 +334,7 @@ async fn spawn_agent_applies_requested_cwd() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let child_workspace = temp_dir.path().join("worker-a");
     std::fs::create_dir(&child_workspace).expect("create child workspace");
-    turn.cwd = temp_dir.path().to_path_buf();
+    turn.cwd = temp_dir.path().abs();
 
     let output = SpawnAgentHandler
         .handle(invocation(
@@ -364,7 +365,7 @@ async fn spawn_agent_applies_requested_cwd() {
 async fn spawn_agent_rejects_missing_requested_cwd() {
     let (session, mut turn) = make_session_and_context().await;
     let temp_dir = tempfile::tempdir().expect("tempdir");
-    turn.cwd = temp_dir.path().to_path_buf();
+    turn.cwd = temp_dir.path().abs();
 
     let invocation = invocation(
         Arc::new(session),

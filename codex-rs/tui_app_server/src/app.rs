@@ -3399,7 +3399,7 @@ impl App {
                             format!(
                                 "Managed account quota refresh complete: {refreshed_count} updated, {invalid_count} invalid."
                             ),
-                            None,
+                            /*hint*/ None,
                         ));
                 }
             }
@@ -3449,7 +3449,7 @@ impl App {
             self.chat_widget
                 .add_to_history(history_cell::new_info_event(
                     "No invalid managed accounts to delete.".to_string(),
-                    None,
+                    /*hint*/ None,
                 ));
             self.open_managed_account_delete_panel();
             return;
@@ -3496,7 +3496,7 @@ impl App {
                     "Deleted invalid managed accounts: {}.",
                     deleted_display_names.join(", ")
                 ),
-                None,
+                /*hint*/ None,
             ));
         self.open_managed_account_delete_panel();
     }
@@ -3655,7 +3655,7 @@ impl App {
         self.chat_widget
             .add_to_history(history_cell::new_info_event(
                 format!("Deleted managed account {display_name}."),
-                None,
+                /*hint*/ None,
             ));
         self.open_managed_account_delete_panel();
     }
@@ -3670,7 +3670,7 @@ impl App {
             .plan_type
             .map(|plan_type| format!("{plan_type:?}").to_ascii_lowercase());
         state.set_plan_label(account_id, plan_label);
-        state.set_invalid_reason(account_id, None);
+        state.set_invalid_reason(account_id, /*invalid_reason*/ None);
         state.apply_rate_limit_snapshot(account_id, &account_rate_limit_snapshot(snapshot));
     }
 
