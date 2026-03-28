@@ -16,6 +16,7 @@ use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_chatgpt::connectors::AppInfo;
+use codex_clawbot::ClawbotTurnMode;
 use codex_clawbot::ProviderEvent;
 use codex_clawbot::ProviderKind;
 use codex_clawbot::ProviderSessionRef;
@@ -133,6 +134,10 @@ pub(crate) enum AppEvent {
     /// Persist a manual Feishu session id binding to the current thread.
     SaveClawbotManualBindSessionId {
         session_id: String,
+    },
+    /// Persist the turn interaction mode for clawbot-originated turns.
+    ClawbotSetTurnMode {
+        mode: ClawbotTurnMode,
     },
     /// Bind a clawbot session to the current thread.
     ClawbotConnectCurrentThread {

@@ -3,10 +3,32 @@ use serde::Serialize;
 
 use crate::model::ProviderKind;
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClawbotTurnMode {
+    #[default]
+    Interactive,
+    NonInteractive,
+}
+
+impl ClawbotTurnMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Interactive => "interactive",
+            Self::NonInteractive => "non-interactive",
+        }
+    }
+
+    pub fn uses_noninteractive_prompt_handling(self) -> bool {
+        matches!(self, Self::NonInteractive)
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ClawbotConfig {
     pub feishu: Option<FeishuConfig>,
+    pub turn_mode: ClawbotTurnMode,
 }
 
 impl ClawbotConfig {

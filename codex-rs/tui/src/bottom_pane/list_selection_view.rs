@@ -1361,6 +1361,17 @@ mod tests {
                 footer_path: Some("/workspace/project/.codex/clawbot".to_string()),
                 items: vec![
                     SelectionItem {
+                        name: "Turn Mode".to_string(),
+                        description: Some(
+                            "interactive · clawbot turns may surface question and approval prompts.".to_string(),
+                        ),
+                        selected_description: Some(
+                            "Switch clawbot-originated turns into non-interactive mode so question, permission, and approval prompts do not block remote sessions.".to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                    SelectionItem {
                         name: "Sessions".to_string(),
                         description: Some(
                             "connected · 3 total · 1 bound".to_string(),

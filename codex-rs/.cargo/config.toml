@@ -1,5 +1,6 @@
 [build]
 jobs = 8
+rustflags = ["-Z", "threads=8"]
 
 [target.'cfg(target_os = "macos")']
 # Stable Cargo can't select a linker by profile, so use ld64.lld for macOS

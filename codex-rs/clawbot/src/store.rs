@@ -422,6 +422,7 @@ mod tests {
                     bot_open_id: None,
                     bot_user_id: None,
                 }),
+                ..Default::default()
             })
             .expect("config");
         store

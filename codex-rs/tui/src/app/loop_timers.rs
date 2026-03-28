@@ -3413,6 +3413,7 @@ mod tests {
             clawbot_outbound_tx: None,
             clawbot_provider_tasks: HashMap::new(),
             clawbot_thread_history_cells: HashMap::new(),
+            clawbot_pending_turns: HashMap::new(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),

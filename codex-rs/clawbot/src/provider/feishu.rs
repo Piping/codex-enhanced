@@ -1,7 +1,6 @@
+mod runtime_loop;
 mod sync;
 
-use std::sync::Arc;
-use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -9,16 +8,25 @@ use anyhow::Result;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use open_lark::openlark_client;
-use open_lark::openlark_client::ws_client::EventDispatcherHandler;
-use open_lark::openlark_client::ws_client::LarkWsClient;
+use open_lark::openlark_communication::common::api_utils::serialize_params;
+use open_lark::openlark_communication::endpoints::IM_V1_MESSAGES;
 use open_lark::openlark_communication::im::im::v1::message::create::CreateMessageBody;
 use open_lark::openlark_communication::im::im::v1::message::create::CreateMessageRequest;
 use open_lark::openlark_communication::im::im::v1::message::models::ReceiveIdType;
+use open_lark::openlark_communication::im::im::v1::message::models::UserIdType;
+use open_lark::openlark_communication::im::im::v1::message::reaction::list::ListMessageReactionsRequest;
+use open_lark::openlark_communication::im::im::v1::message::reaction::models::CreateMessageReactionBody;
+use open_lark::openlark_communication::im::im::v1::message::reaction::models::MessageReaction;
+use open_lark::openlark_communication::im::im::v1::message::reaction::models::ReactionType;
+use open_lark::openlark_core::api::ApiRequest;
 use serde::Deserialize;
+use serde_json::Value;
 use tokio::sync::mpsc;
 
 use super::ProviderEvent;
+use super::ProviderOutboundReaction;
 use super::ProviderOutboundTextMessage;
+use super::ProviderReactionReceipt;
 use super::ProviderRuntime;
 use crate::config::FeishuConfig;
 use crate::events::ProviderInboundMessage;
@@ -68,67 +76,7 @@ impl FeishuProviderRuntime {
     }
 
     pub async fn run(self, provider_event_tx: mpsc::UnboundedSender<ProviderEvent>) -> Result<()> {
-        if !self.config.has_api_credentials() {
-            let _ = provider_event_tx.send(ProviderEvent::RuntimeStateUpdated(runtime_state(
-                ConnectionStatus::Unconfigured,
-                Some("missing app_id/app_secret".to_string()),
-            )?));
-            return Err(anyhow!("missing app_id/app_secret"));
-        }
-
-        let ws_config = Arc::new(self.websocket_config()?);
-        let (payload_tx, mut payload_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let event_handler = EventDispatcherHandler::builder()
-            .payload_sender(payload_tx)
-            .build();
-
-        let payload_provider_event_tx = provider_event_tx.clone();
-        let payload_task = tokio::spawn(async move {
-            while let Some(payload) = payload_rx.recv().await {
-                for event in provider_events_from_payload(&payload) {
-                    let _ = payload_provider_event_tx.send(event);
-                }
-            }
-        });
-
-        let _ = provider_event_tx.send(ProviderEvent::RuntimeStateUpdated(runtime_state(
-            ConnectionStatus::Connecting,
-            None,
-        )?));
-        let runtime_warning = match sync::discover_private_sessions(&self.messaging_config()?).await
-        {
-            Ok(sync_result) => {
-                for session in sync_result.sessions {
-                    let _ = provider_event_tx.send(ProviderEvent::SessionUpserted(session));
-                }
-                sync_result.warning
-            }
-            Err(error) => Some(format!("failed to sync Feishu sessions: {error}")),
-        };
-        let _ = provider_event_tx.send(ProviderEvent::RuntimeStateUpdated(runtime_state(
-            ConnectionStatus::Connected,
-            runtime_warning,
-        )?));
-
-        let open_result = LarkWsClient::open(ws_config, event_handler).await;
-        payload_task.abort();
-
-        match open_result {
-            Ok(()) => {
-                let _ = provider_event_tx.send(ProviderEvent::RuntimeStateUpdated(runtime_state(
-                    ConnectionStatus::Disconnected,
-                    None,
-                )?));
-                Ok(())
-            }
-            Err(error) => {
-                let _ = provider_event_tx.send(ProviderEvent::RuntimeStateUpdated(runtime_state(
-                    ConnectionStatus::Error,
-                    Some(error.to_string()),
-                )?));
-                Err(anyhow!("Feishu websocket runtime failed: {error}"))
-            }
-        }
+        runtime_loop::run_with_reconnect(self.config, provider_event_tx).await
     }
 
     pub async fn scan_sessions(&mut self) -> Result<Vec<ProviderEvent>> {
@@ -141,8 +89,7 @@ impl FeishuProviderRuntime {
         }
 
         let sync_result = sync::discover_private_sessions(&self.messaging_config()?).await?;
-        let state = self.set_runtime_state(ConnectionStatus::Connected, sync_result.warning)?;
-        let mut events = vec![ProviderEvent::RuntimeStateUpdated(state)];
+        let mut events = Vec::new();
         events.extend(
             sync_result
                 .sessions
@@ -186,12 +133,7 @@ impl FeishuProviderRuntime {
     }
 
     fn websocket_config(&self) -> Result<openlark_client::Config> {
-        openlark_client::Config::builder()
-            .app_id(self.config.app_id.clone())
-            .app_secret(self.config.app_secret.clone())
-            .timeout(Duration::from_secs(30))
-            .build()
-            .map_err(|error| anyhow!("failed to build Feishu websocket config: {error}"))
+        runtime_loop::build_websocket_config(&self.config)
     }
 
     fn messaging_config(&self) -> Result<open_lark::openlark_core::config::Config> {
@@ -240,7 +182,7 @@ impl ProviderRuntime for FeishuProviderRuntime {
         }
 
         self.websocket_config()?;
-        self.set_runtime_state(ConnectionStatus::Connected, None)
+        self.set_runtime_state(ConnectionStatus::Disconnected, None)
     }
 
     async fn disconnect(&mut self) -> Result<ProviderRuntimeState> {
@@ -268,13 +210,96 @@ impl ProviderRuntime for FeishuProviderRuntime {
             .execute(body)
             .await
             .map_err(|error| anyhow!("failed to send Feishu text message: {error}"))?;
+        Ok(())
+    }
 
-        self.set_runtime_state(ConnectionStatus::Connected, None)?;
+    async fn add_reaction(
+        &mut self,
+        reaction: ProviderOutboundReaction,
+    ) -> Result<ProviderReactionReceipt> {
+        if reaction.target.provider != ProviderKind::Feishu {
+            return Err(anyhow!(
+                "cannot send {} reaction via Feishu runtime",
+                reaction.target.provider.title()
+            ));
+        }
+
+        let config = self.messaging_config()?;
+        let target = reaction.target;
+        let emoji_type = reaction.emoji_type;
+        let request: ApiRequest<Value> =
+            ApiRequest::post(format!("{IM_V1_MESSAGES}/{}/reactions", target.message_id)).body(
+                serialize_params(
+                    &CreateMessageReactionBody {
+                        reaction_type: ReactionType {
+                            emoji_type: emoji_type.clone(),
+                        },
+                    },
+                    "添加消息表情回复",
+                )?,
+            );
+        let response = open_lark::openlark_core::http::Transport::<Value>::request(
+            request,
+            &config,
+            Some(Default::default()),
+        )
+        .await
+        .map_err(|error| anyhow!("failed to add Feishu message reaction: {error}"))?;
+        if !response.is_success() {
+            return Err(anyhow!(
+                "failed to add Feishu message reaction: {}",
+                response.msg()
+            ));
+        }
+
+        if let Some(data) = response.data().cloned() {
+            let message_reaction =
+                serde_json::from_value::<MessageReaction>(data).map_err(|error| {
+                    anyhow!("failed to parse Feishu message reaction response: {error}")
+                })?;
+            return Ok(ProviderReactionReceipt {
+                target,
+                reaction_id: message_reaction.reaction_id,
+                emoji_type: message_reaction.reaction_type.emoji_type,
+            });
+        }
+
+        find_feishu_reaction_receipt(&config, &self.config, &target, &emoji_type)
+            .await
+            .map_err(|error| anyhow!("failed to add Feishu message reaction: {error}"))
+    }
+
+    async fn remove_reaction(&mut self, reaction: ProviderReactionReceipt) -> Result<()> {
+        if reaction.target.provider != ProviderKind::Feishu {
+            return Err(anyhow!(
+                "cannot remove {} reaction via Feishu runtime",
+                reaction.target.provider.title()
+            ));
+        }
+
+        let config = self.messaging_config()?;
+        let request: ApiRequest<Value> = ApiRequest::delete(format!(
+            "{IM_V1_MESSAGES}/{}/reactions/{}",
+            reaction.target.message_id, reaction.reaction_id
+        ));
+        let response = open_lark::openlark_core::http::Transport::<Value>::request(
+            request,
+            &config,
+            Some(Default::default()),
+        )
+        .await
+        .map_err(|error| anyhow!("failed to remove Feishu message reaction: {error}"))?;
+        if !response.is_success() {
+            return Err(anyhow!(
+                "failed to remove Feishu message reaction: {}",
+                response.msg()
+            ));
+        }
         Ok(())
     }
 }
 
-fn provider_events_from_payload(payload: &[u8]) -> Vec<ProviderEvent> {
+pub(super) fn provider_events_from_payload(payload: &[u8]) -> Vec<ProviderEvent> {
     let Ok(envelope) = serde_json::from_slice::<FeishuEventEnvelope>(payload) else {
         return Vec::new();
     };
@@ -355,7 +380,75 @@ fn is_private_chat_type(chat_type: &str) -> bool {
     matches!(chat_type, "p2p" | "private")
 }
 
-fn runtime_state(
+async fn find_feishu_reaction_receipt(
+    config: &open_lark::openlark_core::config::Config,
+    feishu_config: &FeishuConfig,
+    target: &crate::model::ProviderMessageRef,
+    emoji_type: &str,
+) -> Result<ProviderReactionReceipt> {
+    let mut request = ListMessageReactionsRequest::new(config.clone())
+        .message_id(target.message_id.clone())
+        .reaction_type(emoji_type)
+        .page_size(50);
+    if let Some(user_id_type) = reaction_list_user_id_type(feishu_config) {
+        request = request.user_id_type(user_id_type);
+    }
+
+    let response = request
+        .execute()
+        .await
+        .map_err(|error| anyhow!("failed to list Feishu message reactions: {error}"))?;
+    let expected_operator_id = expected_bot_operator_id(feishu_config);
+    let reaction = response
+        .items
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|candidate| candidate.reaction_type.emoji_type == emoji_type)
+        .find(|candidate| {
+            expected_operator_id
+                .is_none_or(|operator_id| candidate.operator.operator_id == operator_id)
+        })
+        .ok_or_else(|| anyhow!("reaction was created but could not be resolved from Feishu"))?;
+
+    Ok(ProviderReactionReceipt {
+        target: target.clone(),
+        reaction_id: reaction.reaction_id,
+        emoji_type: reaction.reaction_type.emoji_type,
+    })
+}
+
+fn reaction_list_user_id_type(config: &FeishuConfig) -> Option<UserIdType> {
+    if config
+        .bot_open_id
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        Some(UserIdType::OpenId)
+    } else if config
+        .bot_user_id
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        Some(UserIdType::UserId)
+    } else {
+        None
+    }
+}
+
+fn expected_bot_operator_id(config: &FeishuConfig) -> Option<&str> {
+    config
+        .bot_open_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            config
+                .bot_user_id
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+        })
+}
+
+pub(super) fn runtime_state(
     connection: ConnectionStatus,
     last_error: Option<String>,
 ) -> Result<ProviderRuntimeState> {

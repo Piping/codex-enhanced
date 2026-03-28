@@ -8,6 +8,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 
+use crate::config::ClawbotTurnMode;
 use crate::config::FeishuConfig;
 use crate::model::CachedUnreadMessage;
 use crate::model::ClawbotSnapshot;
@@ -95,6 +96,12 @@ impl ClawbotRuntime {
         config: Option<FeishuConfig>,
     ) -> Result<&ClawbotSnapshot> {
         self.snapshot.config.feishu = config;
+        self.store.save_config(&self.snapshot.config)?;
+        self.reload()
+    }
+
+    pub fn update_turn_mode(&mut self, mode: ClawbotTurnMode) -> Result<&ClawbotSnapshot> {
+        self.snapshot.config.turn_mode = mode;
         self.store.save_config(&self.snapshot.config)?;
         self.reload()
     }
@@ -413,6 +420,7 @@ mod tests {
                     bot_open_id: None,
                     bot_user_id: None,
                 }),
+                ..Default::default()
             })
             .expect("config");
         runtime

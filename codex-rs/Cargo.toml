@@ -420,26 +420,27 @@ ignored = [
 # CI disables incremental compilation for better cache reuse, but local
 # edit-build-test loops are much faster when dev builds can reuse artifacts.
 debug = 0
-incremental = true
+incremental = false
 lto = false
+codegen-units = 12
 
 [profile.dev.package."*"]
-incremental = true
+incremental = false
 
 [profile.dev.build-override]
 debug = 0
-incremental = true
+incremental = false
 
 [profile.test]
 debug = 0
-incremental = true
+incremental = false
 
 [profile.test.package."*"]
-incremental = true
+incremental = false
 
 [profile.test.build-override]
 debug = 0
-incremental = true
+incremental = false
 
 [profile.release]
 lto = false

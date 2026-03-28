@@ -103,6 +103,31 @@ impl ProviderSessionRef {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct ProviderMessageRef {
+    pub provider: ProviderKind,
+    pub session_id: String,
+    pub message_id: String,
+}
+
+impl ProviderMessageRef {
+    pub fn new(
+        provider: ProviderKind,
+        session_id: impl Into<String>,
+        message_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            provider,
+            session_id: session_id.into(),
+            message_id: message_id.into(),
+        }
+    }
+
+    pub fn session_ref(&self) -> ProviderSessionRef {
+        ProviderSessionRef::new(self.provider, self.session_id.clone())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProviderSession {
     pub provider: ProviderKind,

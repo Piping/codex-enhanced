@@ -1,26 +1,40 @@
 mod sessions;
+pub(super) mod turns;
 
 use anyhow::Result;
 use codex_clawbot::ClawbotRuntime;
 use codex_clawbot::ClawbotStore;
+use codex_clawbot::ClawbotTurnMode;
 use codex_clawbot::ConnectionStatus;
 use codex_clawbot::FeishuConfig;
 use codex_clawbot::ProviderEvent;
 use codex_clawbot::ProviderKind;
+use codex_clawbot::ProviderMessageRef;
+use codex_clawbot::ProviderOutboundAction;
+use codex_clawbot::ProviderOutboundReaction;
 use codex_clawbot::ProviderOutboundTextMessage;
+use codex_clawbot::ProviderReactionReceipt;
 use codex_clawbot::ProviderRuntime;
 use codex_clawbot::ProviderRuntimeState;
 use codex_clawbot::ProviderSession;
 use codex_clawbot::ProviderSessionRef;
 use codex_clawbot::feishu_failure_reply_text;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::Op;
+use codex_protocol::request_permissions::PermissionGrantScope;
+use codex_protocol::request_permissions::RequestPermissionsResponse;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use self::sessions::CLAWBOT_SESSIONS_PANEL_VIEW_ID;
 use self::sessions::feishu_sessions_menu_description;
+use self::turns::FEISHU_AUTO_ACK_DISPLAY;
+use self::turns::FEISHU_AUTO_ACK_EMOJI_TYPE;
+use self::turns::PendingClawbotTurn;
 use super::App;
 use crate::app_event::AppEvent;
 use crate::app_event::ClawbotFeishuConfigField;
@@ -300,6 +314,13 @@ impl App {
         Ok(())
     }
 
+    pub(crate) fn save_clawbot_turn_mode(&mut self, mode: ClawbotTurnMode) -> Result<()> {
+        let mut runtime = self.clawbot_runtime()?;
+        runtime.update_turn_mode(mode)?;
+        self.open_clawbot_panel();
+        Ok(())
+    }
+
     pub(crate) async fn clawbot_flush_cached_messages(
         &mut self,
         session: ProviderSessionRef,
@@ -361,11 +382,28 @@ impl App {
             .find(|candidate| candidate.session_ref() == session)
             .and_then(|candidate| candidate.display_name.clone())
             .unwrap_or_else(|| session.session_id.clone());
+        let turn_mode = snapshot.config.turn_mode;
 
         for cached_message in &cached_messages {
+            let source_message = ProviderMessageRef::new(
+                cached_message.provider,
+                cached_message.session_id.clone(),
+                cached_message.message_id.clone(),
+            );
+            if let Err(err) = self.send_clawbot_auto_ack(source_message, thread_id).await {
+                self.chat_widget.add_error_message(format!(
+                    "Failed to add clawbot auto reaction for thread {thread_id}: {err}"
+                ));
+            }
             self.insert_clawbot_origin_info_cell(thread_id, &session_label);
-            self.submit_clawbot_message_to_thread(thread_id, cached_message.text.clone())
+            let turn_id = self
+                .submit_clawbot_message_to_thread(thread_id, cached_message.text.clone(), turn_mode)
                 .await?;
+            self.register_pending_clawbot_turn(PendingClawbotTurn {
+                turn_id,
+                thread_id,
+                turn_mode,
+            });
         }
 
         let mut runtime = self.clawbot_runtime()?;
@@ -409,11 +447,35 @@ impl App {
         Ok(())
     }
 
+    pub(crate) async fn maybe_auto_respond_to_clawbot_interactive_event(
+        &mut self,
+        thread_id: ThreadId,
+        event: &EventMsg,
+    ) -> Result<bool> {
+        match event {
+            EventMsg::RequestUserInput(request) => {
+                self.auto_respond_to_clawbot_user_input_request(thread_id, &request.turn_id)
+                    .await
+            }
+            EventMsg::RequestPermissions(request) => {
+                self.auto_respond_to_clawbot_permissions_request(
+                    thread_id,
+                    &request.turn_id,
+                    &request.call_id,
+                )
+                .await
+            }
+            _ => Ok(false),
+        }
+    }
+
     pub(crate) async fn handle_clawbot_thread_terminal_event(
         &mut self,
         thread_id: ThreadId,
         event: &EventMsg,
     ) {
+        let _pending_turn = self.take_pending_clawbot_turn(thread_id, event);
+
         let outbound_text = match event {
             EventMsg::TurnComplete(turn_complete) => turn_complete
                 .last_agent_message
@@ -441,7 +503,31 @@ impl App {
         let snapshot = store.load_snapshot().unwrap_or_default();
         let provider_state = snapshot.provider_state(ProviderKind::Feishu);
         let config_description = feishu_config_summary(snapshot.config.feishu.as_ref());
+        let turn_mode = snapshot.config.turn_mode;
+        let next_turn_mode = match turn_mode {
+            ClawbotTurnMode::Interactive => ClawbotTurnMode::NonInteractive,
+            ClawbotTurnMode::NonInteractive => ClawbotTurnMode::Interactive,
+        };
         let items = vec![
+            SelectionItem {
+                name: "Turn Mode".to_string(),
+                description: Some(clawbot_turn_mode_summary(turn_mode)),
+                selected_description: Some(match turn_mode {
+                    ClawbotTurnMode::Interactive => {
+                        "Switch clawbot-originated turns into non-interactive mode so question, permission, and approval prompts do not block remote sessions.".to_string()
+                    }
+                    ClawbotTurnMode::NonInteractive => {
+                        "Restore normal interactive prompts for clawbot-originated turns.".to_string()
+                    }
+                }),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::ClawbotSetTurnMode {
+                        mode: next_turn_mode,
+                    })
+                })],
+                dismiss_on_select: false,
+                ..Default::default()
+            },
             SelectionItem {
                 name: "Sessions".to_string(),
                 description: Some(feishu_sessions_menu_description(
@@ -722,14 +808,28 @@ impl App {
         }
     }
 
+    fn insert_clawbot_action_info_cell(&mut self, thread_id: ThreadId, title: &str, hint: &str) {
+        let stored_cell: Arc<dyn HistoryCell> = Arc::new(clawbot_action_info_cell(title, hint));
+        self.clawbot_thread_history_cells
+            .entry(thread_id)
+            .or_default()
+            .push(stored_cell);
+        if self.active_thread_id == Some(thread_id) {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                clawbot_action_info_cell(title, hint),
+            )));
+        }
+    }
+
     async fn submit_clawbot_message_to_thread(
         &mut self,
         thread_id: ThreadId,
         message: String,
-    ) -> Result<()> {
+        turn_mode: ClawbotTurnMode,
+    ) -> Result<String> {
         let trimmed = message.trim().to_string();
         if trimmed.is_empty() {
-            return Ok(());
+            return Err(anyhow::anyhow!("cannot submit empty clawbot message"));
         }
 
         let op = {
@@ -743,7 +843,10 @@ impl App {
                     text_elements: Vec::new(),
                 }],
                 cwd: config_snapshot.cwd,
-                approval_policy: config_snapshot.approval_policy,
+                approval_policy: clawbot_approval_policy(
+                    config_snapshot.approval_policy,
+                    turn_mode,
+                ),
                 approvals_reviewer: Some(config_snapshot.approvals_reviewer),
                 sandbox_policy: config_snapshot.sandbox_policy,
                 model: config_snapshot.model,
@@ -758,29 +861,20 @@ impl App {
 
         let replay_state_op =
             super::ThreadEventStore::op_can_change_pending_replay_state(&op).then(|| op.clone());
-        let submitted = if self.active_thread_id == Some(thread_id) {
-            self.chat_widget.submit_op(op)
-        } else {
-            crate::session_log::log_outbound_op(&op);
-            let thread = self.server.get_thread(thread_id).await.map_err(|error| {
+        crate::session_log::log_outbound_op(&op);
+        let thread =
+            self.server.get_thread(thread_id).await.map_err(|error| {
                 anyhow::anyhow!("failed to find bound thread {thread_id}: {error}")
             })?;
-            thread
-                .submit(op)
-                .await
-                .map(|_| true)
-                .map_err(|error| anyhow::anyhow!("failed to submit clawbot op: {error}"))?
-        };
+        let turn_id = thread
+            .submit(op)
+            .await
+            .map_err(|error| anyhow::anyhow!("failed to submit clawbot op: {error}"))?;
 
-        if submitted && let Some(op) = replay_state_op.as_ref() {
+        if let Some(op) = replay_state_op.as_ref() {
             self.note_thread_outbound_op(thread_id, op).await;
         }
-        if !submitted {
-            return Err(anyhow::anyhow!(
-                "failed to submit clawbot message to bound thread {thread_id}"
-            ));
-        }
-        Ok(())
+        Ok(turn_id)
     }
 
     async fn send_clawbot_thread_reply(&mut self, thread_id: ThreadId, text: String) -> Result<()> {
@@ -791,6 +885,125 @@ impl App {
 
         self.send_clawbot_outbound_text(ProviderOutboundTextMessage { session, text })
             .await
+    }
+
+    fn register_pending_clawbot_turn(&mut self, turn: PendingClawbotTurn) {
+        self.clawbot_pending_turns
+            .entry(turn.thread_id)
+            .or_default()
+            .push_back(turn);
+    }
+
+    fn take_pending_clawbot_turn(
+        &mut self,
+        thread_id: ThreadId,
+        event: &EventMsg,
+    ) -> Option<PendingClawbotTurn> {
+        let queue = self.clawbot_pending_turns.get_mut(&thread_id)?;
+        let pending = match event {
+            EventMsg::TurnComplete(turn_complete) => queue
+                .iter()
+                .position(|pending| pending.turn_id == turn_complete.turn_id)
+                .and_then(|index| queue.remove(index)),
+            EventMsg::Error(_) => queue.pop_front(),
+            _ => None,
+        };
+        if queue.is_empty() {
+            self.clawbot_pending_turns.remove(&thread_id);
+        }
+        pending
+    }
+
+    fn clawbot_turn_mode_for_turn(
+        &self,
+        thread_id: ThreadId,
+        turn_id: &str,
+    ) -> Option<ClawbotTurnMode> {
+        self.clawbot_pending_turns
+            .get(&thread_id)?
+            .iter()
+            .find(|pending| pending.turn_id == turn_id)
+            .map(|pending| pending.turn_mode)
+    }
+
+    async fn send_clawbot_auto_ack(
+        &mut self,
+        target: ProviderMessageRef,
+        thread_id: ThreadId,
+    ) -> Result<()> {
+        self.send_clawbot_outbound_reaction(ProviderOutboundReaction {
+            target,
+            emoji_type: FEISHU_AUTO_ACK_EMOJI_TYPE.to_string(),
+        })
+        .await?;
+        self.insert_clawbot_action_info_cell(
+            thread_id,
+            "Feishu auto reaction",
+            FEISHU_AUTO_ACK_DISPLAY,
+        );
+        Ok(())
+    }
+
+    async fn auto_respond_to_clawbot_user_input_request(
+        &mut self,
+        thread_id: ThreadId,
+        turn_id: &str,
+    ) -> Result<bool> {
+        let Some(turn_mode) = self.clawbot_turn_mode_for_turn(thread_id, turn_id) else {
+            return Ok(false);
+        };
+        if !turn_mode.uses_noninteractive_prompt_handling() {
+            return Ok(false);
+        }
+
+        self.submit_op_to_thread(
+            thread_id,
+            Op::UserInputAnswer {
+                id: turn_id.to_string(),
+                response: RequestUserInputResponse {
+                    answers: std::collections::HashMap::new(),
+                },
+            },
+        )
+        .await;
+        self.insert_clawbot_action_info_cell(
+            thread_id,
+            "Clawbot auto response",
+            "question tool skipped",
+        );
+        Ok(true)
+    }
+
+    async fn auto_respond_to_clawbot_permissions_request(
+        &mut self,
+        thread_id: ThreadId,
+        turn_id: &str,
+        call_id: &str,
+    ) -> Result<bool> {
+        let Some(turn_mode) = self.clawbot_turn_mode_for_turn(thread_id, turn_id) else {
+            return Ok(false);
+        };
+        if !turn_mode.uses_noninteractive_prompt_handling() {
+            return Ok(false);
+        }
+
+        self.submit_op_to_thread(
+            thread_id,
+            Op::RequestPermissionsResponse {
+                id: call_id.to_string(),
+                response: RequestPermissionsResponse {
+                    permissions: Default::default(),
+                    scope: PermissionGrantScope::Turn,
+                },
+            },
+        )
+        .await;
+        self.insert_clawbot_action_info_cell(
+            thread_id,
+            "Clawbot auto response",
+            "permission request denied",
+        );
+        Ok(true)
     }
 
     fn start_clawbot_provider_runtime(&mut self, provider: ProviderKind) -> Result<()> {
@@ -829,25 +1042,54 @@ impl App {
         message: ProviderOutboundTextMessage,
     ) -> Result<()> {
         if let Some(tx) = &self.clawbot_outbound_tx {
-            tx.send(message).map_err(|err| {
-                anyhow::anyhow!("failed to capture clawbot outbound message: {err}")
-            })?;
+            tx.send(ProviderOutboundAction::Text(message))
+                .map_err(|err| {
+                    anyhow::anyhow!("failed to capture clawbot outbound message: {err}")
+                })?;
             return Ok(());
         }
 
         match message.session.provider {
             ProviderKind::Feishu => {
-                let mut runtime = self.clawbot_runtime()?;
+                let runtime = self.clawbot_runtime()?;
                 let Some(mut provider_runtime) = runtime.feishu_provider() else {
                     return Err(anyhow::anyhow!("missing Feishu provider config"));
                 };
                 provider_runtime.send_text(message).await?;
-                runtime.persist_runtime_state(provider_runtime.runtime_state().clone())?;
             }
         }
 
         self.refresh_clawbot_views_if_active();
         Ok(())
+    }
+
+    async fn send_clawbot_outbound_reaction(
+        &mut self,
+        reaction: ProviderOutboundReaction,
+    ) -> Result<ProviderReactionReceipt> {
+        if let Some(tx) = &self.clawbot_outbound_tx {
+            let receipt = ProviderReactionReceipt {
+                target: reaction.target.clone(),
+                reaction_id: format!("captured-{}", reaction.emoji_type),
+                emoji_type: reaction.emoji_type.clone(),
+            };
+            tx.send(ProviderOutboundAction::AddReaction(reaction))
+                .map_err(|err| anyhow::anyhow!("failed to capture clawbot reaction: {err}"))?;
+            return Ok(receipt);
+        }
+
+        let receipt = match reaction.target.provider {
+            ProviderKind::Feishu => {
+                let runtime = self.clawbot_runtime()?;
+                let Some(mut provider_runtime) = runtime.feishu_provider() else {
+                    return Err(anyhow::anyhow!("missing Feishu provider config"));
+                };
+                provider_runtime.add_reaction(reaction).await?
+            }
+        };
+
+        self.refresh_clawbot_views_if_active();
+        Ok(receipt)
     }
 }
 
@@ -884,6 +1126,35 @@ fn feishu_runtime_state_for_config(config: FeishuConfig) -> ProviderRuntimeState
     }
 }
 
+fn clawbot_turn_mode_summary(mode: ClawbotTurnMode) -> String {
+    match mode {
+        ClawbotTurnMode::Interactive => {
+            "interactive · clawbot turns may surface question and approval prompts.".to_string()
+        }
+        ClawbotTurnMode::NonInteractive => {
+            "non-interactive · clawbot turns auto-dismiss question and approval prompts."
+                .to_string()
+        }
+    }
+}
+
+fn clawbot_approval_policy(
+    existing_policy: AskForApproval,
+    turn_mode: ClawbotTurnMode,
+) -> AskForApproval {
+    if !turn_mode.uses_noninteractive_prompt_handling() {
+        return existing_policy;
+    }
+
+    AskForApproval::Granular(GranularApprovalConfig {
+        sandbox_approval: false,
+        rules: false,
+        skill_approval: false,
+        request_permissions: false,
+        mcp_elicitations: false,
+    })
+}
+
 fn mask_secret(value: &str) -> String {
     let char_count = value.chars().count();
     if char_count <= 4 {
@@ -916,4 +1187,8 @@ fn clawbot_origin_info_cell(session_label: &str) -> history_cell::PlainHistoryCe
         "Feishu message".to_string(),
         Some(session_label.to_string()),
     )
+}
+
+fn clawbot_action_info_cell(title: &str, hint: &str) -> history_cell::PlainHistoryCell {
+    history_cell::new_info_event(title.to_string(), Some(hint.to_string()))
 }

@@ -72,7 +72,7 @@ use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::RequestId;
 use codex_arg0::Arg0DispatchPaths;
 use codex_clawbot::ProviderKind;
-use codex_clawbot::ProviderOutboundTextMessage;
+use codex_clawbot::ProviderOutboundAction;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ForkSnapshot;
@@ -167,6 +167,7 @@ use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::btw::BtwSessionState;
 use self::clawbot::control_panel_clawbot_item;
+use self::clawbot::turns::PendingClawbotTurn;
 use self::display_preferences_menu::control_panel_show_hide_item;
 use self::display_preferences_menu::display_preferences_items;
 use self::jump_navigation::build_jump_catalog;
@@ -996,9 +997,10 @@ pub(crate) struct App {
     windows_sandbox: WindowsSandboxState,
     btw_session: Option<BtwSessionState>,
     loop_timers: LoopTimersState,
-    clawbot_outbound_tx: Option<mpsc::UnboundedSender<ProviderOutboundTextMessage>>,
+    clawbot_outbound_tx: Option<mpsc::UnboundedSender<ProviderOutboundAction>>,
     clawbot_provider_tasks: HashMap<ProviderKind, JoinHandle<()>>,
     clawbot_thread_history_cells: HashMap<ThreadId, Vec<Arc<dyn HistoryCell>>>,
+    clawbot_pending_turns: HashMap<ThreadId, VecDeque<PendingClawbotTurn>>,
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
@@ -1926,6 +1928,13 @@ impl App {
     async fn enqueue_thread_event(&mut self, thread_id: ThreadId, event: Event) -> Result<()> {
         let refresh_pending_thread_approvals =
             ThreadEventStore::event_can_change_pending_thread_approvals(&event);
+        if self
+            .maybe_auto_respond_to_clawbot_interactive_event(thread_id, &event.msg)
+            .await
+            .map_err(|error| color_eyre::eyre::eyre!("{error}"))?
+        {
+            return Ok(());
+        }
         enum PrimaryLoopEvent {
             TurnComplete(Option<String>),
             Error,
@@ -3217,6 +3226,7 @@ impl App {
         self.loop_timers.thread_history_cells.clear();
         self.loop_timers.after_turn_scheduler.clear();
         self.clawbot_thread_history_cells.clear();
+        self.clawbot_pending_turns.clear();
         self.chat_widget.set_pending_thread_approvals(Vec::new());
         self.sync_active_agent_label();
     }
@@ -3659,6 +3669,7 @@ impl App {
             clawbot_outbound_tx: None,
             clawbot_provider_tasks: HashMap::new(),
             clawbot_thread_history_cells: HashMap::new(),
+            clawbot_pending_turns: HashMap::new(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -3936,6 +3947,10 @@ impl App {
             AppEvent::SaveClawbotManualBindSessionId { session_id } => {
                 self.save_clawbot_manual_bind_session_id(session_id)
                     .await
+                    .map_err(|error| color_eyre::eyre::eyre!("{error}"))?;
+            }
+            AppEvent::ClawbotSetTurnMode { mode } => {
+                self.save_clawbot_turn_mode(mode)
                     .map_err(|error| color_eyre::eyre::eyre!("{error}"))?;
             }
             AppEvent::ClawbotConnectCurrentThread { session } => {
@@ -6394,8 +6409,10 @@ mod tests {
     use assert_matches::assert_matches;
     use codex_clawbot::CachedUnreadMessage;
     use codex_clawbot::ClawbotStore;
+    use codex_clawbot::ClawbotTurnMode;
     use codex_clawbot::FeishuConfig;
     use codex_clawbot::ProviderKind;
+    use codex_clawbot::ProviderOutboundAction;
     use codex_clawbot::ProviderOutboundTextMessage;
     use codex_clawbot::ProviderSession;
     use codex_clawbot::ProviderSessionRef;
@@ -8704,10 +8721,28 @@ guardian_approval = true
     }
 
     #[tokio::test]
+    async fn clawbot_panel_turn_mode_row_emits_toggle_event() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        app.open_clawbot_panel();
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_matches!(
+            app_event_rx.try_recv(),
+            Ok(AppEvent::ClawbotSetTurnMode {
+                mode: ClawbotTurnMode::NonInteractive,
+            })
+        );
+    }
+
+    #[tokio::test]
     async fn clawbot_panel_sessions_row_emits_open_sessions_panel_event() {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
         app.open_clawbot_panel();
 
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         app.chat_widget
             .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -8722,6 +8757,8 @@ guardian_approval = true
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
         app.open_clawbot_panel();
 
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         app.chat_widget
             .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         app.chat_widget
@@ -8935,7 +8972,7 @@ guardian_approval = true
             "chat_3",
         );
 
-        let (outbound_tx, mut outbound_rx) = unbounded_channel::<ProviderOutboundTextMessage>();
+        let (outbound_tx, mut outbound_rx) = unbounded_channel::<ProviderOutboundAction>();
         app.clawbot_outbound_tx = Some(outbound_tx);
 
         app.enqueue_thread_event(
@@ -8956,10 +8993,10 @@ guardian_approval = true
             .expect("clawbot outbound channel closed unexpectedly");
         assert_eq!(
             outbound,
-            ProviderOutboundTextMessage {
+            ProviderOutboundAction::Text(ProviderOutboundTextMessage {
                 session: ProviderSessionRef::new(ProviderKind::Feishu, "chat_3"),
                 text: "Final reply".to_string(),
-            }
+            })
         );
         Ok(())
     }
@@ -8976,7 +9013,7 @@ guardian_approval = true
             "chat_4",
         );
 
-        let (outbound_tx, mut outbound_rx) = unbounded_channel::<ProviderOutboundTextMessage>();
+        let (outbound_tx, mut outbound_rx) = unbounded_channel::<ProviderOutboundAction>();
         app.clawbot_outbound_tx = Some(outbound_tx);
 
         app.enqueue_thread_event(
@@ -8997,10 +9034,10 @@ guardian_approval = true
             .expect("clawbot outbound channel closed unexpectedly");
         assert_eq!(
             outbound,
-            ProviderOutboundTextMessage {
+            ProviderOutboundAction::Text(ProviderOutboundTextMessage {
                 session: ProviderSessionRef::new(ProviderKind::Feishu, "chat_4"),
                 text: "Request failed: network timeout while calling tool".to_string(),
-            }
+            })
         );
         Ok(())
     }
@@ -9130,6 +9167,7 @@ guardian_approval = true
             clawbot_outbound_tx: None,
             clawbot_provider_tasks: HashMap::new(),
             clawbot_thread_history_cells: HashMap::new(),
+            clawbot_pending_turns: HashMap::new(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -9201,6 +9239,7 @@ guardian_approval = true
                 clawbot_outbound_tx: None,
                 clawbot_provider_tasks: HashMap::new(),
                 clawbot_thread_history_cells: HashMap::new(),
+                clawbot_pending_turns: HashMap::new(),
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
                 agent_navigation: AgentNavigationState::default(),
