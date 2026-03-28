@@ -1,71 +1,93 @@
 # Codex Enhanced
 
-Codex Enhanced is a standalone public distribution of Codex focused on
-multi-account ChatGPT operations, fullscreen TUI workflow improvements, and a
-smaller long-term fork maintenance surface.
+Codex Enhanced is an operator-first Codex distribution for people who want a
+local coding agent with better session operations, loop-driven automation, and
+workspace-backed Feishu clawbot workflows.
 
-This repository is maintained as its own GitHub project instead of a GitHub
-fork. It tracks upstream Codex where practical, while keeping product-specific
-behavior behind a dedicated extension layer so future changes can converge on
-plugins instead of repeated invasive rebases.
+It stays close to upstream Codex where practical, but focuses fork effort on
+the places that matter in daily operations: account switching, visible control
+surfaces, repeatable release milestones, and automation that can be managed
+from inside the TUI instead of bolted on from the outside.
 
-## Why This Version Exists
+![Codex Enhanced hero](./docs/assets/readme-hero.svg)
 
-Upstream Codex already provides a strong local coding agent. The main problem
-this project solves is operational:
+![Codex Enhanced splash](./.github/codex-cli-splash.png)
 
-- switching between multiple ChatGPT accounts should not require manual file
-  juggling
-- rate-limit and usage-limit handling should be able to fail over to another
-  account automatically
-- fullscreen TUI workflows should expose session and account operations in one
-  operator-facing control surface
-- fork-specific behavior should move toward a stable extension boundary instead
-  of expanding the patch set in core runtime code
+## Why This Fork Exists
 
-## What Is Included
+Upstream Codex already provides a strong local coding agent. This fork is about
+operability:
 
-- Managed account storage under `~/.codex/accounts`
-- `codex login --auth <alias>` for capturing multiple ChatGPT logins into named
-  account slots
-- Account pool metadata with stable IDs, aliases, cooldown state, and inferred
-  usage windows
-- Threshold-based account routing and one-shot retry on explicit
-  limit/rejection failures for normal user turns in the fullscreen TUI path
-- A `Ctrl-P` control panel with:
-  - global session picker
-  - account selection
-  - alias rename submenu
-  - current-session fork entry point
-- A dedicated `codex-rs/ext` crate for fork-owned extension state and host
-  compatibility groundwork
+- switching between multiple ChatGPT accounts should not require manual auth
+  file juggling
+- loop automation should be visible, interruptible, and predictable from the
+  TUI
+- external chat entry points should bind to real Codex threads instead of
+  living in a separate bot stack
+- fork-owned behavior should move toward explicit extension boundaries instead
+  of spreading through core runtime code
 
-## Current Scope
+## What You Get
 
-The current milestone is a practical MVP for daily use, not the final extension
-architecture.
+| Area | What is implemented now |
+| --- | --- |
+| Managed accounts | Named account slots under `~/.codex/accounts`, login-time registration, stable aliases, and operator-facing switching |
+| TUI control surface | `Ctrl-P` control panel for sessions, accounts, clawbot management, and current-session workflows |
+| Loop runtime | Before-turn and after-turn loop runners with queued scheduling, per-loop progress, `/stop` cancellation, and info cells in the chat stream |
+| Clawbot | Workspace-backed `codex-clawbot` runtime, Feishu session discovery, manual bind, cached unread flush, and final answer forwarding |
+| Fork boundary | Dedicated fork-owned crates and a release flow that keeps the fork delta reviewable |
 
-Implemented now:
+## Operator Surface
 
-- managed ChatGPT account registry and auth snapshot layout
-- account activation and alias management in the TUI
-- control-panel-driven session and account operations
-- inferred cooldown recording from explicit limit errors
-- login-time account registration
+| Overview | Release train |
+| --- | --- |
+| ![Operator surface](./docs/assets/operator-surface.svg) | ![Recent release train](./docs/assets/release-train.svg) |
 
-Planned next:
+## Recent Releases
 
-- broader automatic account routing coverage beyond the current fullscreen TUI
-  path
-- observable switch reasons and richer operator status views
-- hook/interceptor expansion
-- capability-negotiated WASM plugins built on top of `codex-ext`
+### `v0.1.11`
+
+- fixed the empty `after-turn` path so the TUI does not leave a stale
+  `Running background loop` banner behind
+- hardened background loop state cleanup for the latest scheduler flow
+
+### `v0.1.10`
+
+- added the `codex-clawbot` crate for workspace-backed Feishu session bridging
+- added clawbot control-panel flows for session list, manual bind, retry, scan,
+  clear, flush, and configuration
+- made after-turn loop rounds responsive, surfaced per-loop queue progress, and
+  restored `/stop` cancellation for hidden loop runs
+
+### `v0.1.9`
+
+- shipped loop v2 runtime updates and aligned release artifacts around the new
+  scheduler flow
+- refreshed TUI and `tui_app_server` snapshots for the newer account and status
+  surfaces
+- aligned stop-cleanup and app-server widget behavior with the current TUI
+
+## Clawbot And Loop Workflow
+
+Recent releases moved this fork beyond simple account management:
+
+- Feishu sessions can be discovered, scanned, or manually bound to the current
+  Codex thread from `Ctrl-P -> Clawbot -> Sessions`
+- unread Feishu messages can be cached before binding, flushed into the bound
+  thread in order, and tagged in the TUI as `Feishu message`
+- loop-generated activity now shows explicit progress and emits `Loop agent
+  reply` info cells so operators can see where automation output came from
+- bound threads can forward their final assistant answer back into the linked
+  Feishu session
 
 ## Repository Layout
 
 - [codex-rs/ext](./codex-rs/ext)  
   Fork-owned extension crate for account pool state, auth snapshots, and future
   plugin host compatibility.
+- [codex-rs/clawbot](./codex-rs/clawbot)  
+  Workspace-backed clawbot runtime for Feishu session persistence, binding, and
+  provider integration.
 - [codex-rs/tui](./codex-rs/tui)  
   Fullscreen local TUI implementation.
 - [codex-rs/tui_app_server](./codex-rs/tui_app_server)  
@@ -107,6 +129,8 @@ Start Codex, then use:
 - `Ctrl-P -> Sessions` to open the global session picker
 - `Ctrl-P -> Accounts` to switch the active managed account
 - `Ctrl-P -> Accounts -> Rename` to rename account aliases
+- `Ctrl-P -> Clawbot -> Sessions` to manage Feishu sessions and bind one to the
+  current thread
 
 Managed account state is stored under:
 
@@ -117,11 +141,25 @@ Managed account state is stored under:
     └── auth.json
 ```
 
+Workspace-backed clawbot state is stored under:
+
+```text
+<workspace>/.codex/clawbot/
+├── bindings.json
+├── config.toml
+├── inbound_receipts.json
+├── runtime.json
+├── sessions.json
+└── unread_messages.jsonl
+```
+
 ## Upstream Relationship
 
 This project is based on OpenAI Codex and keeps upstream history so changes can
 be rebased and audited cleanly. The maintenance goal is to keep the fork-owned
-delta small, explicit, and increasingly isolated behind `codex-ext`.
+delta small, explicit, and increasingly isolated behind `codex-ext`,
+`codex-clawbot`, and other dedicated extension layers instead of broad runtime
+patches.
 
 ## License
 
