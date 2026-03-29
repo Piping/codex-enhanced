@@ -89,7 +89,7 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.checkout_ref }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.93.0
         with:
           targets: ${{ matrix.target }}
 
@@ -100,6 +100,14 @@ jobs:
       - name: Install Python build dependencies
         shell: bash
         run: python -m pip install --upgrade build hatchling
+
+      - name: Clear workspace build rustflags for CI release builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_ENCODED_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_BUILD_RUSTFLAGS=" >> "$GITHUB_ENV"
 
       - name: Use default macOS linker
         if: ${{ runner.os == 'macOS' }}

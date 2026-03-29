@@ -49,7 +49,7 @@ jobs:
         with:
           ref: ${{ steps.meta.outputs.checkout_ref }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.93.0
 
       - name: Validate tag matches Cargo version
         shell: bash
@@ -98,7 +98,7 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.checkout_ref }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.93.0
         with:
           targets: ${{ matrix.target }}
 
@@ -106,11 +106,18 @@ jobs:
         uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: sccache
-          version: 0.7.5
 
       - name: Enable sccache wrapper
         shell: bash
         run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
+      - name: Clear workspace build rustflags for CI release builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_ENCODED_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_BUILD_RUSTFLAGS=" >> "$GITHUB_ENV"
 
       - name: Use default macOS linker
         if: ${{ runner.os == 'macOS' }}
