@@ -181,6 +181,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write
     steps:
       - name: Download wheel artifacts
         uses: actions/download-artifact@v4
@@ -192,7 +193,6 @@ jobs:
       - name: Publish codex-enhanced wheels to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          user: __token__
-          password: ${{ secrets.PYPI_API_TOKEN }}
           packages-dir: dist
           skip-existing: true
+          verbose: true

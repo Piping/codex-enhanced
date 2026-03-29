@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BUILD_SCRIPT = REPO_ROOT / "codex-cli" / "scripts" / "build_npm_package.py"
 INSTALL_NATIVE_DEPS = REPO_ROOT / "codex-cli" / "scripts" / "install_native_deps.py"
 WORKFLOW_NAME = ".github/workflows/rust-release.yml"
-GITHUB_REPO = "openai/codex"
+GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "openai/codex")
 
 _SPEC = importlib.util.spec_from_file_location("codex_build_npm_package", BUILD_SCRIPT)
 if _SPEC is None or _SPEC.loader is None:
@@ -46,6 +46,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--workflow-url",
         help="Optional workflow URL to reuse for native artifacts.",
+    )
+    parser.add_argument(
+        "--github-repo",
+        default=GITHUB_REPO,
+        help="GitHub repository that owns the workflow run, for example openai/codex.",
+    )
+    parser.add_argument(
+        "--workflow-name",
+        default=WORKFLOW_NAME,
+        help="Workflow file or name to query for native artifacts.",
+    )
+    parser.add_argument(
+        "--workflow-branch",
+        default=None,
+        help=(
+            "Branch or tag ref name to query for the workflow run. "
+            "Defaults to rust-v<release-version>."
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -78,35 +96,64 @@ def expand_packages(packages: list[str]) -> list[str]:
     return expanded
 
 
-def resolve_release_workflow(version: str) -> dict:
-    stdout = subprocess.check_output(
-        [
-            "gh",
-            "run",
-            "list",
-            "--branch",
-            f"rust-v{version}",
-            "--json",
-            "workflowName,url,headSha",
-            "--workflow",
-            WORKFLOW_NAME,
-            "--jq",
-            "first(.[])",
-        ],
-        cwd=REPO_ROOT,
-        text=True,
+def resolve_release_workflow(
+    version: str,
+    github_repo: str,
+    workflow_name: str,
+    workflow_branch: str | None,
+) -> dict:
+    cmd = [
+        "gh",
+        "run",
+        "list",
+        "--repo",
+        github_repo,
+        "--workflow",
+        workflow_name,
+        "--json",
+        "workflowName,url,headSha,status,conclusion,headBranch",
+    ]
+    branch = workflow_branch
+    if branch is None and workflow_name == WORKFLOW_NAME:
+        branch = f"rust-v{version}"
+    if branch:
+        cmd.extend(["--branch", branch])
+    stdout = subprocess.check_output(cmd, cwd=REPO_ROOT, text=True)
+    workflows = json.loads(stdout or "[]")
+    workflow = next(
+        (
+            item
+            for item in workflows
+            if item.get("status") == "completed"
+            and item.get("conclusion") == "success"
+        ),
+        None,
     )
-    workflow = json.loads(stdout or "null")
     if not workflow:
-        raise RuntimeError(f"Unable to find rust-release workflow for version {version}.")
+        raise RuntimeError(
+            "Unable to find a successful workflow run for "
+            f"{workflow_name} in {github_repo}"
+            + (f" on ref {branch}." if branch else ".")
+        )
     return workflow
 
 
-def resolve_workflow_url(version: str, override: str | None) -> tuple[str, str | None]:
+def resolve_workflow_url(
+    version: str,
+    override: str | None,
+    github_repo: str,
+    workflow_name: str,
+    workflow_branch: str | None,
+) -> tuple[str, str | None]:
     if override:
         return override, None
 
-    workflow = resolve_release_workflow(version)
+    workflow = resolve_release_workflow(
+        version,
+        github_repo,
+        workflow_name,
+        workflow_branch,
+    )
     return workflow["url"], workflow.get("headSha")
 
 
@@ -157,7 +204,11 @@ def main() -> int:
     try:
         if native_components:
             workflow_url, resolved_head_sha = resolve_workflow_url(
-                args.release_version, args.workflow_url
+                args.release_version,
+                args.workflow_url,
+                args.github_repo,
+                args.workflow_name,
+                args.workflow_branch,
             )
             vendor_temp_root = Path(tempfile.mkdtemp(prefix="npm-native-", dir=runner_temp))
             install_native_components(workflow_url, native_components, vendor_temp_root)
