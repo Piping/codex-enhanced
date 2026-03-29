@@ -450,6 +450,22 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     lines
 }
 
+/// Handle a completed interactive app run.
+fn finish_interactive_exit(
+    exit_info: AppExitInfo,
+    arg0_paths: &Arg0DispatchPaths,
+) -> anyhow::Result<()> {
+    if matches!(exit_info.exit_reason, ExitReason::RespawnRequested) {
+        let Some(thread_id) = exit_info.thread_id.as_ref() else {
+            anyhow::bail!("cannot respawn Codex: current session has no thread id");
+        };
+        respawn_current_codex_session(arg0_paths, &thread_id.to_string())?;
+        return Ok(());
+    }
+
+    handle_app_exit(exit_info)
+}
+
 /// Handle the app exit and print the results. Optionally run the update action.
 fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
     match exit_info.exit_reason {
@@ -458,6 +474,7 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
             std::process::exit(1);
         }
         ExitReason::UserRequested => { /* normal exit */ }
+        ExitReason::RespawnRequested => unreachable!("respawn should be handled before formatting"),
     }
 
     let update_action = exit_info.update_action;
@@ -469,6 +486,44 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
         run_update_action(action)?;
     }
     Ok(())
+}
+
+fn respawn_current_codex_session(
+    arg0_paths: &Arg0DispatchPaths,
+    thread_id: &str,
+) -> anyhow::Result<()> {
+    let Some(exe_path) = arg0_paths.codex_self_exe.as_ref() else {
+        anyhow::bail!("unable to respawn Codex: current executable path is unavailable");
+    };
+
+    let mut command = std::process::Command::new(exe_path);
+    command.arg("resume").arg(thread_id);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        let error = command.exec();
+        anyhow::bail!(
+            "failed to respawn Codex via {}: {error}",
+            exe_path.display()
+        );
+    }
+
+    #[cfg(not(unix))]
+    {
+        command
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit());
+        command.spawn().map_err(|error| {
+            anyhow::anyhow!(
+                "failed to respawn Codex via {}: {error}",
+                exe_path.display()
+            )
+        })?;
+        Ok(())
+    }
 }
 
 /// Run the update action and print the result.
@@ -634,7 +689,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 arg0_paths.clone(),
             )
             .await?;
-            handle_app_exit(exit_info)?;
+            finish_interactive_exit(exit_info, &arg0_paths)?;
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -764,7 +819,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 arg0_paths.clone(),
             )
             .await?;
-            handle_app_exit(exit_info)?;
+            finish_interactive_exit(exit_info, &arg0_paths)?;
         }
         Some(Subcommand::Fork(ForkCommand {
             session_id,
@@ -790,7 +845,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 arg0_paths.clone(),
             )
             .await?;
-            handle_app_exit(exit_info)?;
+            finish_interactive_exit(exit_info, &arg0_paths)?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -1324,6 +1379,7 @@ fn into_legacy_update_action(
 fn into_legacy_exit_reason(reason: codex_tui_app_server::ExitReason) -> ExitReason {
     match reason {
         codex_tui_app_server::ExitReason::UserRequested => ExitReason::UserRequested,
+        codex_tui_app_server::ExitReason::RespawnRequested => ExitReason::RespawnRequested,
         codex_tui_app_server::ExitReason::Fatal(message) => ExitReason::Fatal(message),
     }
 }

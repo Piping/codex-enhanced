@@ -62,6 +62,7 @@ fn into_legacy_update_action(
 fn into_legacy_exit_reason(reason: codex_tui_app_server::ExitReason) -> ExitReason {
     match reason {
         codex_tui_app_server::ExitReason::UserRequested => ExitReason::UserRequested,
+        codex_tui_app_server::ExitReason::RespawnRequested => ExitReason::RespawnRequested,
         codex_tui_app_server::ExitReason::Fatal(message) => ExitReason::Fatal(message),
     }
 }
@@ -73,6 +74,41 @@ fn into_legacy_exit_info(exit_info: codex_tui_app_server::AppExitInfo) -> AppExi
         thread_name: exit_info.thread_name,
         update_action: exit_info.update_action.map(into_legacy_update_action),
         exit_reason: into_legacy_exit_reason(exit_info.exit_reason),
+    }
+}
+
+fn respawn_current_session(thread_id: &str, arg0_paths: &Arg0DispatchPaths) -> anyhow::Result<()> {
+    let Some(exe_path) = arg0_paths.codex_self_exe.as_ref() else {
+        anyhow::bail!("unable to respawn Codex: current executable path is unavailable");
+    };
+
+    let mut command = std::process::Command::new(exe_path);
+    command.arg("--resume-session-id").arg(thread_id);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        let error = command.exec();
+        anyhow::bail!(
+            "failed to respawn Codex via {}: {error}",
+            exe_path.display()
+        );
+    }
+
+    #[cfg(not(unix))]
+    {
+        command
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit());
+        command.spawn().map_err(|error| {
+            anyhow::anyhow!(
+                "failed to respawn Codex via {}: {error}",
+                exe_path.display()
+            )
+        })?;
+        Ok(())
     }
 }
 
@@ -89,7 +125,7 @@ fn main() -> anyhow::Result<()> {
             into_legacy_exit_info(
                 codex_tui_app_server::run_main(
                     into_app_server_cli(inner),
-                    arg0_paths,
+                    arg0_paths.clone(),
                     codex_core::config_loader::LoaderOverrides::default(),
                     /*remote*/ None,
                     /*remote_auth_token*/ None,
@@ -99,11 +135,18 @@ fn main() -> anyhow::Result<()> {
         } else {
             run_main(
                 inner,
-                arg0_paths,
+                arg0_paths.clone(),
                 codex_core::config_loader::LoaderOverrides::default(),
             )
             .await?
         };
+        if matches!(exit_info.exit_reason, ExitReason::RespawnRequested) {
+            let Some(thread_id) = exit_info.thread_id.as_ref() else {
+                anyhow::bail!("cannot respawn Codex: current session has no thread id");
+            };
+            respawn_current_session(&thread_id.to_string(), &arg0_paths)?;
+            return Ok(());
+        }
         let token_usage = exit_info.token_usage;
         if !token_usage.is_zero() {
             println!(

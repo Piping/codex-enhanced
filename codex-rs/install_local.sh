@@ -1,5 +1,4 @@
 #!/bin/bash
 set -e
-cp target/debug/codex /usr/local/bin/codex
-codesign --sign - --force --preserve-metadata=entitlements,requirements,flags,runtime /usr/local/bin/codex
-echo done
+sudo install -m 0755 target/debug/codex /usr/local/bin/codex
+sudo codesign --sign - --force --preserve-metadata=entitlements,requirements,flags,runtime /usr/local/bin/codex

@@ -2,6 +2,11 @@
 
 In the codex-rs folder where the rust code lives:
 
+- This fork has a few project-specific overrides:
+  - During active development, if the user explicitly narrows validation to `cargo check` and `cargo build`, treat that as an override for the default test / clippy / lint flow in this file. Do not expand validation unless the user later asks for it.
+  - Prefer KISS. Solve the current concrete problem with the smallest clear design that works.
+  - When requirements change, fail fast. Remove superseded paths instead of preserving fallback compatibility, dual behavior, or migration shims unless the user explicitly asks for backward compatibility.
+  - Do not add speculative extension points for imagined future needs. Extract an abstraction only after the variation is already real or the extension boundary is clearly required.
 - Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`
 - When using format! and you can inline variables into {}, always do that.
 - Install any commands the repo relies on (for example `just`, `rg`, or `cargo-insta`) if they aren't already available before running instructions here.

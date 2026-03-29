@@ -91,5 +91,8 @@ CHANGELOG.ignore.md
 __pycache__/
 *.pyc
 
-#config file
-.codex
+# codex local runtime data
+!.codex/
+.codex/*
+!.codex/skills/
+!.codex/skills/**

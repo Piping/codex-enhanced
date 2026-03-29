@@ -25,7 +25,7 @@ pub struct Cli {
 
     /// Internal: resume a specific recorded session by id (UUID). Set by the
     /// top-level `codex resume <SESSION_ID>` wrapper; not exposed as a public flag.
-    #[clap(skip)]
+    #[arg(long = "resume-session-id", hide = true)]
     pub resume_session_id: Option<String>,
 
     /// Internal: show all sessions (disables cwd filtering and shows CWD column).

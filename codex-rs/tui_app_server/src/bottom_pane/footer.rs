@@ -758,6 +758,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut edit_previous = Line::from("");
     let mut undo_last_message = Line::from("");
     let mut copy_latest_output = Line::from("");
+    let mut respawn_current_session = Line::from("");
     let mut quit = Line::from("");
     let mut show_transcript = Line::from("");
     let mut change_mode = Line::from("");
@@ -775,6 +776,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::EditPrevious => edit_previous = text,
                 ShortcutId::UndoLastMessage => undo_last_message = text,
                 ShortcutId::CopyLatestOutput => copy_latest_output = text,
+                ShortcutId::RespawnCurrentSession => respawn_current_session = text,
                 ShortcutId::Quit => quit = text,
                 ShortcutId::ShowTranscript => show_transcript = text,
                 ShortcutId::ChangeMode => change_mode = text,
@@ -793,6 +795,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         edit_previous,
         undo_last_message,
         copy_latest_output,
+        respawn_current_session,
         quit,
     ];
     if change_mode.width() > 0 {
@@ -877,6 +880,7 @@ enum ShortcutId {
     EditPrevious,
     UndoLastMessage,
     CopyLatestOutput,
+    RespawnCurrentSession,
     Quit,
     ShowTranscript,
     ChangeMode,
@@ -1071,6 +1075,16 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         label: " to copy last output",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::RespawnCurrentSession,
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl(KeyCode::Char('x')),
+            condition: DisplayCondition::Always,
+            display_label: Some("ctrl + x then r"),
+        }],
+        prefix: "",
+        label: " to restart Codex",
     },
     ShortcutDescriptor {
         id: ShortcutId::Quit,

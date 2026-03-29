@@ -949,6 +949,9 @@ pub(crate) enum ExitMode {
     /// This skips `Op::Shutdown`, so any in-flight work may be dropped and
     /// cleanup that normally runs before `ShutdownComplete` can be missed.
     Immediate,
+    /// Exit the UI loop immediately and ask the launcher to restart into the
+    /// current session.
+    RespawnImmediate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

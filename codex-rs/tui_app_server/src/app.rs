@@ -283,6 +283,24 @@ fn default_exec_approval_decisions(
     )
 }
 
+#[cfg(unix)]
+fn spawn_respawn_signal_listener(app_event_tx: AppEventSender) -> std::io::Result<()> {
+    use tokio::signal::unix::SignalKind;
+
+    let mut signal = tokio::signal::unix::signal(SignalKind::user_defined1())?;
+    tokio::spawn(async move {
+        if signal.recv().await.is_some() {
+            app_event_tx.send(AppEvent::Exit(ExitMode::RespawnImmediate));
+        }
+    });
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn spawn_respawn_signal_listener(_app_event_tx: AppEventSender) -> std::io::Result<()> {
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct GuardianApprovalsMode {
     approval_policy: AskForApproval,
@@ -337,6 +355,7 @@ pub(crate) enum AppRunControl {
 #[derive(Debug, Clone)]
 pub enum ExitReason {
     UserRequested,
+    RespawnRequested,
     Fatal(String),
 }
 
@@ -4109,6 +4128,7 @@ impl App {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
+        spawn_respawn_signal_listener(app_event_tx.clone())?;
         emit_project_config_warnings(&app_event_tx, &config);
         emit_system_bwrap_warning(&app_event_tx);
         tui.set_notification_method(config.tui_notification_method);
@@ -6251,6 +6271,10 @@ impl App {
                 self.pending_shutdown_exit_thread_id = None;
                 AppRunControl::Exit(ExitReason::UserRequested)
             }
+            ExitMode::RespawnImmediate => {
+                self.pending_shutdown_exit_thread_id = None;
+                AppRunControl::Exit(ExitReason::RespawnRequested)
+            }
         }
     }
 
@@ -6550,6 +6574,12 @@ impl App {
                     }
                     KeyChordAction::CopyLatestOutput => {
                         self.chat_widget.copy_latest_output_to_clipboard();
+                    }
+                    KeyChordAction::RespawnCurrentSession => {
+                        if self.chat_widget.can_run_respawn_now() {
+                            self.app_event_tx
+                                .send(AppEvent::Exit(ExitMode::RespawnImmediate));
+                        }
                     }
                 }
                 None

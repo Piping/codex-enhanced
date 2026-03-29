@@ -108,14 +108,14 @@ The workspace is tuned for faster local edit-build-test loops:
 
 - `profile.dev` and `profile.test` keep incremental compilation enabled.
 - Local dev/test builds drop debug info to reduce compile and link time.
-- Common `just` recipes automatically enable `sccache` when it is installed.
+- The workspace forces `sccache` as the default Rust compiler wrapper.
 - The recommended inner loop is `cargo check` plus a debug `cargo build`; tests,
   clippy, and other heavier checks are deferred to later validation.
 
-If `sccache` is available on your machine, direct Cargo commands can use it too:
+Install `sccache` before running direct Cargo commands in this workspace:
 
 ```shell
-RUSTC_WRAPPER=sccache cargo check -p codex-cli
-RUSTC_WRAPPER=sccache cargo build -p codex-cli
+cargo check -p codex-cli
+cargo build -p codex-cli
 sccache --show-stats
 ```

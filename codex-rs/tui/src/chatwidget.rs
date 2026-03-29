@@ -4738,6 +4738,17 @@ impl ChatWidget {
         false
     }
 
+    pub(crate) fn can_run_respawn_now(&mut self) -> bool {
+        if !self.bottom_pane.is_task_running() {
+            return true;
+        }
+
+        let message = "Ctrl-X R is disabled while a task is in progress.".to_string();
+        self.add_to_history(history_cell::new_error_event(message));
+        self.request_redraw();
+        false
+    }
+
     fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
@@ -4771,6 +4782,9 @@ impl ChatWidget {
             }
             SlashCommand::Resume => {
                 self.app_event_tx.send(AppEvent::OpenResumePicker);
+            }
+            SlashCommand::Respawn => {
+                self.request_respawn_without_confirmation();
             }
             SlashCommand::Fork => {
                 self.app_event_tx.send(AppEvent::ForkCurrentSession);
@@ -6589,6 +6603,11 @@ impl ChatWidget {
     fn request_quit_without_confirmation(&self) {
         self.app_event_tx
             .send(AppEvent::Exit(ExitMode::ShutdownFirst));
+    }
+
+    fn request_respawn_without_confirmation(&self) {
+        self.app_event_tx
+            .send(AppEvent::Exit(ExitMode::RespawnImmediate));
     }
 
     fn request_redraw(&mut self) {

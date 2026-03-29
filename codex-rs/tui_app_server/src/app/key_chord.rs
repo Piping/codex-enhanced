@@ -14,6 +14,7 @@ pub(crate) enum KeyChordState {
 pub(crate) enum KeyChordAction {
     UndoLastUserMessage,
     CopyLatestOutput,
+    RespawnCurrentSession,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -63,6 +64,9 @@ fn handle_ctrl_x_second_key(state: &mut KeyChordState, key_event: KeyEvent) -> K
         (KeyCode::Char('y'), KeyModifiers::NONE) => {
             KeyChordResolution::Matched(KeyChordAction::CopyLatestOutput)
         }
+        (KeyCode::Char('r'), KeyModifiers::NONE) => {
+            KeyChordResolution::Matched(KeyChordAction::RespawnCurrentSession)
+        }
         (KeyCode::Char('x'), KeyModifiers::CONTROL) => KeyChordResolution::AwaitingSecondKey,
         (KeyCode::Esc, _) => KeyChordResolution::Cancelled,
         _ => KeyChordResolution::Forward(key_event),
@@ -106,6 +110,21 @@ mod tests {
         assert_eq!(
             state.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)),
             KeyChordResolution::Matched(KeyChordAction::CopyLatestOutput)
+        );
+        assert_eq!(state, KeyChordState::Idle);
+    }
+
+    #[test]
+    fn ctrl_x_r_matches_respawn_current_session() {
+        let mut state = KeyChordState::default();
+
+        assert_eq!(
+            state.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL,)),
+            KeyChordResolution::AwaitingSecondKey
+        );
+        assert_eq!(
+            state.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)),
+            KeyChordResolution::Matched(KeyChordAction::RespawnCurrentSession)
         );
         assert_eq!(state, KeyChordState::Idle);
     }

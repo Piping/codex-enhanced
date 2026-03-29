@@ -26,6 +26,7 @@ pub enum SlashCommand {
     Rename,
     New,
     Resume,
+    Respawn,
     Fork,
     Init,
     Compact,
@@ -76,6 +77,7 @@ impl SlashCommand {
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Rename => "rename the current thread",
             SlashCommand::Resume => "resume a saved chat",
+            SlashCommand::Respawn => "restart Codex and resume the current chat",
             SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Fork => "fork the current chat",
             // SlashCommand::Undo => "ask Codex to undo a turn",
@@ -139,6 +141,7 @@ impl SlashCommand {
         match self {
             SlashCommand::New
             | SlashCommand::Resume
+            | SlashCommand::Respawn
             | SlashCommand::Fork
             | SlashCommand::Init
             | SlashCommand::Compact
