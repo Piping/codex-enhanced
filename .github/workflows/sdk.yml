@@ -9,6 +9,8 @@ jobs:
   sdks:
     runs-on: ${{ fromJSON(github.repository_owner == 'openai' && '{"group":"codex-runners","labels":"codex-linux-x64"}' || '"ubuntu-latest"') }}
     timeout-minutes: 10
+    env:
+      RUSTC_WRAPPER: ""
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -32,6 +34,14 @@ jobs:
           cache: pnpm
 
       - uses: dtolnay/rust-toolchain@1.93.0
+
+      - name: Clear workspace build rustflags for SDK builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_ENCODED_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_BUILD_RUSTFLAGS=" >> "$GITHUB_ENV"
 
       - name: build codex
         run: cargo build --bin codex
