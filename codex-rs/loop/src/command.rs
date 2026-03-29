@@ -53,6 +53,25 @@ impl LoopSchedule {
         }
     }
 
+    pub fn due_after_last_scheduled(
+        &self,
+        last_scheduled_at_unix_seconds: i64,
+    ) -> Option<DateTime<Utc>> {
+        match self {
+            Self::Interval { seconds, .. } => {
+                let interval = i64::try_from(*seconds).unwrap_or(i64::MAX).max(1);
+                unix_seconds_to_utc(last_scheduled_at_unix_seconds.saturating_add(interval))
+            }
+            Self::Cron { normalized, .. } => Schedule::from_str(normalized)
+                .ok()
+                .and_then(|schedule| {
+                    unix_seconds_to_utc(last_scheduled_at_unix_seconds)
+                        .and_then(|last| schedule.after(&last).next())
+                })
+                .map(|next| next.with_timezone(&Utc)),
+        }
+    }
+
     pub fn first_due_after_creation(&self, now: DateTime<Utc>) -> DateTime<Utc> {
         match self {
             Self::Interval { seconds, .. } => {
@@ -235,6 +254,8 @@ mod tests {
     use super::LoopSchedule;
     use super::parse_loop_command;
     use super::parse_loop_schedule;
+    use chrono::TimeZone;
+    use chrono::Utc;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -275,6 +296,46 @@ mod tests {
                 display: "*/5 * * * *".to_string(),
                 normalized: "0 */5 * * * * *".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn interval_due_after_last_scheduled_returns_current_due() {
+        let schedule = LoopSchedule::Interval {
+            display: "5m".to_string(),
+            seconds: 300,
+        };
+        let due = schedule
+            .due_after_last_scheduled(1_774_776_216)
+            .expect("interval due");
+
+        assert_eq!(
+            due,
+            Utc.with_ymd_and_hms(2026, 3, 29, 9, 28, 36)
+                .single()
+                .expect("timestamp")
+        );
+    }
+
+    #[test]
+    fn cron_due_after_last_scheduled_returns_next_matching_time() {
+        let schedule = LoopSchedule::Cron {
+            display: "*/5 * * * *".to_string(),
+            normalized: "0 */5 * * * * *".to_string(),
+        };
+        let last = Utc
+            .with_ymd_and_hms(2026, 3, 29, 9, 20, 0)
+            .single()
+            .expect("timestamp")
+            .timestamp();
+
+        let due = schedule.due_after_last_scheduled(last).expect("cron due");
+
+        assert_eq!(
+            due,
+            Utc.with_ymd_and_hms(2026, 3, 29, 9, 25, 0)
+                .single()
+                .expect("timestamp")
         );
     }
 }

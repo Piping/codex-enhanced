@@ -3709,6 +3709,8 @@ impl App {
             pending_primary_events: VecDeque::new(),
         };
 
+        app.ensure_loop_timers_loaded();
+
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
         {

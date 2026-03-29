@@ -22,6 +22,7 @@ use codex_loop::LoopCommand;
 use codex_loop::LoopContextMode;
 use codex_loop::LoopMode;
 use codex_loop::LoopResponseMode;
+use codex_loop::LoopSchedule;
 use codex_loop::LoopSecurityMode;
 use codex_loop::LoopTriggerBinding;
 use codex_loop::LoopTriggerKind;
@@ -2536,7 +2537,6 @@ impl App {
 
     async fn trigger_due_timer_phase(&mut self, scheduled_for_unix_seconds: i64) {
         self.ensure_loop_timers_loaded();
-        let now = Utc::now();
         let due_loop_ids =
             queue_entries_for_phase(&self.loop_timers.trigger_queues, LoopTriggerPhase::Timer)
                 .iter()
@@ -2548,7 +2548,8 @@ impl App {
                         .then_some(timer)
                 })
                 .filter_map(|timer| {
-                    next_due_for_timer(timer, now)
+                    effective_timer_schedule(timer)
+                        .and_then(|schedule| current_due_for_scheduled_timer(&schedule, timer))
                         .filter(|due| due.timestamp() <= scheduled_for_unix_seconds)
                         .map(|_| timer.id.clone())
                 })
@@ -2704,8 +2705,7 @@ impl App {
             .loop_timers
             .timers
             .values()
-            .filter(|timer| timer.enabled)
-            .filter_map(|timer| next_due_for_timer(timer, now).map(|due| (timer.id.clone(), due)))
+            .filter_map(|timer| due_for_loaded_timer(timer, now).map(|due| (timer.id.clone(), due)))
             .collect::<Vec<_>>();
         for (timer_id, due) in due_entries {
             self.schedule_loop_timer(&timer_id, due);
@@ -2961,6 +2961,30 @@ fn ordered_trigger_timers_for_phase(
             (timer.enabled && binding.enabled && binding.kind.phase() == phase).then_some(timer)
         })
         .collect()
+}
+
+fn current_due_for_scheduled_timer(
+    schedule: &LoopSchedule,
+    timer: &PersistedLoopTimer,
+) -> Option<DateTime<Utc>> {
+    timer
+        .last_scheduled_at_unix_seconds
+        .and_then(|last_scheduled_at| schedule.due_after_last_scheduled(last_scheduled_at))
+}
+
+fn due_for_loaded_timer(timer: &PersistedLoopTimer, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    if !timer.enabled {
+        return None;
+    }
+
+    if let Some(schedule) = effective_timer_schedule(timer)
+        && let Some(due) = current_due_for_scheduled_timer(&schedule, timer)
+        && due <= now
+    {
+        return Some(due);
+    }
+
+    next_due_for_timer(timer, now)
 }
 
 struct LoopBindingRunResult {
@@ -3317,10 +3341,16 @@ mod tests {
     use super::super::BacktrackState;
     use super::super::KeyChordState;
     use super::super::WindowsSandboxState;
+    use super::LoopMirroredUserTurn;
+    use super::LoopReplySource;
+    use super::current_due_for_scheduled_timer;
+    use super::due_for_loaded_timer;
     use crate::bottom_pane::FeedbackAudience;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
     use crate::display_preferences::DisplayPreferences;
     use crate::file_search::FileSearchManager;
+    use chrono::TimeZone;
+    use chrono::Utc;
     use codex_arg0::Arg0DispatchPaths;
     use codex_core::CodexAuth;
     use codex_core::config::Config;
@@ -3330,9 +3360,11 @@ mod tests {
     use codex_core::config_loader::LoaderOverrides;
     use codex_loop::LoopResponseMode;
     use codex_loop::LoopSchedule;
+    use codex_loop::LoopTriggerBinding;
+    use codex_loop::LoopTriggerKind;
     use codex_loop::PersistedLoopExecutionSettings;
     use codex_loop::PersistedLoopTimer;
-    use codex_loop::PersistedLoopTriggerQueues;
+    use codex_loop::PersistedLoopTriggerQueuesFile;
     use codex_otel::SessionTelemetry;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::SessionSource;
@@ -3537,7 +3569,10 @@ mod tests {
                 response_mode: LoopResponseMode::User,
                 security_mode: codex_loop::LoopSecurityMode::Inherited,
                 execution: PersistedLoopExecutionSettings::default(),
-                schedule: LoopSchedule::Interval { every_seconds: 300 },
+                schedule: LoopSchedule::Interval {
+                    display: "5m".to_string(),
+                    seconds: 300,
+                },
                 trigger_bindings: Vec::new(),
                 enabled: true,
                 rollout_path: None,
@@ -3570,14 +3605,182 @@ mod tests {
     async fn empty_after_turn_config_clears_background_loop_status() {
         let mut app = make_test_app().await;
         app.primary_thread_id = Some(ThreadId::new());
-        app.loop_timers.workspace_cwd = Some(app.config.cwd.clone());
+        app.loop_timers.workspace_cwd = Some(app.config.cwd.to_path_buf());
         app.loop_timers.timers.clear();
-        app.loop_timers.trigger_queues = PersistedLoopTriggerQueues::default();
+        app.loop_timers.trigger_queues = PersistedLoopTriggerQueuesFile::default();
 
         app.handle_primary_thread_turn_complete_for_loops(Some("done".to_string()))
             .await;
 
         assert_eq!(app.loop_timers.after_turn_scheduler.status_label(), None);
         assert_eq!(app.chat_widget.background_loop_status_text(), None);
+    }
+
+    #[test]
+    fn current_due_for_scheduled_timer_returns_interval_due_from_last_schedule() {
+        let timer = PersistedLoopTimer {
+            id: "timer-1".to_string(),
+            mode: codex_loop::LoopMode::OneShot,
+            prompt: "check status".to_string(),
+            action: None,
+            context_mode: codex_loop::LoopContextMode::Ephemeral,
+            response_mode: LoopResponseMode::Assistant,
+            security_mode: codex_loop::LoopSecurityMode::Inherited,
+            execution: PersistedLoopExecutionSettings::default(),
+            schedule: LoopSchedule::Interval {
+                display: "5m".to_string(),
+                seconds: 300,
+            },
+            trigger_bindings: Vec::new(),
+            enabled: true,
+            rollout_path: None,
+            created_at_unix_seconds: 1,
+            last_scheduled_at_unix_seconds: Some(1_774_776_216),
+            last_completed_at_unix_seconds: None,
+        };
+        let schedule = LoopSchedule::Interval {
+            display: "5m".to_string(),
+            seconds: 300,
+        };
+
+        assert_eq!(
+            current_due_for_scheduled_timer(&schedule, &timer),
+            Some(
+                Utc.with_ymd_and_hms(2026, 3, 29, 9, 28, 36)
+                    .single()
+                    .expect("timestamp")
+            )
+        );
+    }
+
+    #[test]
+    fn current_due_for_scheduled_timer_returns_cron_due_from_last_schedule() {
+        let last_scheduled_at = Utc
+            .with_ymd_and_hms(2026, 3, 29, 9, 20, 0)
+            .single()
+            .expect("timestamp")
+            .timestamp();
+        let timer = PersistedLoopTimer {
+            id: "timer-1".to_string(),
+            mode: codex_loop::LoopMode::OneShot,
+            prompt: "check status".to_string(),
+            action: None,
+            context_mode: codex_loop::LoopContextMode::Ephemeral,
+            response_mode: LoopResponseMode::Assistant,
+            security_mode: codex_loop::LoopSecurityMode::Inherited,
+            execution: PersistedLoopExecutionSettings::default(),
+            schedule: LoopSchedule::Cron {
+                display: "*/5 * * * *".to_string(),
+                normalized: "0 */5 * * * * *".to_string(),
+            },
+            trigger_bindings: Vec::new(),
+            enabled: true,
+            rollout_path: None,
+            created_at_unix_seconds: 1,
+            last_scheduled_at_unix_seconds: Some(last_scheduled_at),
+            last_completed_at_unix_seconds: None,
+        };
+        let schedule = LoopSchedule::Cron {
+            display: "*/5 * * * *".to_string(),
+            normalized: "0 */5 * * * * *".to_string(),
+        };
+
+        assert_eq!(
+            current_due_for_scheduled_timer(&schedule, &timer),
+            Some(
+                Utc.with_ymd_and_hms(2026, 3, 29, 9, 25, 0)
+                    .single()
+                    .expect("timestamp")
+            )
+        );
+    }
+
+    #[test]
+    fn due_for_loaded_timer_returns_overdue_interval_immediately() {
+        let schedule = LoopSchedule::Interval {
+            display: "5m".to_string(),
+            seconds: 300,
+        };
+        let timer = PersistedLoopTimer {
+            id: "timer-1".to_string(),
+            mode: codex_loop::LoopMode::OneShot,
+            prompt: "check status".to_string(),
+            action: None,
+            context_mode: codex_loop::LoopContextMode::Ephemeral,
+            response_mode: LoopResponseMode::Assistant,
+            security_mode: codex_loop::LoopSecurityMode::Inherited,
+            execution: PersistedLoopExecutionSettings::default(),
+            schedule: schedule.clone(),
+            trigger_bindings: vec![LoopTriggerBinding {
+                id: "binding-1".to_string(),
+                enabled: true,
+                kind: LoopTriggerKind::Timer { schedule },
+            }],
+            enabled: true,
+            rollout_path: None,
+            created_at_unix_seconds: 1,
+            last_scheduled_at_unix_seconds: Some(1_774_776_216),
+            last_completed_at_unix_seconds: None,
+        };
+        let now = Utc
+            .with_ymd_and_hms(2026, 3, 29, 9, 52, 18)
+            .single()
+            .expect("timestamp");
+
+        assert_eq!(
+            due_for_loaded_timer(&timer, now),
+            Some(
+                Utc.with_ymd_and_hms(2026, 3, 29, 9, 28, 36)
+                    .single()
+                    .expect("timestamp")
+            )
+        );
+    }
+
+    #[test]
+    fn due_for_loaded_timer_returns_overdue_cron_immediately() {
+        let last_scheduled_at = Utc
+            .with_ymd_and_hms(2026, 3, 29, 9, 20, 0)
+            .single()
+            .expect("timestamp")
+            .timestamp();
+        let schedule = LoopSchedule::Cron {
+            display: "*/5 * * * *".to_string(),
+            normalized: "0 */5 * * * * *".to_string(),
+        };
+        let timer = PersistedLoopTimer {
+            id: "timer-1".to_string(),
+            mode: codex_loop::LoopMode::OneShot,
+            prompt: "check status".to_string(),
+            action: None,
+            context_mode: codex_loop::LoopContextMode::Ephemeral,
+            response_mode: LoopResponseMode::Assistant,
+            security_mode: codex_loop::LoopSecurityMode::Inherited,
+            execution: PersistedLoopExecutionSettings::default(),
+            schedule: schedule.clone(),
+            trigger_bindings: vec![LoopTriggerBinding {
+                id: "binding-1".to_string(),
+                enabled: true,
+                kind: LoopTriggerKind::Timer { schedule },
+            }],
+            enabled: true,
+            rollout_path: None,
+            created_at_unix_seconds: 1,
+            last_scheduled_at_unix_seconds: Some(last_scheduled_at),
+            last_completed_at_unix_seconds: None,
+        };
+        let now = Utc
+            .with_ymd_and_hms(2026, 3, 29, 9, 52, 18)
+            .single()
+            .expect("timestamp");
+
+        assert_eq!(
+            due_for_loaded_timer(&timer, now),
+            Some(
+                Utc.with_ymd_and_hms(2026, 3, 29, 9, 25, 0)
+                    .single()
+                    .expect("timestamp")
+            )
+        );
     }
 }
