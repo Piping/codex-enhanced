@@ -103,7 +103,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install sccache
-        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
+        uses: taiki-e/install-action@fd0f63e180a477d7434580b6d80817978b9ff2b8 # v2
         with:
           tool: sccache
 
