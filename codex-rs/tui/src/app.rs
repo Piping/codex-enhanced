@@ -206,6 +206,12 @@ fn guardian_approvals_mode() -> GuardianApprovalsMode {
         sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
     }
 }
+
+fn should_respawn_with_yolo(config: &Config) -> bool {
+    config.permissions.approval_policy.value() == AskForApproval::Never
+        && *config.permissions.sandbox_policy.get() == SandboxPolicy::DangerFullAccess
+}
+
 /// Baseline cadence for periodic stream commit animation ticks.
 ///
 /// Smooth-mode streaming drains one line per tick, so this interval controls
@@ -218,6 +224,7 @@ pub struct AppExitInfo {
     pub thread_id: Option<ThreadId>,
     pub thread_name: Option<String>,
     pub update_action: Option<UpdateAction>,
+    pub respawn_with_yolo: bool,
     pub exit_reason: ExitReason,
 }
 
@@ -228,6 +235,7 @@ impl AppExitInfo {
             thread_id: None,
             thread_name: None,
             update_action: None,
+            respawn_with_yolo: false,
             exit_reason: ExitReason::Fatal(message.into()),
         }
     }
@@ -939,6 +947,7 @@ async fn handle_model_migration_prompt_if_needed(
                     thread_id: None,
                     thread_name: None,
                     update_action: None,
+                    respawn_with_yolo: false,
                     exit_reason: ExitReason::UserRequested,
                 });
             }
@@ -3850,6 +3859,7 @@ impl App {
             thread_id: app.chat_widget.thread_id(),
             thread_name: app.chat_widget.thread_name(),
             update_action: app.pending_update_action,
+            respawn_with_yolo: should_respawn_with_yolo(&app.config),
             exit_reason,
         })
     }

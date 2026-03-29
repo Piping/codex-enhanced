@@ -459,7 +459,11 @@ fn finish_interactive_exit(
         let Some(thread_id) = exit_info.thread_id.as_ref() else {
             anyhow::bail!("cannot respawn Codex: current session has no thread id");
         };
-        respawn_current_codex_session(arg0_paths, &thread_id.to_string())?;
+        respawn_current_codex_session(
+            arg0_paths,
+            &thread_id.to_string(),
+            exit_info.respawn_with_yolo,
+        )?;
         return Ok(());
     }
 
@@ -491,6 +495,7 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
 fn respawn_current_codex_session(
     arg0_paths: &Arg0DispatchPaths,
     thread_id: &str,
+    respawn_with_yolo: bool,
 ) -> anyhow::Result<()> {
     let Some(exe_path) = arg0_paths.codex_self_exe.as_ref() else {
         anyhow::bail!("unable to respawn Codex: current executable path is unavailable");
@@ -498,6 +503,9 @@ fn respawn_current_codex_session(
 
     let mut command = std::process::Command::new(exe_path);
     command.arg("resume").arg(thread_id);
+    if respawn_with_yolo {
+        command.arg("--yolo");
+    }
 
     #[cfg(unix)]
     {
@@ -1390,6 +1398,7 @@ fn into_legacy_app_exit_info(exit_info: codex_tui_app_server::AppExitInfo) -> Ap
         thread_id: exit_info.thread_id,
         thread_name: exit_info.thread_name,
         update_action: exit_info.update_action.map(into_legacy_update_action),
+        respawn_with_yolo: exit_info.respawn_with_yolo,
         exit_reason: into_legacy_exit_reason(exit_info.exit_reason),
     }
 }
@@ -1643,6 +1652,7 @@ mod tests {
                 .map(Result::unwrap),
             thread_name: thread_name.map(str::to_string),
             update_action: None,
+            respawn_with_yolo: false,
             exit_reason: ExitReason::UserRequested,
         }
     }
@@ -1654,6 +1664,7 @@ mod tests {
             thread_id: None,
             thread_name: None,
             update_action: None,
+            respawn_with_yolo: false,
             exit_reason: ExitReason::UserRequested,
         };
         let lines = format_exit_messages(exit_info, false);

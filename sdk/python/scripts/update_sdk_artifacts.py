@@ -30,6 +30,21 @@ def python_runtime_root() -> Path:
     return repo_root() / "sdk" / "python-runtime"
 
 
+def python_runtime_enhanced_root() -> Path:
+    return repo_root() / "sdk" / "python-runtime-enhanced"
+
+
+def python_runtime_package_root(runtime_package: str) -> Path:
+    roots = {
+        "upstream": python_runtime_root(),
+        "enhanced": python_runtime_enhanced_root(),
+    }
+    try:
+        return roots[runtime_package]
+    except KeyError as error:
+        raise RuntimeError(f"Unknown runtime package template: {runtime_package}") from error
+
+
 def schema_bundle_path() -> Path:
     return (
         repo_root()
@@ -53,8 +68,22 @@ def runtime_binary_name() -> str:
     return "codex.exe" if _is_windows() else "codex"
 
 
+def runtime_python_package_dir(root: Path) -> Path:
+    src_root = root / "src"
+    packages = sorted(
+        path
+        for path in src_root.iterdir()
+        if path.is_dir() and (path / "__init__.py").is_file()
+    )
+    if len(packages) != 1:
+        raise RuntimeError(
+            f"Expected exactly one Python package under {src_root}, found {len(packages)}"
+        )
+    return packages[0]
+
+
 def staged_runtime_bin_path(root: Path) -> Path:
-    return root / "src" / "codex_cli_bin" / "bin" / runtime_binary_name()
+    return runtime_python_package_dir(root) / "bin" / runtime_binary_name()
 
 
 def run(cmd: list[str], cwd: Path) -> None:
@@ -141,9 +170,12 @@ def stage_python_sdk_package(
 
 
 def stage_python_runtime_package(
-    staging_dir: Path, runtime_version: str, binary_path: Path
+    staging_dir: Path,
+    runtime_version: str,
+    binary_path: Path,
+    runtime_package: str = "upstream",
 ) -> Path:
-    _copy_package_tree(python_runtime_root(), staging_dir)
+    _copy_package_tree(python_runtime_package_root(runtime_package), staging_dir)
 
     pyproject_path = staging_dir / "pyproject.toml"
     pyproject_path.write_text(
@@ -559,7 +591,7 @@ class PublicFieldSpec:
 class CliOps:
     generate_types: Callable[[], None]
     stage_python_sdk_package: Callable[[Path, str, str], Path]
-    stage_python_runtime_package: Callable[[Path, str, Path], Path]
+    stage_python_runtime_package: Callable[[Path, str, Path, str], Path]
     current_sdk_version: Callable[[], str]
 
 
@@ -954,6 +986,12 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Version to write into the staged runtime package",
     )
+    stage_runtime_parser.add_argument(
+        "--runtime-package",
+        choices=["upstream", "enhanced"],
+        default="upstream",
+        help="Runtime package template to stage",
+    )
     return parser
 
 
@@ -985,6 +1023,7 @@ def run_command(args: argparse.Namespace, ops: CliOps) -> None:
             args.staging_dir,
             args.runtime_version,
             args.runtime_binary.resolve(),
+            args.runtime_package,
         )
 
 

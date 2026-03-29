@@ -998,6 +998,7 @@ async fn run_ratatui_app(
                         thread_id: None,
                         thread_name: None,
                         update_action: Some(action),
+                        respawn_with_yolo: false,
                         exit_reason: ExitReason::UserRequested,
                     });
                 }
@@ -1068,6 +1069,7 @@ async fn run_ratatui_app(
                 thread_id: None,
                 thread_name: None,
                 update_action: None,
+                respawn_with_yolo: false,
                 exit_reason: ExitReason::UserRequested,
             });
         }
@@ -1114,6 +1116,7 @@ async fn run_ratatui_app(
             thread_id: None,
             thread_name: None,
             update_action: None,
+            respawn_with_yolo: false,
             exit_reason: ExitReason::Fatal(format!(
                 "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
             )),
@@ -1188,6 +1191,7 @@ async fn run_ratatui_app(
                         thread_id: None,
                         thread_name: None,
                         update_action: None,
+                        respawn_with_yolo: false,
                         exit_reason: ExitReason::UserRequested,
                     });
                 }
@@ -1240,6 +1244,7 @@ async fn run_ratatui_app(
                     thread_id: None,
                     thread_name: None,
                     update_action: None,
+                    respawn_with_yolo: false,
                     exit_reason: ExitReason::UserRequested,
                 });
             }
@@ -1286,6 +1291,7 @@ async fn run_ratatui_app(
                             thread_id: None,
                             thread_name: None,
                             update_action: None,
+                            respawn_with_yolo: false,
                             exit_reason: ExitReason::UserRequested,
                         });
                     }
