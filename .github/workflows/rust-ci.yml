@@ -124,7 +124,7 @@ jobs:
 
   argument_comment_lint_prebuilt:
     name: Argument comment lint - ${{ matrix.name }}
-    runs-on: ${{ matrix.runs_on || matrix.runner }}
+    runs-on: ${{ fromJSON(github.repository_owner == 'openai' && matrix.runs_on || format('"{0}"', matrix.runner)) }}
     needs: changed
     if: ${{ needs.changed.outputs.argument_comment_lint == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
     strategy:
@@ -137,9 +137,7 @@ jobs:
             runner: macos-15-xlarge
           - name: Windows
             runner: windows-x64
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+            runs_on: '{"group":"codex-runners","labels":"codex-windows-x64"}'
     steps:
       - uses: actions/checkout@v6
       - name: Install Linux sandbox build dependencies
@@ -191,39 +189,27 @@ jobs:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-x64
+            runs_on: '{"group":"codex-runners","labels":"codex-linux-x64"}'
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-x64
+            runs_on: '{"group":"codex-runners","labels":"codex-linux-x64"}'
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-arm64
+            runs_on: '{"group":"codex-runners","labels":"codex-linux-arm64"}'
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-arm64
+            runs_on: '{"group":"codex-runners","labels":"codex-linux-arm64"}'
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+            runs_on: '{"group":"codex-runners","labels":"codex-windows-x64"}'
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
+            runs_on: '{"group":"codex-runners","labels":"codex-windows-arm64"}'
 
           # Also run representative release builds on Mac and Linux because
           # there could be release-only build errors we want to catch.
@@ -235,27 +221,19 @@ jobs:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             profile: release
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-x64
+            runs_on: '{"group":"codex-runners","labels":"codex-linux-x64"}'
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             profile: release
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-arm64
+            runs_on: '{"group":"codex-runners","labels":"codex-linux-arm64"}'
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: release
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+            runs_on: '{"group":"codex-runners","labels":"codex-windows-x64"}'
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             profile: release
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
+            runs_on: '{"group":"codex-runners","labels":"codex-windows-arm64"}'
 
     steps:
       - uses: actions/checkout@v6
@@ -546,7 +524,7 @@ jobs:
 
   tests:
     name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.remote_env == 'true' && ' (remote)' || '' }}
-    runs-on: ${{ matrix.runs_on || matrix.runner }}
+    runs-on: ${{ fromJSON(github.repository_owner == 'openai' && matrix.runs_on || format('"{0}"', matrix.runner)) }}
     timeout-minutes: ${{ matrix.runner == 'windows-arm64' && 35 || 30 }}
     needs: changed
     if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
@@ -572,27 +550,19 @@ jobs:
             target: x86_64-unknown-linux-gnu
             profile: dev
             remote_env: "true"
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-x64
+            runs_on: '{"group":"codex-runners","labels":"codex-linux-x64"}'
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-arm64
+            runs_on: '{"group":"codex-runners","labels":"codex-linux-arm64"}'
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+            runs_on: '{"group":"codex-runners","labels":"codex-windows-x64"}'
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
+            runs_on: '{"group":"codex-runners","labels":"codex-windows-arm64"}'
 
     steps:
       - uses: actions/checkout@v6

@@ -17,7 +17,7 @@ jobs:
   build:
     if: ${{ inputs.publish }}
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
-    runs-on: ${{ matrix.runs_on || matrix.runner }}
+    runs-on: ${{ fromJSON(github.repository_owner == 'openai' && matrix.runs_on || format('"{0}"', matrix.runner)) }}
     timeout-minutes: 60
 
     strategy:
@@ -48,9 +48,7 @@ jobs:
             lib_name: argument_comment_lint@nightly-2025-09-18-x86_64-pc-windows-msvc.dll
             runner_binary: argument-comment-lint.exe
             cargo_dylint_binary: cargo-dylint.exe
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+            runs_on: '{"group":"codex-runners","labels":"codex-windows-x64"}'
 
     steps:
       - uses: actions/checkout@v6
