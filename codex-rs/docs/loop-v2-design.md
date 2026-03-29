@@ -35,7 +35,9 @@ The design intentionally avoids compatibility shims:
 
 ### Embed
 
-Runs in the main-thread execution path.
+Runs directly in the main-thread execution path by submitting the loop prompt as a
+main-thread user turn. The resulting model reply stays in the main thread as the
+assistant response for that turn.
 
 Typical uses:
 
@@ -49,7 +51,8 @@ Risk:
 
 ### Ephemeral
 
-Runs in a hidden thread with no retained rollout.
+Forks compacted main-thread context into a hidden thread, runs once, then discards
+that hidden thread and its rollout. It does not keep private loop state between runs.
 
 Typical uses:
 
@@ -59,7 +62,9 @@ Typical uses:
 
 ### Persistent
 
-Runs in a hidden thread with a retained rollout.
+Forks compacted main-thread context on the first run, then keeps a hidden thread
+with a retained rollout for later runs. Later runs resume that retained context and
+also receive the latest main-thread user/assistant messages as fresh background input.
 
 Typical uses:
 

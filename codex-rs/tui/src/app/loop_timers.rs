@@ -489,7 +489,7 @@ impl App {
                 SelectionItem {
                     name: "Embed".to_string(),
                     description: Some(
-                        "Run directly in the main-thread execution path.".to_string(),
+                        "Submit the loop prompt directly into the main thread.".to_string(),
                     ),
                     actions: vec![Box::new(|tx| {
                         tx.send(AppEvent::StartCreateLoopDraft {
@@ -502,7 +502,7 @@ impl App {
                 SelectionItem {
                     name: "Ephemeral".to_string(),
                     description: Some(
-                        "Run in a hidden thread that is discarded after each trigger.".to_string(),
+                        "Fork compacted main-thread context into a hidden thread and discard it after each trigger.".to_string(),
                     ),
                     actions: vec![Box::new(|tx| {
                         tx.send(AppEvent::StartCreateLoopDraft {
@@ -515,7 +515,7 @@ impl App {
                 SelectionItem {
                     name: "Persistent".to_string(),
                     description: Some(
-                        "Run in a hidden thread with a stable id and a retained rollout."
+                        "Fork compacted main-thread context once, then keep a hidden thread with its own retained rollout."
                             .to_string(),
                     ),
                     actions: vec![Box::new(|tx| {
@@ -833,6 +833,9 @@ impl App {
                 }
                 execution.writable_roots = writable_roots;
             }
+        }
+        if matches!(context_mode, LoopContextMode::Embed) {
+            response_mode = LoopResponseMode::Assistant;
         }
         let schedule = match &trigger_kind {
             LoopTriggerKind::Timer { schedule } => schedule.clone(),
@@ -1577,13 +1580,13 @@ impl App {
                     name: mode.title().to_string(),
                     description: Some(match mode {
                         LoopContextMode::Embed => {
-                            "Run against the main-thread context without preserving private loop state.".to_string()
+                            "Submit the loop prompt directly into the main thread as a user turn.".to_string()
                         }
                         LoopContextMode::Ephemeral => {
-                            "Run in a hidden short-lived thread that is discarded after each execution.".to_string()
+                            "Fork compacted main-thread context into a hidden short-lived thread, then discard it after each execution.".to_string()
                         }
                         LoopContextMode::Persistent => {
-                            "Run in a hidden thread that keeps its own rollout and accumulates private state.".to_string()
+                            "Fork compacted main-thread context once, then keep a hidden thread that accumulates its own rollout state.".to_string()
                         }
                     }),
                     is_current: current_mode == mode,
@@ -1623,7 +1626,12 @@ impl App {
         };
 
         let current_mode = timer.response_mode;
-        let items = LoopResponseMode::USER_SELECTABLE
+        let selectable_modes = if matches!(timer.context_mode, LoopContextMode::Embed) {
+            vec![LoopResponseMode::Assistant]
+        } else {
+            LoopResponseMode::USER_SELECTABLE.to_vec()
+        };
+        let items = selectable_modes
             .into_iter()
             .map(|mode| {
                 let timer_id = timer_id.clone();
@@ -1760,6 +1768,9 @@ impl App {
             return;
         };
         timer.context_mode = context_mode;
+        if matches!(context_mode, LoopContextMode::Embed) {
+            timer.response_mode = LoopResponseMode::Assistant;
+        }
         if let Err(err) = self.persist_loop_timers() {
             self.chat_widget
                 .add_error_message(format!("Failed to update loop timer context mode: {err}"));
@@ -1779,7 +1790,11 @@ impl App {
             self.open_loop_timers_panel();
             return;
         };
-        timer.response_mode = response_mode;
+        timer.response_mode = if matches!(timer.context_mode, LoopContextMode::Embed) {
+            LoopResponseMode::Assistant
+        } else {
+            response_mode
+        };
         if let Err(err) = self.persist_loop_timers() {
             self.chat_widget
                 .add_error_message(format!("Failed to update loop timer response mode: {err}"));
@@ -2135,13 +2150,13 @@ impl App {
                     self.chat_widget.add_error_message(err);
                 }
                 for output in round_result.outputs {
-                    if let Some(timer) = self.loop_timers.timers.get_mut(&output.loop_id) {
-                        if matches!(timer.context_mode, LoopContextMode::Persistent) {
-                            timer.rollout_path = output.update.rollout_path.clone();
-                            timer.last_completed_at_unix_seconds =
-                                output.update.last_completed_at_unix_seconds;
-                            persist_loop_state = true;
-                        }
+                    if let Some(timer) = self.loop_timers.timers.get_mut(&output.loop_id)
+                        && matches!(timer.context_mode, LoopContextMode::Persistent)
+                    {
+                        timer.rollout_path = output.update.rollout_path.clone();
+                        timer.last_completed_at_unix_seconds =
+                            output.update.last_completed_at_unix_seconds;
+                        persist_loop_state = true;
                     }
                     let source = LoopReplySource::new(output.loop_id, output.action);
                     match output.response_mode {
@@ -2270,6 +2285,15 @@ impl App {
                 continue;
             };
             if !binding.enabled || binding.kind.phase() != phase {
+                continue;
+            }
+            if matches!(timer.context_mode, LoopContextMode::Embed) {
+                outputs.push(LoopHookOutput {
+                    loop_id: timer.id.clone(),
+                    response_mode: LoopResponseMode::User,
+                    message: Some(timer.prompt.clone()),
+                    action: timer.action.clone(),
+                });
                 continue;
             }
             let mut running_loops = self
@@ -2402,6 +2426,30 @@ impl App {
             self.refresh_loop_timers_panel_if_active();
             return Vec::new();
         }
+        if matches!(timer.context_mode, LoopContextMode::Embed) {
+            let submitted = self
+                .submit_loop_user_message_to_primary(LoopMirroredUserTurn {
+                    text: timer.prompt.clone(),
+                    source: LoopReplySource::new(timer_id.clone(), timer.action.clone()),
+                })
+                .await;
+            if submitted {
+                if let Some(timer) = self.loop_timers.timers.get_mut(&timer_id) {
+                    timer.last_completed_at_unix_seconds = Some(Utc::now().timestamp());
+                }
+                if let Err(err) = self.persist_loop_timers() {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to persist embedded `/loop` completion: {err}"
+                    ));
+                }
+            } else {
+                self.chat_widget.add_error_message(
+                    "Failed to submit embedded `/loop` prompt into the main thread.".to_string(),
+                );
+            }
+            self.refresh_loop_timers_panel_if_active();
+            return Vec::new();
+        }
         let prompt = timer.prompt.clone();
         let started = match self.start_loop_thread(&timer).await {
             Ok(started) => started,
@@ -2419,15 +2467,23 @@ impl App {
                     .add_error_message(format!("Failed to persist `/loop` thread state: {err}"));
             }
         }
-        let recent_main_messages = load_recent_main_thread_messages(
-            self.primary_session_configured
+        let recent_main_messages = if matches!(timer.context_mode, LoopContextMode::Persistent)
+            && timer
+                .rollout_path
                 .as_ref()
-                .and_then(|event| event.rollout_path.as_deref()),
-            /*limit*/ 3,
-        )
-        .await;
+                .is_some_and(|path| path.exists())
+        {
+            load_recent_main_thread_messages(
+                self.primary_session_configured
+                    .as_ref()
+                    .and_then(|event| event.rollout_path.as_deref()),
+                /*limit*/ 3,
+            )
+            .await
+        } else {
+            Vec::new()
+        };
         let loop_input = build_loop_phase_input(
-            timer.context_mode,
             &prompt,
             &recent_main_messages,
             /*current_user_turn*/ None,
@@ -2855,12 +2911,7 @@ impl App {
             .loop_timers
             .active_runs
             .keys()
-            .filter_map(|timer_id| {
-                self.loop_timers
-                    .timers
-                    .get(timer_id)
-                    .map(|timer| loop_status_label(timer))
-            })
+            .filter_map(|timer_id| self.loop_timers.timers.get(timer_id).map(loop_status_label))
             .collect::<Vec<_>>();
         if let Some(status) = self.loop_timers.after_turn_scheduler.status_label() {
             running_loops.push(status);
@@ -3006,6 +3057,20 @@ async fn run_after_turn_round_task(
     let mut outputs = Vec::new();
     let mut errors = Vec::new();
     for timer in timers {
+        if matches!(timer.context_mode, LoopContextMode::Embed) {
+            outputs.push(after_turn_scheduler::AfterTurnLoopOutput {
+                loop_id: timer.id.clone(),
+                response_mode: LoopResponseMode::User,
+                message: Some(timer.prompt.clone()),
+                action: timer.action.clone(),
+                update: after_turn_scheduler::AfterTurnLoopUpdate {
+                    loop_id: timer.id,
+                    rollout_path: None,
+                    last_completed_at_unix_seconds: None,
+                },
+            });
+            continue;
+        }
         app_event_tx.send(AppEvent::PrimaryAfterTurnRoundProgress {
             loop_label: loop_status_label(&timer),
         });
@@ -3067,10 +3132,17 @@ async fn run_inline_loop_binding_task(
             thread: Arc::clone(&started.thread),
         });
     }
-    let recent_main_messages =
-        load_recent_main_thread_messages(primary_rollout_path.as_deref(), /*limit*/ 3).await;
+    let recent_main_messages = if matches!(timer.context_mode, LoopContextMode::Persistent)
+        && timer
+            .rollout_path
+            .as_ref()
+            .is_some_and(|path| path.exists())
+    {
+        load_recent_main_thread_messages(primary_rollout_path.as_deref(), /*limit*/ 3).await
+    } else {
+        Vec::new()
+    };
     let loop_input = build_loop_phase_input(
-        timer.context_mode,
         &timer.prompt,
         &recent_main_messages,
         current_user_turn.as_deref(),
@@ -3163,10 +3235,9 @@ async fn start_loop_thread_with_resources(
         }
     } else {
         let initial_history = match timer.context_mode {
-            LoopContextMode::Embed => {
+            LoopContextMode::Embed | LoopContextMode::Ephemeral => {
                 build_loop_initial_history(primary_rollout_path.as_deref()).await
             }
-            LoopContextMode::Ephemeral => InitialHistory::New,
             LoopContextMode::Persistent => unreachable!(),
         };
         server
@@ -3184,37 +3255,6 @@ async fn start_loop_thread_with_resources(
         thread: started.thread,
         rollout_path: started.session_configured.rollout_path,
     })
-}
-
-async fn load_recent_main_thread_messages(
-    rollout_path: Option<&Path>,
-    limit: usize,
-) -> Vec<String> {
-    let Some(rollout_path) = rollout_path else {
-        return Vec::new();
-    };
-    let Ok(history) = RolloutRecorder::get_rollout_history(rollout_path).await else {
-        return Vec::new();
-    };
-    let mut messages = history
-        .get_rollout_items()
-        .iter()
-        .filter_map(|item| match item {
-            RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. })
-                if role == "user" || role == "assistant" =>
-            {
-                content_items_to_text(content)
-                    .map(|text| text.trim().to_string())
-                    .filter(|text| !text.is_empty())
-                    .map(|text| format!("{role}: {text}"))
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    if messages.len() > limit {
-        messages.drain(..messages.len().saturating_sub(limit));
-    }
-    messages
 }
 
 async fn build_loop_initial_history(rollout_path: Option<&Path>) -> InitialHistory {
@@ -3274,6 +3314,37 @@ async fn build_loop_initial_history(rollout_path: Option<&Path>) -> InitialHisto
     } else {
         InitialHistory::Forked(selected)
     }
+}
+
+async fn load_recent_main_thread_messages(
+    rollout_path: Option<&Path>,
+    limit: usize,
+) -> Vec<String> {
+    let Some(rollout_path) = rollout_path else {
+        return Vec::new();
+    };
+    let Ok(history) = RolloutRecorder::get_rollout_history(rollout_path).await else {
+        return Vec::new();
+    };
+    let mut messages = history
+        .get_rollout_items()
+        .iter()
+        .filter_map(|item| match item {
+            RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. })
+                if role == "user" || role == "assistant" =>
+            {
+                content_items_to_text(content)
+                    .map(|text| text.trim().to_string())
+                    .filter(|text| !text.is_empty())
+                    .map(|text| format!("{role}: {text}"))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if messages.len() > limit {
+        messages.drain(..messages.len().saturating_sub(limit));
+    }
+    messages
 }
 
 async fn run_loop_thread_until_completion(
@@ -3558,6 +3629,10 @@ mod tests {
     #[tokio::test]
     async fn finish_loop_timer_user_mode_returns_pure_followup_message() {
         let mut app = make_test_app().await;
+        let primary_thread_id = ThreadId::new();
+        app.primary_thread_id = Some(primary_thread_id);
+        app.active_thread_id = Some(primary_thread_id);
+        app.loop_timers.workspace_cwd = Some(app.config.cwd.to_path_buf());
         app.loop_timers.timers.insert(
             "timer-1".to_string(),
             PersistedLoopTimer {

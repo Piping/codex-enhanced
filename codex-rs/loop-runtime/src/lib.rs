@@ -1,4 +1,3 @@
-use codex_loop::LoopContextMode;
 use codex_loop::LoopSecurityMode;
 use codex_loop::PersistedLoopExecutionSettings;
 use codex_protocol::protocol::ReadOnlyAccess;
@@ -75,18 +74,13 @@ pub fn build_loop_runtime_overrides(
 }
 
 pub fn build_loop_phase_input(
-    context_mode: LoopContextMode,
     prompt: &str,
     recent_main_messages: &[String],
     current_user_turn: Option<&str>,
     last_assistant_message: Option<&str>,
 ) -> String {
     let mut sections = Vec::new();
-    if matches!(
-        context_mode,
-        LoopContextMode::Ephemeral | LoopContextMode::Persistent
-    ) && !recent_main_messages.is_empty()
-    {
+    if !recent_main_messages.is_empty() {
         sections.push(format!(
             "Recent main-thread messages:\n{}",
             recent_main_messages.join("\n\n")
@@ -167,7 +161,6 @@ mod tests {
     use super::LoopRuntimeOverrides;
     use super::build_loop_phase_input;
     use super::build_loop_runtime_overrides;
-    use codex_loop::LoopContextMode;
     use codex_loop::LoopSecurityMode;
     use codex_loop::PersistedLoopExecutionSettings;
     use codex_protocol::protocol::ReadOnlyAccess;
@@ -239,9 +232,8 @@ mod tests {
     }
 
     #[test]
-    fn build_loop_phase_input_skips_main_thread_history_for_embed() {
+    fn build_loop_phase_input_contains_phase_specific_context_and_prompt() {
         let input = build_loop_phase_input(
-            LoopContextMode::Embed,
             "review progress",
             &["user: hi".to_string(), "assistant: hello".to_string()],
             Some("continue"),
@@ -250,7 +242,14 @@ mod tests {
 
         assert_eq!(
             input,
-            "Current main-thread user turn:\ncontinue\n\nLatest main-thread assistant response:\ndone\n\nOriginal loop prompt:\nreview progress"
+            "Recent main-thread messages:\nuser: hi\n\nassistant: hello\n\nCurrent main-thread user turn:\ncontinue\n\nLatest main-thread assistant response:\ndone\n\nOriginal loop prompt:\nreview progress"
         );
+    }
+
+    #[test]
+    fn build_loop_phase_input_without_phase_specific_context_is_prompt_only() {
+        let input = build_loop_phase_input("review progress", &[], None, None);
+
+        assert_eq!(input, "Original loop prompt:\nreview progress");
     }
 }

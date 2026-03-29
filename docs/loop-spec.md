@@ -53,8 +53,8 @@ When the user creates a loop:
 4. Execution starts only when that due time arrives, or when the user selects `Run Now`.
 
 Persistent loops keep a stable id and their own hidden-thread rollout so later runs can resume the
-same private context. One-shot loops stay scheduled too, but each trigger creates a fresh
-temporary hidden thread and does not keep private rollout history between runs.
+same private context. One-shot loops can either submit their prompt directly into the main thread
+(`embed`) or start a fresh temporary hidden thread from compact main-thread context (`ephemeral`).
 
 Existing loops are reloaded when the TUI opens in the same workspace.
 
@@ -125,16 +125,16 @@ If a loop has writable directories configured:
 
 Leaving the writable-directory list empty means the loop inherits the main-thread sandbox scope.
 
-One-shot loops start a fresh hidden thread from compact main-thread context on every trigger.
+Embedded loops submit the configured loop prompt directly into the main thread as a user turn.
+The resulting model output appears in the main thread as the assistant response for that turn.
 
-Persistent loops resume their own hidden rollout when available. For every trigger, Codex submits a
-new user turn that contains:
+Ephemeral loops start a fresh hidden thread from compact main-thread context on every trigger, then
+discard that hidden thread after the run.
 
-1. the latest 3 main-thread user/assistant messages
-2. the original loop prompt
-
-This order is intentional so the newest external context arrives first while the original loop
-objective is repeated every run to reduce drift.
+Persistent loops start from compact main-thread context on the first run, then resume their own
+hidden rollout on later triggers. On those later triggers, Codex also prepends the latest three
+main-thread user/assistant messages before the original loop prompt so the persistent loop sees
+fresh main-thread changes without losing its own private context.
 
 ## Main-thread mirroring
 

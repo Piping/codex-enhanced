@@ -1,25 +1,31 @@
-# Codex Enhanced Python Runtime
+# Codex Enhanced
 
-Platform-specific Python package that ships the `codex-enhanced` CLI as a
-packaged binary wheel.
+`codex-enhanced` packages the Codex CLI as a platform-specific Python wheel.
+It is intended for users who want to install the enhanced CLI with `pip` and
+run it directly without managing a separate native binary release.
 
-This package is intentionally wheel-only. Do not build or publish an sdist for
-it.
+## Highlights
 
-Typical maintainer flow:
+- Loop automation with clear context modes:
+  - `embed`: submit the loop prompt into the main thread as a normal user turn
+  - `ephemeral`: fork compacted context for one run, then discard it
+  - `persistent`: keep a private retained context and refresh it with recent
+    main-thread messages
+- Feishu clawbot integration for bound sessions, automatic inbound handling, and
+  plain-text outbound replies
+- Fast `respawn` support so the CLI can restart and resume the current session
+
+## Install
 
 ```bash
-cd /Users/bytedance/code/codex/codex-rs
-cargo build -p codex-cli
-
-cd sdk/python
-python scripts/update_sdk_artifacts.py \
-  stage-runtime \
-  /tmp/codex-python-release/codex-enhanced \
-  /Users/bytedance/code/codex/codex-rs/target/debug/codex \
-  --runtime-version 0.1.12 \
-  --runtime-package enhanced
-
-python -m build --wheel /tmp/codex-python-release/codex-enhanced
-python -m twine upload /tmp/codex-python-release/codex-enhanced/dist/*
+pip install codex-enhanced
 ```
+
+## Run
+
+```bash
+codex-enhanced
+```
+
+Each wheel includes the native `codex` binary for its target platform. This
+package is wheel-only and is not intended to publish a source distribution.

@@ -186,7 +186,12 @@ mod tests {
         );
         scheduler.note_turn_complete(Some("after B again".to_string()));
 
-        assert_eq!(scheduler.next_action(), AfterTurnSchedulerAction::Idle);
+        assert_eq!(
+            scheduler.next_action(),
+            AfterTurnSchedulerAction::RunRound(AfterTurnRound {
+                last_agent_message: Some("after B".to_string()),
+            })
+        );
     }
 
     #[test]

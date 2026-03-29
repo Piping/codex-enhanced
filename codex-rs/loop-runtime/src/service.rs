@@ -280,6 +280,7 @@ mod tests {
     use codex_loop::loop_timers_path;
     use codex_loop::loop_trigger_queues_path;
     use pretty_assertions::assert_eq;
+    use std::fs;
     use tempfile::tempdir;
 
     #[test]
