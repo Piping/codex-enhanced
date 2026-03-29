@@ -10,6 +10,10 @@ on:
         description: Existing tag to build and publish, for example v0.1.12
         required: true
         type: string
+      artifact_run_id:
+        description: Existing pypi-release run id whose wheel artifacts should be reused for publish
+        required: false
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name || inputs.release_tag }}
@@ -22,6 +26,8 @@ jobs:
       release_tag: ${{ steps.meta.outputs.release_tag }}
       release_version: ${{ steps.meta.outputs.release_version }}
       checkout_ref: ${{ steps.meta.outputs.checkout_ref }}
+      artifact_run_id: ${{ steps.meta.outputs.artifact_run_id }}
+      reuse_artifacts: ${{ steps.meta.outputs.reuse_artifacts }}
     steps:
       - name: Resolve release metadata
         id: meta
@@ -43,6 +49,14 @@ jobs:
           echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
           echo "release_version=${release_tag#v}" >> "$GITHUB_OUTPUT"
           echo "checkout_ref=${checkout_ref}" >> "$GITHUB_OUTPUT"
+          artifact_run_id="${{ inputs.artifact_run_id }}"
+          if [[ -n "${artifact_run_id}" ]]; then
+            echo "artifact_run_id=${artifact_run_id}" >> "$GITHUB_OUTPUT"
+            echo "reuse_artifacts=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "artifact_run_id=" >> "$GITHUB_OUTPUT"
+            echo "reuse_artifacts=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Checkout release ref
         uses: actions/checkout@v4
@@ -61,6 +75,7 @@ jobs:
   build:
     needs: prepare
     name: build-wheel-${{ matrix.target }}
+    if: ${{ needs.prepare.outputs.reuse_artifacts != 'true' }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -178,17 +193,38 @@ jobs:
     needs:
       - prepare
       - build
+    if: ${{ always() && needs.prepare.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
       id-token: write
     steps:
-      - name: Download wheel artifacts
+      - name: Download wheel artifacts from current run
+        if: ${{ needs.prepare.outputs.reuse_artifacts != 'true' }}
         uses: actions/download-artifact@v4
         with:
           pattern: pypi-wheel-*
           path: dist
           merge-multiple: true
+
+      - name: Download wheel artifacts from an earlier run
+        if: ${{ needs.prepare.outputs.reuse_artifacts == 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          work_dir="$(mktemp -d)"
+          gh run download "${{ needs.prepare.outputs.artifact_run_id }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --dir "${work_dir}"
+          find "${work_dir}" -type f -name '*.whl' -exec mv {} dist/ \;
+          if ! find dist -maxdepth 1 -type f -name '*.whl' | grep -q .; then
+            echo "No wheel artifacts were downloaded from run ${{ needs.prepare.outputs.artifact_run_id }}."
+            exit 1
+          fi
 
       - name: Publish codex-enhanced wheels to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

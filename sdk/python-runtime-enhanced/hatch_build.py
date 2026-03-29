@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
+from packaging.tags import sys_tags
 
 
 class RuntimeBuildHook(BuildHookInterface):
@@ -12,4 +13,4 @@ class RuntimeBuildHook(BuildHookInterface):
             )
 
         build_data["pure_python"] = False
-        build_data["infer_tag"] = True
+        build_data["tag"] = str(next(sys_tags()))
