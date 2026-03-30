@@ -202,7 +202,7 @@ jobs:
     steps:
       - name: Download wheel artifacts from current run
         if: ${{ needs.prepare.outputs.reuse_artifacts != 'true' }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: pypi-wheel-*
           path: dist
