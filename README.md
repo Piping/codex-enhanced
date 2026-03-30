@@ -9,6 +9,8 @@ the places that matter in daily operations: account switching, visible control
 surfaces, repeatable release milestones, and automation that can be managed
 from inside the TUI instead of bolted on from the outside.
 
+Website: `https://codex-enhanced.com`
+
 ![Codex Enhanced hero](./docs/assets/readme-hero.svg)
 
 ![Codex Enhanced splash](./.github/codex-cli-splash.png)

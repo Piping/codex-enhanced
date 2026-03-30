@@ -1,17 +1,47 @@
 ---
 source: tui/src/bottom_pane/list_selection_view.rs
+assertion_line: 2044
 expression: render_lines(&view)
 ---
                                                 
   Clawbot                                       
   Session Actions · Alice                       
                                                 
-› 1. Disconnect      Unread cache is preserved  
-                     ; only the session-thread  
-                     binding is removed.        
-  2. Flush Cached    Clear 3 cached inbound     
-     Messages        messages for this session  
-                     .                          
+›    Forwarding                 Inbound         
+                                controls        
+                                automatic       
+                                session-to-     
+                                thread          
+                                forwarding.     
+                                Outbound        
+                                controls final  
+                                thread replies  
+                                back to         
+                                Feishu.         
+  2. Disable Inbound Forwardin… Keep caching    
+                                Feishu          
+                                messages, but   
+                                stop auto-      
+                                forwarding      
+                                them into the   
+                                bound thread.   
+  3. Disable Outbound Forwardi… Stop            
+                                forwarding      
+                                final thread    
+                                replies back    
+                                into the bound  
+                                Feishu          
+                                session.        
+  4. Disconnect                 Remove the      
+                                persisted       
+                                thread binding  
+                                and stop        
+                                routing this    
+                                session.        
+  5. Flush Cached Messages      Clear 3 cached  
+                                inbound         
+                                messages for    
+                                this session.   
                                                 
   /workspace/project/.codex/clawbot             
   Press enter to confirm or esc to go back

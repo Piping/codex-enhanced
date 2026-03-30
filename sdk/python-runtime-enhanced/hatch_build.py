@@ -12,5 +12,6 @@ class RuntimeBuildHook(BuildHookInterface):
                 "codex-enhanced is wheel-only; build and publish platform wheels only."
             )
 
+        platform_tag = next(sys_tags()).platform
         build_data["pure_python"] = False
-        build_data["tag"] = str(next(sys_tags()))
+        build_data["tag"] = f"py3-none-{platform_tag}"

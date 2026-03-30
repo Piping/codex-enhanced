@@ -1,28 +1,27 @@
 ---
 source: tui/src/bottom_pane/list_selection_view.rs
+assertion_line: 2026
 expression: render_lines(&view)
 ---
                                                 
   Clawbot                                       
   Feishu private chat bridge · 3 sessions disc  
                                                 
-›    Sessions                   Inspect Feishu   
-                                session status  
-                                and run scan /  
-                                clear           
-                                operations.     
-     Configuration              No Feishu       
-                                credentials     
-                                saved yet.      
-     Bindings                   1 session-      
-                                thread binding  
-                                persisted.      
-     Unread Cache               2 cached        
-                                inbound         
-                                messages        
-                                awaiting        
-                                binding or      
-                                replay.         
+› 1. Turn Mode      Switch clawbot-originated   
+                    turns into non-interactive  
+                    mode so question,           
+                    permission, and approval    
+                    prompts do not block        
+                    remote sessions.            
+  2. Sessions       connected · 3 total · 1     
+                    bound                       
+  3. Configuration  No Feishu credentials       
+                    saved yet.                  
+     Bindings       1 session-thread binding    
+                    persisted.                  
+     Unread Cache   2 cached inbound messages   
+                    awaiting binding or         
+                    replay.                     
                                                 
   /workspace/project/.codex/clawbot             
   Press enter to confirm or esc to go back

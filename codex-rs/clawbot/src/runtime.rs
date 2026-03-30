@@ -17,6 +17,7 @@ use crate::model::ProviderRuntimeState;
 use crate::model::ProviderSession;
 use crate::model::ProviderSessionRef;
 use crate::model::SessionBinding;
+use crate::model::SessionForwardingMode;
 use crate::model::SessionStatus;
 use crate::provider::FeishuProviderRuntime;
 use crate::provider::ProviderEvent;
@@ -145,6 +146,8 @@ impl ClawbotRuntime {
                 provider: session.provider,
                 session_id: session.session_id.clone(),
                 thread_id: thread_id.clone(),
+                inbound_forwarding_enabled: true,
+                outbound_forwarding_enabled: true,
                 created_at: existing_binding
                     .as_ref()
                     .map_or(now, |binding| binding.created_at),
@@ -189,11 +192,44 @@ impl ClawbotRuntime {
 
     pub fn bound_session_for_thread(&self, thread_id: &str) -> Result<Option<ProviderSessionRef>> {
         Ok(self
+            .load_binding_for_thread(thread_id)?
+            .as_ref()
+            .map(SessionBinding::session_ref))
+    }
+
+    pub fn load_binding_for_thread(&self, thread_id: &str) -> Result<Option<SessionBinding>> {
+        Ok(self
             .store
             .load_bindings()?
             .into_iter()
-            .find(|binding| binding.thread_id == thread_id)
-            .map(|binding| binding.session_ref()))
+            .find(|binding| binding.thread_id == thread_id))
+    }
+
+    pub fn load_binding_for_session(
+        &self,
+        session: &ProviderSessionRef,
+    ) -> Result<Option<SessionBinding>> {
+        Ok(self
+            .store
+            .load_bindings()?
+            .into_iter()
+            .find(|binding| binding.session_ref() == *session))
+    }
+
+    pub fn set_session_forwarding(
+        &mut self,
+        session: &ProviderSessionRef,
+        mode: SessionForwardingMode,
+    ) -> Result<&ClawbotSnapshot> {
+        let mut bindings = self.store.load_bindings()?;
+        let binding = bindings
+            .iter_mut()
+            .find(|binding| binding.session_ref() == *session)
+            .ok_or_else(|| anyhow!("session `{}` is not currently bound", session.session_id))?;
+        binding.set_forwarding_mode(mode);
+        binding.updated_at = unix_timestamp_now()?;
+        self.store.save_bindings(&bindings)?;
+        self.reload()
     }
 
     pub fn flush_cached_messages(
@@ -320,11 +356,12 @@ mod tests {
     use crate::events::ProviderInboundMessage;
     use crate::model::CachedUnreadMessage;
     use crate::model::ConnectionStatus;
-    use crate::model::InboundMessageReceipt;
     use crate::model::ProviderKind;
     use crate::model::ProviderRuntimeState;
     use crate::model::ProviderSession;
     use crate::model::ProviderSessionRef;
+    use crate::model::SessionForwardingDirection;
+    use crate::model::SessionForwardingMode;
     use crate::model::SessionStatus;
     use crate::provider::ProviderEvent;
 
@@ -332,7 +369,7 @@ mod tests {
     fn connect_flush_and_disconnect_update_binding_and_unread_state() {
         let tempdir = tempdir().expect("tempdir");
         let workspace_root = tempdir.path().to_path_buf();
-        let mut runtime = ClawbotRuntime::load(workspace_root.clone()).expect("runtime");
+        let mut runtime = ClawbotRuntime::load(workspace_root).expect("runtime");
 
         runtime
             .update_feishu_config(Some(FeishuConfig {
@@ -387,6 +424,12 @@ mod tests {
             Some("thread_123")
         );
         assert_eq!(snapshot.sessions[0].status, SessionStatus::Bound);
+        let binding = runtime
+            .load_binding_for_thread("thread_123")
+            .expect("binding lookup")
+            .expect("binding");
+        assert_eq!(binding.inbound_forwarding_enabled, true);
+        assert_eq!(binding.outbound_forwarding_enabled, true);
 
         let flushed = runtime.flush_cached_messages(&session).expect("flush");
         assert_eq!(flushed.len(), 1);
@@ -515,6 +558,47 @@ mod tests {
                 .bound_session_for_thread("thread_missing")
                 .expect("missing binding lookup"),
             None
+        );
+    }
+
+    #[test]
+    fn set_session_forwarding_updates_persisted_binding() {
+        let tempdir = tempdir().expect("tempdir");
+        let mut runtime = ClawbotRuntime::load(tempdir.path().to_path_buf()).expect("runtime");
+        runtime
+            .persist_session(ProviderSession {
+                provider: ProviderKind::Feishu,
+                session_id: "chat_5".to_string(),
+                display_name: Some("Eve".to_string()),
+                unread_count: 0,
+                last_message_at: None,
+                status: SessionStatus::Discovered,
+                bound_thread_id: None,
+            })
+            .expect("session");
+        let session = ProviderSessionRef::new(ProviderKind::Feishu, "chat_5");
+        runtime
+            .connect_session_to_thread(&session, "thread_abc".to_string())
+            .expect("connect");
+
+        runtime
+            .set_session_forwarding(&session, SessionForwardingMode::InboundDisabled)
+            .expect("disable inbound");
+        runtime
+            .set_session_forwarding(&session, SessionForwardingMode::OutboundDisabled)
+            .expect("disable outbound");
+
+        let binding = runtime
+            .load_binding_for_session(&session)
+            .expect("binding lookup")
+            .expect("binding");
+        assert_eq!(
+            binding.forwarding_enabled(SessionForwardingDirection::Inbound),
+            false
+        );
+        assert_eq!(
+            binding.forwarding_enabled(SessionForwardingDirection::Outbound),
+            false
         );
     }
 

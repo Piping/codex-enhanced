@@ -1496,7 +1496,7 @@ mod tests {
                     SelectionItem {
                         name: "Dequan Zhang".to_string(),
                         description: Some(
-                            "bound · 0 unread · thread 019d2e2d-6647-71f2-97bb-f5943c1f120c"
+                            "bound · 0 unread · thread 019d2e2d-6647-71f2-97bb-f5943c1f120c · inbound on · outbound on"
                                 .to_string(),
                         ),
                         selected_description: Some(
@@ -1592,6 +1592,42 @@ mod tests {
                 footer_hint: Some(standard_popup_hint_line()),
                 footer_path: Some("/workspace/project/.codex/clawbot".to_string()),
                 items: vec![
+                    SelectionItem {
+                        name: "Forwarding".to_string(),
+                        description: Some("Inbound on · Outbound on".to_string()),
+                        selected_description: Some(
+                            "Inbound controls automatic session-to-thread forwarding. Outbound controls final thread replies back to Feishu."
+                                .to_string(),
+                        ),
+                        is_disabled: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Disable Inbound Forwarding".to_string(),
+                        description: Some(
+                            "Keep caching Feishu messages, but stop auto-forwarding them into the bound thread."
+                                .to_string(),
+                        ),
+                        selected_description: Some(
+                            "Manual flush still works even when automatic inbound forwarding is disabled."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Disable Outbound Forwarding".to_string(),
+                        description: Some(
+                            "Stop forwarding final thread replies back into the bound Feishu session."
+                                .to_string(),
+                        ),
+                        selected_description: Some(
+                            "Inbound message handling stays unchanged; this only affects outbound final replies."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
                     SelectionItem {
                         name: "Disconnect".to_string(),
                         description: Some(

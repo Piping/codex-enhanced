@@ -4,6 +4,8 @@
 It is intended for users who want to install the enhanced CLI with `pip` and
 run it directly without managing a separate native binary release.
 
+Website: `https://codex-enhanced.com`
+
 ## Highlights
 
 - Loop automation with clear context modes:

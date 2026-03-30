@@ -1,21 +1,23 @@
 ---
 source: tui/src/bottom_pane/list_selection_view.rs
+assertion_line: 2038
 expression: render_lines(&view)
 ---
                                                 
   Clawbot                                       
   Feishu Configuration                          
                                                 
-› 1. App ID          Edit this required Feishu  
-                     credential and persist it  
-                     under .codex/clawbot.      
-  2. App Secret      Configured · ********cret  
-  3. Verification    Not set                    
-     Token                                      
-  4. Encrypt Key     Not set                    
-  5. Bot Open ID     Configured · ou_bot_1234   
-  6. Bot User ID     Not set                    
+› 1. App ID              Edit this required     
+                         Feishu credential and  
+                         persist it             
+                         under .codex/clawbot.  
+  2. App Secret          Configured ·           
+                         ********cret           
+  3. Verification Token  Not set                
+  4. Encrypt Key         Not set                
+  5. Bot Open ID         Configured ·           
+                         ou_bot_1234            
+  6. Bot User ID         Not set                
                                                 
-  /workspace/project/.codex/clawbot/config.tom  
-  l                                             
-  Press enter to confirm or esc to go back      
+  /workspace/project/.codex/clawbot/config.toml 
+  Press enter to confirm or esc to go back

@@ -92,7 +92,10 @@ __pycache__/
 *.pyc
 
 # codex local runtime data
-!.codex/
-.codex/*
+.codex/
 !.codex/skills/
 !.codex/skills/**
+
+site/
+.agents
+

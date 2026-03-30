@@ -18,6 +18,8 @@ use codex_clawbot::ProviderRuntime;
 use codex_clawbot::ProviderRuntimeState;
 use codex_clawbot::ProviderSession;
 use codex_clawbot::ProviderSessionRef;
+use codex_clawbot::SessionForwardingDirection;
+use codex_clawbot::SessionForwardingMode;
 use codex_clawbot::feishu_failure_reply_text;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::AskForApproval;
@@ -47,6 +49,12 @@ use crate::history_cell::HistoryCell;
 const CLAWBOT_PANEL_VIEW_ID: &str = "fork-clawbot-panel";
 const CLAWBOT_CONFIG_PANEL_VIEW_ID: &str = "fork-clawbot-config-panel";
 const CLAWBOT_SESSION_ACTIONS_VIEW_ID: &str = "fork-clawbot-session-actions-panel";
+
+#[derive(Clone, Copy)]
+enum ClawbotDrainReason {
+    Automatic,
+    Manual,
+}
 
 pub(crate) fn control_panel_clawbot_item() -> SelectionItem {
     SelectionItem {
@@ -136,7 +144,9 @@ impl ClawbotFeishuConfigField {
             .filter(|value| !value.is_empty());
         match value {
             Some(value) if self.is_secret() => format!("Configured · {}", mask_secret(&value)),
-            Some(value) => format!("Configured · {}", truncate_value(&value, 28)),
+            Some(value) => {
+                format!("Configured · {}", truncate_value(&value, /*max_chars*/ 28))
+            }
             None => "Not set".to_string(),
         }
     }
@@ -164,9 +174,20 @@ impl App {
     }
 
     pub(crate) fn open_clawbot_session_actions(&mut self, session: ProviderSessionRef) {
-        let initial_selected_idx = self
-            .chat_widget
-            .selected_index_for_active_view(CLAWBOT_SESSION_ACTIONS_VIEW_ID);
+        self.open_clawbot_session_actions_with_selection(
+            session, /*initial_selected_idx*/ None,
+        );
+    }
+
+    fn open_clawbot_session_actions_with_selection(
+        &mut self,
+        session: ProviderSessionRef,
+        initial_selected_idx: Option<usize>,
+    ) {
+        let initial_selected_idx = initial_selected_idx.or_else(|| {
+            self.chat_widget
+                .selected_index_for_active_view(CLAWBOT_SESSION_ACTIONS_VIEW_ID)
+        });
         if !self.chat_widget.replace_selection_view_if_active(
             CLAWBOT_SESSION_ACTIONS_VIEW_ID,
             self.clawbot_session_actions_panel_params(session.clone(), initial_selected_idx),
@@ -240,7 +261,7 @@ impl App {
 
         let mut runtime = self.clawbot_runtime()?;
         runtime.connect_session_to_thread(&session, thread_id.to_string())?;
-        self.drain_clawbot_cached_messages_to_thread(session)
+        self.drain_clawbot_cached_messages_to_thread(session, ClawbotDrainReason::Manual)
             .await?;
         self.open_clawbot_sessions_panel();
         Ok(())
@@ -250,6 +271,21 @@ impl App {
         let mut runtime = self.clawbot_runtime()?;
         runtime.disconnect_session(&session)?;
         self.open_clawbot_sessions_panel();
+        Ok(())
+    }
+
+    pub(crate) fn clawbot_set_session_forwarding(
+        &mut self,
+        session: ProviderSessionRef,
+        mode: SessionForwardingMode,
+    ) -> Result<()> {
+        let mut runtime = self.clawbot_runtime()?;
+        runtime.set_session_forwarding(&session, mode)?;
+        let selected_idx = self
+            .chat_widget
+            .selected_index_for_active_view(CLAWBOT_SESSION_ACTIONS_VIEW_ID);
+        self.open_clawbot_session_actions_with_selection(session, selected_idx);
+        self.refresh_clawbot_views_if_active();
         Ok(())
     }
 
@@ -271,7 +307,7 @@ impl App {
         let mut runtime = self.clawbot_runtime()?;
         let session = ProviderSessionRef::new(ProviderKind::Feishu, trimmed);
         runtime.connect_session_to_thread(&session, thread_id.to_string())?;
-        self.drain_clawbot_cached_messages_to_thread(session)
+        self.drain_clawbot_cached_messages_to_thread(session, ClawbotDrainReason::Manual)
             .await?;
         self.open_clawbot_sessions_panel();
         Ok(())
@@ -325,7 +361,7 @@ impl App {
         &mut self,
         session: ProviderSessionRef,
     ) -> Result<()> {
-        self.drain_clawbot_cached_messages_to_thread(session)
+        self.drain_clawbot_cached_messages_to_thread(session, ClawbotDrainReason::Manual)
             .await?;
         self.open_clawbot_sessions_panel();
         Ok(())
@@ -345,7 +381,7 @@ impl App {
             .map(ProviderSession::session_ref)
             .collect::<Vec<_>>();
         for session in sessions_to_flush {
-            self.drain_clawbot_cached_messages_to_thread(session)
+            self.drain_clawbot_cached_messages_to_thread(session, ClawbotDrainReason::Automatic)
                 .await?;
         }
         Ok(())
@@ -354,6 +390,7 @@ impl App {
     async fn drain_clawbot_cached_messages_to_thread(
         &mut self,
         session: ProviderSessionRef,
+        reason: ClawbotDrainReason,
     ) -> Result<()> {
         let store = ClawbotStore::new(self.config.cwd.clone());
         let snapshot = store.load_snapshot()?;
@@ -367,6 +404,10 @@ impl App {
             self.refresh_clawbot_views_if_active();
             return Ok(());
         };
+
+        if matches!(reason, ClawbotDrainReason::Automatic) && !binding.inbound_forwarding_enabled {
+            return Ok(());
+        }
 
         let thread_id = ThreadId::from_string(&binding.thread_id).map_err(|error| {
             anyhow::anyhow!("invalid bound thread id `{}`: {error}", binding.thread_id)
@@ -429,19 +470,17 @@ impl App {
 
         let mut runtime = self.clawbot_runtime()?;
         runtime.apply_provider_event(event)?;
-        let session_to_flush = inbound_session.filter(|session| {
-            runtime
-                .snapshot()
-                .sessions
-                .iter()
-                .find(|candidate| candidate.session_ref() == *session)
-                .and_then(|candidate| candidate.bound_thread_id.as_ref())
-                .is_some()
-        });
+        let session_to_flush = match inbound_session {
+            Some(session) => runtime
+                .load_binding_for_session(&session)?
+                .filter(|binding| binding.inbound_forwarding_enabled)
+                .map(|_| session),
+            None => None,
+        };
 
         self.refresh_clawbot_views_if_active();
         if let Some(session) = session_to_flush {
-            self.drain_clawbot_cached_messages_to_thread(session)
+            self.drain_clawbot_cached_messages_to_thread(session, ClawbotDrainReason::Automatic)
                 .await?;
         }
         Ok(())
@@ -682,7 +721,7 @@ impl App {
     fn clawbot_session_action_items(&self, session: ProviderSession) -> Vec<SelectionItem> {
         let session_ref = session.session_ref();
         if session.bound_thread_id.is_none() {
-            let session_for_action = session_ref.clone();
+            let session_for_action = session_ref;
             return vec![SelectionItem {
                 name: "Connect To Current Thread".to_string(),
                 description: Some(format!(
@@ -704,9 +743,104 @@ impl App {
             }];
         }
 
+        let binding = self
+            .clawbot_runtime()
+            .ok()
+            .and_then(|runtime| runtime.load_binding_for_session(&session_ref).ok())
+            .flatten();
+        let inbound_forwarding_enabled = binding
+            .as_ref()
+            .map(|binding| binding.inbound_forwarding_enabled)
+            .unwrap_or(true);
+        let outbound_forwarding_enabled = binding
+            .as_ref()
+            .map(|binding| binding.outbound_forwarding_enabled)
+            .unwrap_or(true);
         let session_for_disconnect = session_ref.clone();
+        let session_for_inbound = session_ref.clone();
+        let session_for_outbound = session_ref.clone();
         let session_for_flush = session_ref;
         vec![
+            SelectionItem {
+                name: "Forwarding".to_string(),
+                description: Some(format!(
+                    "{} {} · {} {}",
+                    SessionForwardingDirection::Inbound.label(),
+                    on_off_label(inbound_forwarding_enabled),
+                    SessionForwardingDirection::Outbound.label(),
+                    on_off_label(outbound_forwarding_enabled)
+                )),
+                selected_description: Some(
+                    "Inbound controls automatic session-to-thread forwarding. Outbound controls final thread replies back to Feishu.".to_string(),
+                ),
+                is_disabled: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: if inbound_forwarding_enabled {
+                    "Disable Inbound Forwarding".to_string()
+                } else {
+                    "Enable Inbound Forwarding".to_string()
+                },
+                description: Some(if inbound_forwarding_enabled {
+                    "Keep caching Feishu messages, but stop auto-forwarding them into the bound thread.".to_string()
+                } else {
+                    "Resume automatic forwarding from this Feishu session into the bound thread."
+                        .to_string()
+                }),
+                selected_description: Some(if inbound_forwarding_enabled {
+                    "Manual flush still works even when automatic inbound forwarding is disabled."
+                        .to_string()
+                } else {
+                    "New inbound messages will resume draining into the bound thread as they arrive."
+                        .to_string()
+                }),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::ClawbotSetSessionForwarding {
+                        session: session_for_inbound.clone(),
+                        mode: if inbound_forwarding_enabled {
+                            SessionForwardingMode::InboundDisabled
+                        } else {
+                            SessionForwardingMode::InboundEnabled
+                        },
+                    })
+                })],
+                dismiss_on_select: false,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: if outbound_forwarding_enabled {
+                    "Disable Outbound Forwarding".to_string()
+                } else {
+                    "Enable Outbound Forwarding".to_string()
+                },
+                description: Some(if outbound_forwarding_enabled {
+                    "Stop forwarding final thread replies back into the bound Feishu session."
+                        .to_string()
+                } else {
+                    "Resume forwarding final thread replies back into the bound Feishu session."
+                        .to_string()
+                }),
+                selected_description: Some(if outbound_forwarding_enabled {
+                    "Inbound message handling stays unchanged; this only affects outbound final replies."
+                        .to_string()
+                } else {
+                    "Future turn completions and failure summaries will be sent back to Feishu again."
+                        .to_string()
+                }),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::ClawbotSetSessionForwarding {
+                        session: session_for_outbound.clone(),
+                        mode: if outbound_forwarding_enabled {
+                            SessionForwardingMode::OutboundDisabled
+                        } else {
+                            SessionForwardingMode::OutboundEnabled
+                        },
+                    })
+                })],
+                dismiss_on_select: false,
+                ..Default::default()
+            },
             SelectionItem {
                 name: "Disconnect".to_string(),
                 description: Some(
@@ -879,9 +1013,13 @@ impl App {
 
     async fn send_clawbot_thread_reply(&mut self, thread_id: ThreadId, text: String) -> Result<()> {
         let runtime = self.clawbot_runtime()?;
-        let Some(session) = runtime.bound_session_for_thread(&thread_id.to_string())? else {
+        let Some(binding) = runtime.load_binding_for_thread(&thread_id.to_string())? else {
             return Ok(());
         };
+        if !binding.outbound_forwarding_enabled {
+            return Ok(());
+        }
+        let session = binding.session_ref();
 
         self.send_clawbot_outbound_text(ProviderOutboundTextMessage { session, text })
             .await
@@ -1099,12 +1237,15 @@ fn feishu_config_summary(config: Option<&FeishuConfig>) -> String {
     };
 
     if config.has_api_credentials() {
-        let verification_state = config
+        let verification_state = if config
             .verification_token
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty())
-            .then_some("verification token set")
-            .unwrap_or("verification token not set");
+        {
+            "verification token set"
+        } else {
+            "verification token not set"
+        };
         format!("API credentials configured · {verification_state}.")
     } else if config.is_empty() {
         "No Feishu credentials saved yet.".to_string()
@@ -1136,6 +1277,10 @@ fn clawbot_turn_mode_summary(mode: ClawbotTurnMode) -> String {
                 .to_string()
         }
     }
+}
+
+fn on_off_label(enabled: bool) -> &'static str {
+    if enabled { "on" } else { "off" }
 }
 
 fn clawbot_approval_policy(

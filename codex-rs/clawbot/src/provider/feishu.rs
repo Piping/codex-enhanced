@@ -159,7 +159,7 @@ pub fn failure_reply_text(message: &str) -> String {
         .map(str::trim)
         .find(|line| !line.is_empty())
         .unwrap_or("unknown error");
-    let truncated = truncate_chars(summary, 160);
+    let truncated = truncate_chars(summary, /*max_chars*/ 160);
     format!("Request failed: {truncated}")
 }
 
@@ -182,11 +182,11 @@ impl ProviderRuntime for FeishuProviderRuntime {
         }
 
         self.websocket_config()?;
-        self.set_runtime_state(ConnectionStatus::Disconnected, None)
+        self.set_runtime_state(ConnectionStatus::Disconnected, /*last_error*/ None)
     }
 
     async fn disconnect(&mut self) -> Result<ProviderRuntimeState> {
-        self.set_runtime_state(ConnectionStatus::Disconnected, None)
+        self.set_runtime_state(ConnectionStatus::Disconnected, /*last_error*/ None)
     }
 
     async fn send_text(&mut self, message: ProviderOutboundTextMessage) -> Result<()> {

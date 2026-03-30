@@ -1,46 +1,44 @@
 ---
 source: tui/src/bottom_pane/list_selection_view.rs
+assertion_line: 2032
 expression: render_lines(&view)
 ---
                                                 
   Clawbot                                       
   Sessions                                      
                                                 
-     Status                     connected · 3   
-                                total · 1       
-                                bound           
-› 1. Retry Connection          Restart the      
-                               Feishu runtime   
-                               task and         
-                               persist the      
-                               refreshed        
-                               connection       
-                               state.           
-  2. Manual Bind Session ID    Bind a Feishu    
-                               chat_id          
-                               directly to      
-                               thread           
-                               019d2e2d-6647-7  
-                               1f2-97bb-f5943c  
-                               1f120c.          
-  3. Scan Sessions             Refresh the      
-                               discovered       
-                               Feishu session   
-                               list from the    
-                               provider API.    
-  4. Clear Sessions            Remove 2         
-                               unbound          
-                               sessions and 2   
-                               cached unread    
-                               messages.        
-  5. Dequan Zhang              bound · 0        
-                               unread · thread  
-                               019d2e2d-6647-7  
-                               1f2-97bb-f5943c  
-                               1f120c           
-  6. tracker                   discovered · 2   
-                               unread ·         
-                               unbound          
+›    Status                  Inspect Feishu     
+                             session status     
+                             and manage scan /  
+                             clear operations.  
+  2. Retry Connection        Reconnect the      
+                             Feishu gateway     
+                             and refresh        
+                             websocket          
+                             delivery.          
+  3. Manual Bind Session ID  Bind a Feishu      
+                             chat_id directly   
+                             to thread          
+                             019d2e2d-6647-     
+                             71f2-97bb-         
+                             f5943c1f120c.      
+  4. Scan Sessions           Refresh the        
+                             discovered Feishu  
+                             session list from  
+                             the provider API.  
+  5. Clear Sessions          Remove 2 unbound   
+                             sessions and 2     
+                             cached unread      
+                             messages.          
+  6. Dequan Zhang            bound · 0 unread   
+                             · thread           
+                             019d2e2d-6647-     
+                             71f2-97bb-         
+                             f5943c1f120c ·     
+                             inbound on ·       
+                             outbound on        
+  7. tracker                 discovered · 2     
+                             unread · unbound   
                                                 
   /workspace/project/.codex/clawbot             
   Press enter to confirm or esc to go back

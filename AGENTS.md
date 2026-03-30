@@ -7,6 +7,8 @@ In the codex-rs folder where the rust code lives:
   - Prefer KISS. Solve the current concrete problem with the smallest clear design that works.
   - When requirements change, fail fast. Remove superseded paths instead of preserving fallback compatibility, dual behavior, or migration shims unless the user explicitly asks for backward compatibility.
   - Do not add speculative extension points for imagined future needs. Extract an abstraction only after the variation is already real or the extension boundary is clearly required.
+  - When asked to restart the locally installed Codex binary, use the repo-local install + respawn flow: run `bash install_local.sh` from `codex-rs`, then send `SIGUSR1` to the current Codex process with `kill -USR1 "$(pgrep -n -x codex)"`.
+  - Keep `sccache` enabled for Rust builds by default. Do not proactively bypass it; only fall back to `RUSTC_WRAPPER=` when `sccache` itself is the problem, and say so explicitly.
 - Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`
 - When using format! and you can inline variables into {}, always do that.
 - Install any commands the repo relies on (for example `just`, `rg`, or `cargo-insta`) if they aren't already available before running instructions here.
@@ -53,7 +55,7 @@ Run `just fmt` (in `codex-rs` directory) automatically after you have finished m
 
 Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates. Do not re-run tests after running `fix` or `fmt`.
 
-Also run `just argument-comment-lint` to ensure the codebase is clean of comment lint errors.
+Also run `just argument-comment-lint` from the repo root to ensure the codebase is clean of comment lint errors.
 
 ## TUI style conventions
 

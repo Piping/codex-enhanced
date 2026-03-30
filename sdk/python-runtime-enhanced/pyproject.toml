@@ -23,7 +23,7 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Piping/codex-enhanced"
+Homepage = "https://codex-enhanced.com"
 Repository = "https://github.com/Piping/codex-enhanced"
 Issues = "https://github.com/Piping/codex-enhanced/issues"
 

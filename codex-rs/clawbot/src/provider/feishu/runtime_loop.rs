@@ -64,7 +64,7 @@ async fn run_once(
 ) -> Result<()> {
     let _ = provider_event_tx.send(ProviderEvent::RuntimeStateUpdated(runtime_state(
         ConnectionStatus::Connecting,
-        None,
+        /*last_error*/ None,
     )?));
 
     let ws_config = Arc::new(build_websocket_config(config)?);

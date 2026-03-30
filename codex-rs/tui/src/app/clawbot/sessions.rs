@@ -191,6 +191,7 @@ impl App {
             },
         ];
 
+        let bindings = snapshot.bindings.clone();
         let feishu_sessions = snapshot
             .sessions
             .into_iter()
@@ -213,10 +214,32 @@ impl App {
         } else {
             items.extend(feishu_sessions.into_iter().map(|session| {
                 let session_ref = session.session_ref();
+                let binding = bindings
+                    .iter()
+                    .find(|binding| binding.session_ref() == session_ref)
+                    .cloned();
                 let binding_description = match &session.bound_thread_id {
                     Some(thread_id) => format!("thread {thread_id}"),
                     None => "unbound".to_string(),
                 };
+                let forwarding_description = binding.as_ref().map_or_else(
+                    || "inbound on · outbound on".to_string(),
+                    |binding| {
+                        format!(
+                            "inbound {} · outbound {}",
+                            if binding.inbound_forwarding_enabled {
+                                "on"
+                            } else {
+                                "off"
+                            },
+                            if binding.outbound_forwarding_enabled {
+                                "on"
+                            } else {
+                                "off"
+                            }
+                        )
+                    },
+                );
                 let selected_description = if session.bound_thread_id.is_some() {
                     "Manage binding and unread cache for this session.".to_string()
                 } else {
@@ -228,10 +251,11 @@ impl App {
                         .clone()
                         .unwrap_or_else(|| session.session_id.clone()),
                     description: Some(format!(
-                        "{} · {} unread · {}",
+                        "{} · {} unread · {} · {}",
                         session.status.label(),
                         session.unread_count,
-                        binding_description
+                        binding_description,
+                        forwarding_description
                     )),
                     selected_description: Some(selected_description),
                     actions: vec![Box::new(move |tx| {

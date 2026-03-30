@@ -24,6 +24,8 @@ pub use model::ProviderRuntimeState;
 pub use model::ProviderSession;
 pub use model::ProviderSessionRef;
 pub use model::SessionBinding;
+pub use model::SessionForwardingDirection;
+pub use model::SessionForwardingMode;
 pub use model::SessionStatus;
 pub use provider::FeishuInboundPrivateMessage;
 pub use provider::FeishuProviderRuntime;

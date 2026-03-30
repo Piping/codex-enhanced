@@ -444,6 +444,8 @@ mod tests {
                 provider: ProviderKind::Feishu,
                 session_id: "chat_1".to_string(),
                 thread_id: "thread_1".to_string(),
+                inbound_forwarding_enabled: true,
+                outbound_forwarding_enabled: true,
                 created_at: 1,
                 updated_at: 2,
             }])

@@ -150,6 +150,10 @@ pub struct SessionBinding {
     pub provider: ProviderKind,
     pub session_id: String,
     pub thread_id: String,
+    #[serde(default = "default_session_forwarding_enabled")]
+    pub inbound_forwarding_enabled: bool,
+    #[serde(default = "default_session_forwarding_enabled")]
+    pub outbound_forwarding_enabled: bool,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -157,6 +161,71 @@ pub struct SessionBinding {
 impl SessionBinding {
     pub fn session_ref(&self) -> ProviderSessionRef {
         ProviderSessionRef::new(self.provider, self.session_id.clone())
+    }
+
+    pub fn forwarding_enabled(&self, direction: SessionForwardingDirection) -> bool {
+        match direction {
+            SessionForwardingDirection::Inbound => self.inbound_forwarding_enabled,
+            SessionForwardingDirection::Outbound => self.outbound_forwarding_enabled,
+        }
+    }
+
+    pub fn set_forwarding_mode(&mut self, mode: SessionForwardingMode) {
+        match mode {
+            SessionForwardingMode::InboundEnabled => {
+                self.inbound_forwarding_enabled = true;
+            }
+            SessionForwardingMode::InboundDisabled => {
+                self.inbound_forwarding_enabled = false;
+            }
+            SessionForwardingMode::OutboundEnabled => {
+                self.outbound_forwarding_enabled = true;
+            }
+            SessionForwardingMode::OutboundDisabled => {
+                self.outbound_forwarding_enabled = false;
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionForwardingDirection {
+    Inbound,
+    Outbound,
+}
+
+impl SessionForwardingDirection {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Inbound => "Inbound",
+            Self::Outbound => "Outbound",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionForwardingMode {
+    InboundEnabled,
+    InboundDisabled,
+    OutboundEnabled,
+    OutboundDisabled,
+}
+
+impl SessionForwardingMode {
+    pub fn direction(self) -> SessionForwardingDirection {
+        match self {
+            Self::InboundEnabled | Self::InboundDisabled => SessionForwardingDirection::Inbound,
+            Self::OutboundEnabled | Self::OutboundDisabled => SessionForwardingDirection::Outbound,
+        }
+    }
+
+    pub fn enabled(self) -> bool {
+        match self {
+            Self::InboundEnabled | Self::OutboundEnabled => true,
+            Self::InboundDisabled | Self::OutboundDisabled => false,
+        }
     }
 }
 
@@ -202,4 +271,8 @@ impl ClawbotSnapshot {
     pub fn provider_state(&self, provider: ProviderKind) -> Option<&ProviderRuntimeState> {
         self.runtime.iter().find(|state| state.provider == provider)
     }
+}
+
+fn default_session_forwarding_enabled() -> bool {
+    true
 }

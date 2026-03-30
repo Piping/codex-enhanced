@@ -20,6 +20,7 @@ use codex_clawbot::ClawbotTurnMode;
 use codex_clawbot::ProviderEvent;
 use codex_clawbot::ProviderKind;
 use codex_clawbot::ProviderSessionRef;
+use codex_clawbot::SessionForwardingMode;
 use codex_file_search::FileMatch;
 use codex_loop::LoopContextMode;
 use codex_loop::LoopResponseMode;
@@ -146,6 +147,11 @@ pub(crate) enum AppEvent {
     /// Remove the thread binding for a clawbot session.
     ClawbotDisconnect {
         session: ProviderSessionRef,
+    },
+    /// Enable or disable one forwarding path for a bound clawbot session.
+    ClawbotSetSessionForwarding {
+        session: ProviderSessionRef,
+        mode: SessionForwardingMode,
     },
     /// Clear cached unread messages for a clawbot session.
     ClawbotFlushCachedMessages {
