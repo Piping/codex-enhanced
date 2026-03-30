@@ -59,7 +59,7 @@ jobs:
           fi
 
       - name: Checkout release ref
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ steps.meta.outputs.checkout_ref }}
 
@@ -100,7 +100,7 @@ jobs:
             binary_name: codex.exe
     steps:
       - name: Checkout release ref
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.prepare.outputs.checkout_ref }}
 

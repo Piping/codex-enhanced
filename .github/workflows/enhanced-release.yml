@@ -45,7 +45,7 @@ jobs:
           echo "checkout_ref=${checkout_ref}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout release ref
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ steps.meta.outputs.checkout_ref }}
 
@@ -94,7 +94,7 @@ jobs:
             archive_kind: zip
     steps:
       - name: Checkout release ref
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.prepare.outputs.checkout_ref }}
 
@@ -204,7 +204,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout release ref
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.prepare.outputs.checkout_ref }}
 
