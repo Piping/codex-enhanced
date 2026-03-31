@@ -5283,6 +5283,9 @@ impl ChatWidget {
     }
 
     fn current_managed_account_profile(&self) -> Option<AccountManagementProfile> {
+        if !self.config.model_provider.requires_openai_auth {
+            return None;
+        }
         let auth = self.auth_manager.auth_cached().or_else(|| {
             CodexAuth::from_auth_storage(
                 &self.config.codex_home,
@@ -5345,6 +5348,9 @@ impl ChatWidget {
     }
 
     fn prepare_managed_account_for_user_turn(&mut self) -> bool {
+        if !self.config.model_provider.requires_openai_auth {
+            return true;
+        }
         let current_snapshot = match persist_current_managed_account_snapshot(
             &self.config.codex_home,
             self.config.cli_auth_credentials_store_mode,
@@ -5425,6 +5431,9 @@ impl ChatWidget {
     }
 
     fn retry_user_turn_with_managed_account(&mut self) -> bool {
+        if !self.config.model_provider.requires_openai_auth {
+            return false;
+        }
         if self.managed_account_retry_attempted {
             return false;
         }

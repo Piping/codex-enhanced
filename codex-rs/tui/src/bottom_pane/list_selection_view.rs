@@ -1123,8 +1123,6 @@ mod tests {
                             "workspace-1 · pri***@example.com · invalid: deactivated workspace · active"
                                 .to_string(),
                         ),
-                        is_disabled: true,
-                        disabled_reason: Some("Switch away before deleting".to_string()),
                         dismiss_on_select: true,
                         ..Default::default()
                     },

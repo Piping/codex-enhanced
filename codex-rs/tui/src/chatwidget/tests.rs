@@ -2189,6 +2189,34 @@ async fn prefetch_rate_limits_is_gated_on_chatgpt_auth_provider() {
 }
 
 #[tokio::test]
+async fn current_managed_account_profile_is_disabled_for_non_openai_provider() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    set_chatgpt_auth(&mut chat);
+
+    assert!(chat.current_managed_account_profile().is_some());
+
+    chat.config.model_provider.requires_openai_auth = false;
+
+    assert_eq!(chat.current_managed_account_profile(), None);
+}
+
+#[tokio::test]
+async fn prepare_managed_account_for_user_turn_skips_non_openai_provider() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    set_chatgpt_auth(&mut chat);
+    chat.config.model_provider.requires_openai_auth = false;
+
+    let store = AccountPoolStore::new(chat.config.codex_home.clone());
+    let before = store.load().expect("load account pool").accounts.len();
+
+    assert!(chat.prepare_managed_account_for_user_turn());
+    assert_eq!(
+        store.load().expect("load account pool").accounts.len(),
+        before
+    );
+}
+
+#[tokio::test]
 async fn worked_elapsed_from_resets_when_timer_restarts() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     assert_eq!(chat.worked_elapsed_from(5), 5);

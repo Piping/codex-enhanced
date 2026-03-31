@@ -53,6 +53,7 @@ use codex_accounts::AccountRateLimitSnapshot;
 use codex_accounts::AccountRateLimitWindow;
 use codex_accounts::ManagedAccountAuthStore;
 use codex_accounts::activate_managed_account;
+use codex_accounts::load_current_managed_account_snapshot;
 use codex_accounts::persist_current_managed_account_snapshot;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
@@ -2608,9 +2609,6 @@ impl App {
                     .iter()
                     .filter(|account| account.is_invalid())
                     .collect();
-                let active_invalid_exists = invalid_accounts
-                    .iter()
-                    .any(|account| state.active_account_id.as_deref() == Some(account.id.as_str()));
                 items.push(SelectionItem {
                     name: "Delete All Invalid".to_string(),
                     description: Some(if invalid_accounts.is_empty() {
@@ -2622,11 +2620,9 @@ impl App {
                             invalid_accounts.len()
                         )
                     }),
-                    is_disabled: invalid_accounts.is_empty() || active_invalid_exists,
+                    is_disabled: invalid_accounts.is_empty(),
                     disabled_reason: if invalid_accounts.is_empty() {
                         Some("Refresh all accounts before bulk deletion".to_string())
-                    } else if active_invalid_exists {
-                        Some("Switch away before deleting active invalid accounts".to_string())
                     } else {
                         None
                     },
@@ -2654,9 +2650,6 @@ impl App {
                     items.push(SelectionItem {
                         name: format!("Delete {display_name}"),
                         description: Some(description_parts.join(" · ")),
-                        is_disabled: is_active,
-                        disabled_reason: is_active
-                            .then(|| "Switch away before deleting".to_string()),
                         actions: vec![Box::new(move |tx| {
                             tx.send(AppEvent::OpenDeleteManagedAccountConfirmation {
                                 account_id: account_id.clone(),
@@ -2705,6 +2698,9 @@ impl App {
         &self,
         store: &AccountPoolStore,
     ) -> std::io::Result<codex_accounts::AccountPoolState> {
+        if !self.config.model_provider.requires_openai_auth {
+            return store.load();
+        }
         let snapshot = persist_current_managed_account_snapshot(
             &self.config.codex_home,
             self.config.cli_auth_credentials_store_mode,
@@ -2896,19 +2892,6 @@ impl App {
             }
         };
 
-        let active_invalid_exists = state.accounts.iter().any(|account| {
-            account.is_invalid() && state.active_account_id.as_deref() == Some(account.id.as_str())
-        });
-        if active_invalid_exists {
-            self.chat_widget
-                .add_to_history(history_cell::new_error_event(
-                    "Switch to another managed account before deleting active invalid accounts."
-                        .to_string(),
-                ));
-            self.open_managed_account_delete_panel();
-            return;
-        }
-
         let invalid_accounts: Vec<_> = state
             .accounts
             .iter()
@@ -2925,13 +2908,29 @@ impl App {
             return;
         }
 
+        let deleted_account_ids: Vec<_> = invalid_accounts
+            .iter()
+            .map(|(account_id, _)| account_id.clone())
+            .collect();
+        let mut next_state = state;
+        for account_id in &deleted_account_ids {
+            next_state.remove_account(account_id);
+        }
+        if let Err(err) = self.reconcile_managed_account_auth_after_deletion(
+            &deleted_account_ids,
+            next_state.active_account_id.as_deref(),
+        ) {
+            self.chat_widget
+                .add_to_history(history_cell::new_error_event(err));
+            self.open_managed_account_delete_panel();
+            return;
+        }
+
         let auth_store = ManagedAccountAuthStore::new(self.config.codex_home.clone());
-        let mut deleted_account_ids = Vec::new();
         let mut deleted_display_names = Vec::new();
         for (account_id, display_name) in invalid_accounts {
             match auth_store.delete_account_auth(&account_id) {
                 Ok(()) => {
-                    deleted_account_ids.push(account_id);
                     deleted_display_names.push(display_name);
                 }
                 Err(err) => {
@@ -3081,15 +3080,6 @@ impl App {
             }
         };
 
-        if state.active_account_id.as_deref() == Some(account_id.as_str()) {
-            self.chat_widget
-                .add_to_history(history_cell::new_error_event(
-                    "Switch to another managed account before deleting the active one.".to_string(),
-                ));
-            self.open_managed_account_delete_panel();
-            return;
-        }
-
         let Some(display_name) = state
             .accounts
             .iter()
@@ -3103,6 +3093,18 @@ impl App {
             self.open_managed_account_delete_panel();
             return;
         };
+
+        let mut next_state = state;
+        next_state.remove_account(&account_id);
+        if let Err(err) = self.reconcile_managed_account_auth_after_deletion(
+            std::slice::from_ref(&account_id),
+            next_state.active_account_id.as_deref(),
+        ) {
+            self.chat_widget
+                .add_to_history(history_cell::new_error_event(err));
+            self.open_managed_account_delete_panel();
+            return;
+        }
 
         let auth_store = ManagedAccountAuthStore::new(self.config.codex_home.clone());
         if let Err(err) = auth_store.delete_account_auth(&account_id) {
@@ -3129,6 +3131,45 @@ impl App {
                 /*hint*/ None,
             ));
         self.open_managed_account_delete_panel();
+    }
+
+    fn reconcile_managed_account_auth_after_deletion(
+        &mut self,
+        deleted_account_ids: &[String],
+        next_active_account_id: Option<&str>,
+    ) -> Result<(), String> {
+        let current_snapshot = load_current_managed_account_snapshot(
+            &self.config.codex_home,
+            self.config.cli_auth_credentials_store_mode,
+        )
+        .map_err(|err| format!("Failed to load current managed account auth: {err}"))?;
+        let Some(current_snapshot) = current_snapshot else {
+            return Ok(());
+        };
+        if !deleted_account_ids
+            .iter()
+            .any(|account_id| account_id == &current_snapshot.profile.id)
+        {
+            return Ok(());
+        }
+
+        match next_active_account_id {
+            Some(account_id) => activate_managed_account(
+                &self.config.codex_home,
+                self.config.cli_auth_credentials_store_mode,
+                account_id,
+            )
+            .map_err(|err| format!("Failed to activate replacement managed account auth: {err}"))?,
+            None => {
+                codex_core::auth::logout(
+                    &self.config.codex_home,
+                    self.config.cli_auth_credentials_store_mode,
+                )
+                .map_err(|err| format!("Failed to clear deleted managed account auth: {err}"))?;
+            }
+        }
+        self.auth_manager.reload();
+        Ok(())
     }
 
     fn apply_managed_account_rate_limit_snapshot(
@@ -6449,6 +6490,7 @@ mod tests {
     use crate::history_cell::new_session_info;
     use crate::multi_agents::AgentPickerThreadEntry;
     use assert_matches::assert_matches;
+    use codex_app_server_protocol::AuthMode;
     use codex_clawbot::CachedUnreadMessage;
     use codex_clawbot::ClawbotStore;
     use codex_clawbot::ClawbotTurnMode;
@@ -6464,9 +6506,14 @@ mod tests {
     use codex_clawbot::SessionForwardingMode;
     use codex_clawbot::SessionStatus;
     use codex_core::CodexAuth;
+    use codex_core::auth::AuthCredentialsStoreMode;
+    use codex_core::auth::AuthDotJson;
+    use codex_core::auth::load_auth_dot_json;
+    use codex_core::auth::save_auth;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::types::ModelAvailabilityNuxConfig;
+    use codex_core::token_data::TokenData;
     use codex_otel::SessionTelemetry;
     use codex_protocol::ThreadId;
     use codex_protocol::config_types::CollaborationMode;
@@ -9327,6 +9374,91 @@ guardian_approval = true
         Ok(())
     }
 
+    #[tokio::test]
+    async fn delete_managed_account_allows_active_account_and_clears_auth() -> Result<()> {
+        let mut app = make_test_app().await;
+        let tempdir = tempdir()?;
+        app.config.codex_home = tempdir.path().to_path_buf();
+        app.config.cli_auth_credentials_store_mode = AuthCredentialsStoreMode::File;
+        save_auth(
+            &app.config.codex_home,
+            &dummy_chatgpt_auth_dot_json(),
+            app.config.cli_auth_credentials_store_mode,
+        )?;
+        app.auth_manager = codex_core::test_support::auth_manager_from_auth_with_home(
+            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+            app.config.codex_home.clone(),
+        );
+
+        AccountPoolStore::new(app.config.codex_home.clone()).update(|state| {
+            state.upsert_account(codex_accounts::AccountManagementProfile {
+                id: "account_id".to_string(),
+                alias: Some("Primary".to_string()),
+                masked_email: Some("pri***@example.com".to_string()),
+                plan_label: Some("pro".to_string()),
+                priority: Some(0),
+            });
+        })?;
+
+        app.delete_managed_account("account_id".to_string());
+
+        assert_eq!(
+            AccountPoolStore::new(app.config.codex_home.clone()).load()?,
+            codex_accounts::AccountPoolState::default()
+        );
+        assert_eq!(
+            load_auth_dot_json(
+                &app.config.codex_home,
+                app.config.cli_auth_credentials_store_mode,
+            )?,
+            None
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_all_invalid_managed_accounts_allows_active_invalid_account() -> Result<()> {
+        let mut app = make_test_app().await;
+        let tempdir = tempdir()?;
+        app.config.codex_home = tempdir.path().to_path_buf();
+        app.config.cli_auth_credentials_store_mode = AuthCredentialsStoreMode::File;
+        save_auth(
+            &app.config.codex_home,
+            &dummy_chatgpt_auth_dot_json(),
+            app.config.cli_auth_credentials_store_mode,
+        )?;
+        app.auth_manager = codex_core::test_support::auth_manager_from_auth_with_home(
+            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+            app.config.codex_home.clone(),
+        );
+
+        AccountPoolStore::new(app.config.codex_home.clone()).update(|state| {
+            state.upsert_account(codex_accounts::AccountManagementProfile {
+                id: "account_id".to_string(),
+                alias: Some("Primary".to_string()),
+                masked_email: Some("pri***@example.com".to_string()),
+                plan_label: Some("pro".to_string()),
+                priority: Some(0),
+            });
+            state.set_invalid_reason("account_id", Some("deactivated workspace".to_string()));
+        })?;
+
+        app.delete_all_invalid_managed_accounts();
+
+        assert_eq!(
+            AccountPoolStore::new(app.config.codex_home.clone()).load()?,
+            codex_accounts::AccountPoolState::default()
+        );
+        assert_eq!(
+            load_auth_dot_json(
+                &app.config.codex_home,
+                app.config.cli_auth_credentials_store_mode,
+            )?,
+            None
+        );
+        Ok(())
+    }
+
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
@@ -9494,6 +9626,38 @@ guardian_approval = true
             "test".to_string(),
             SessionSource::Cli,
         )
+    }
+
+    fn dummy_chatgpt_auth_dot_json() -> AuthDotJson {
+        let fake_jwt = |email: &str, account_id: &str, plan_type: &str| -> String {
+            let header = serde_json::json!({"alg":"none","typ":"JWT"});
+            let payload = serde_json::json!({
+                "email": email,
+                "https://api.openai.com/auth": {
+                    "chatgpt_account_id": account_id,
+                    "chatgpt_plan_type": plan_type,
+                },
+            });
+            let encode = |value: serde_json::Value| -> String {
+                use base64::Engine;
+                base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .encode(serde_json::to_vec(&value).expect("serialize"))
+            };
+            format!("{}.{}.sig", encode(header), encode(payload))
+        };
+        let access_token = fake_jwt("primary@example.com", "account_id", "pro");
+        AuthDotJson {
+            auth_mode: Some(AuthMode::Chatgpt),
+            openai_api_key: None,
+            tokens: Some(TokenData {
+                id_token: codex_core::token_data::parse_chatgpt_jwt_claims(&access_token)
+                    .expect("id token"),
+                access_token,
+                refresh_token: "test".to_string(),
+                account_id: Some("account_id".to_string()),
+            }),
+            last_refresh: Some(Utc::now()),
+        }
     }
 
     fn app_enabled_in_effective_config(config: &Config, app_id: &str) -> Option<bool> {

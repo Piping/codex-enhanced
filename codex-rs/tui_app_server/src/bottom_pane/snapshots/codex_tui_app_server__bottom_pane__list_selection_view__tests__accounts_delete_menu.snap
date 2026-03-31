@@ -1,30 +1,21 @@
 ---
 source: tui_app_server/src/bottom_pane/list_selection_view.rs
+assertion_line: 1556
 expression: render_lines(&view)
 ---
                                                 
   Delete                                        
   Delete saved snapshots for 2 managed account  
                                                 
-› 1. Delete All Invalid         Remove 1        
-                                invalid         
-                                managed         
-                                account         
-                                snapshot.       
-     Delete Primary (disabled)  workspace-1 ·   
-                                pri***@example  
-                                .com ·          
-                                invalid:        
-                                deactivated     
-                                workspace ·     
-                                active          
-                                (disabled:      
-                                Switch away     
-                                before          
-                                deleting)       
-  3. Delete Backup              workspace-2 ·   
-                                bac***@example  
-                                .com            
+› 1. Delete All Invalid  Remove 1 invalid       
+                         managed account        
+                         snapshot.              
+  2. Delete Primary      workspace-1 ·          
+                         pri***@example.com ·   
+                         invalid: deactivated   
+                         workspace · active     
+  3. Delete Backup       workspace-2 ·          
+                         bac***@example.com     
                                                 
   /tmp/codex-home/accounts.json                 
   Press enter to confirm or esc to go back
