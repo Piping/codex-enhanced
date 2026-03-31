@@ -18,5 +18,5 @@ expression: render_lines(&view)
                          summarize blockers ·   
                          disabled               
                                                 
-  /workspace/project/.codex/loop_timers.json    
+  /workspace/project/…/loop/loop_timers.json    
   Press enter to confirm or esc to go back

@@ -17,6 +17,7 @@ use crate::trigger::LoopTriggerBinding;
 use crate::trigger::LoopTriggerKind;
 
 const LOOP_TIMER_FILE_NAME: &str = "loop_timers.json";
+const LOOP_METADATA_DIR_NAME: &str = "loop";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PersistedLoopTimersFile {
@@ -136,7 +137,9 @@ pub fn load_loop_timers(cwd: &Path) -> std::io::Result<PersistedLoopTimersFile> 
 }
 
 pub fn loop_timers_path(cwd: &Path) -> PathBuf {
-    cwd.join(".codex").join(LOOP_TIMER_FILE_NAME)
+    cwd.join(".codex")
+        .join(LOOP_METADATA_DIR_NAME)
+        .join(LOOP_TIMER_FILE_NAME)
 }
 
 pub fn format_timestamp(unix_seconds: i64) -> String {

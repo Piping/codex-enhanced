@@ -1792,7 +1792,7 @@ mod tests {
                 title: Some("Loop Manager".to_string()),
                 subtitle: Some("2 timer(s) configured for /workspace/project.".to_string()),
                 footer_hint: Some(standard_popup_hint_line()),
-                footer_path: Some("/workspace/project/.codex/loop_timers.json".to_string()),
+                footer_path: Some("/workspace/project/.codex/loop/loop_timers.json".to_string()),
                 items: vec![
                     SelectionItem {
                         name: "Create Loop Agent".to_string(),

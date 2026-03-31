@@ -4,9 +4,9 @@
 
 Each workspace stores:
 
-- `.codex/loop_timers.json`
+- `.codex/loop/loop_timers.json`
   - loop definitions
-- `.codex/loop_trigger_queues.json`
+- `.codex/loop/loop_trigger_queues.json`
   - workspace ordering for trigger phases
 
 ## Loop Agent
@@ -106,8 +106,8 @@ Loop-generated user messages do not re-trigger loop hooks.
 Loop agents are managed through the shared harness/service layer.
 TUI Codex sessions also expose a model-visible `loop` function tool that forwards
 create, list, info, update, and delete operations into that shared service.
-The service writes workspace-local loop metadata into `.codex/loop_timers.json`
-and `.codex/loop_trigger_queues.json`.
+The service writes workspace-local loop metadata into `.codex/loop/loop_timers.json`
+and `.codex/loop/loop_trigger_queues.json`.
 
 ## Security Semantics
 

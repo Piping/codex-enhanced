@@ -11,6 +11,7 @@ use crate::trigger::LoopTriggerPhase;
 use crate::trigger_bindings;
 
 const LOOP_TRIGGER_QUEUE_FILE_NAME: &str = "loop_trigger_queues.json";
+const LOOP_METADATA_DIR_NAME: &str = "loop";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PersistedLoopTriggerQueuesFile {
@@ -41,7 +42,9 @@ pub fn load_loop_trigger_queues(cwd: &Path) -> std::io::Result<PersistedLoopTrig
 }
 
 pub fn loop_trigger_queues_path(cwd: &Path) -> PathBuf {
-    cwd.join(".codex").join(LOOP_TRIGGER_QUEUE_FILE_NAME)
+    cwd.join(".codex")
+        .join(LOOP_METADATA_DIR_NAME)
+        .join(LOOP_TRIGGER_QUEUE_FILE_NAME)
 }
 
 pub fn sync_trigger_queues_with_timers(
