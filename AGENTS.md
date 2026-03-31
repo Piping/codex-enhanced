@@ -7,8 +7,10 @@ In the codex-rs folder where the rust code lives:
   - Prefer KISS. Solve the current concrete problem with the smallest clear design that works.
   - When requirements change, fail fast. Remove superseded paths instead of preserving fallback compatibility, dual behavior, or migration shims unless the user explicitly asks for backward compatibility.
   - Do not add speculative extension points for imagined future needs. Extract an abstraction only after the variation is already real or the extension boundary is clearly required.
+  - Do not run concurrent Cargo commands that contend for the same workspace locks or target directory. In particular, do not run `cargo check`, `cargo build`, `cargo test`, or `cargo clippy` in parallel against the same workspace unless they are intentionally isolated.
   - When asked to restart the locally installed Codex binary, use the repo-local install + respawn flow: run `bash install_local.sh` from `codex-rs`, then send `SIGUSR1` to the current Codex process with `kill -USR1 "$(pgrep -n -x codex)"`.
   - Keep `sccache` enabled for Rust builds by default. Do not proactively bypass it; only fall back to `RUSTC_WRAPPER=` when `sccache` itself is the problem, and say so explicitly.
+  - If a change produces an unexpectedly large `git diff`, first check whether the task is introducing a concept that was not previously modeled explicitly. If yes, prefer adding the smallest clear extension point that makes the new concept first-class, then implement against that boundary instead of scattering ad hoc callsite edits.
 - Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`
 - When using format! and you can inline variables into {}, always do that.
 - Install any commands the repo relies on (for example `just`, `rg`, or `cargo-insta`) if they aren't already available before running instructions here.
@@ -54,6 +56,8 @@ Run `just fmt` (in `codex-rs` directory) automatically after you have finished m
 2. Once those pass, if any changes were made in common, core, or protocol, run the complete test suite with `cargo test` (or `just test` if `cargo-nextest` is installed). Avoid `--all-features` for routine local runs because it expands the build matrix and can significantly increase `target/` disk usage; use it only when you specifically need full feature coverage. project-specific or individual tests can be run without asking the user, but do ask the user before running the complete test suite.
 
 Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates. Do not re-run tests after running `fix` or `fmt`.
+
+After running `just fix -p <project>`, inspect the diff and revert unrelated drive-by edits before finalizing. Do not let automatic Clippy cleanups from unrelated files leak into the task unless the user asked for them.
 
 Also run `just argument-comment-lint` from the repo root to ensure the codebase is clean of comment lint errors.
 
