@@ -10229,7 +10229,7 @@ guardian_approval = true
     }
 
     #[tokio::test]
-    async fn ctrl_x_u_triggers_undo_last_user_message() {
+    async fn ctrl_x_ctrl_u_triggers_undo_last_user_message() {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
         app.transcript_cells = vec![Arc::new(UserHistoryCell {
@@ -10247,7 +10247,10 @@ guardian_approval = true
             None
         );
         assert_eq!(
-            app.handle_key_chord_key_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE)),
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('u'),
+                KeyModifiers::CONTROL,
+            )),
             None
         );
         assert_eq!(app.chat_widget.composer_text_with_pending(), "latest");
@@ -10282,7 +10285,7 @@ guardian_approval = true
     }
 
     #[tokio::test]
-    async fn ctrl_x_y_runs_copy_action_without_inserting_y_into_the_composer() {
+    async fn ctrl_x_ctrl_y_runs_copy_action_without_inserting_y_into_the_composer() {
         let mut app = make_test_app().await;
 
         assert_eq!(
@@ -10293,7 +10296,10 @@ guardian_approval = true
             None
         );
         assert_eq!(
-            app.handle_key_chord_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)),
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('y'),
+                KeyModifiers::CONTROL,
+            )),
             None
         );
         assert_eq!(app.chat_widget.composer_text_with_pending(), "");

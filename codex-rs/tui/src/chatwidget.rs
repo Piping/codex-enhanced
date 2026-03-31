@@ -4743,7 +4743,7 @@ impl ChatWidget {
             return true;
         }
 
-        let message = "Ctrl-X R is disabled while a task is in progress.".to_string();
+        let message = "Ctrl-X Ctrl-R is disabled while a task is in progress.".to_string();
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
         false

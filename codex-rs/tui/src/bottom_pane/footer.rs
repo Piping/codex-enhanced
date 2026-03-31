@@ -1061,7 +1061,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         bindings: &[ShortcutBinding {
             key: key_hint::ctrl(KeyCode::Char('x')),
             condition: DisplayCondition::Always,
-            display_label: Some("ctrl + x then u"),
+            display_label: Some("ctrl + x then ctrl + u"),
         }],
         prefix: "",
         label: " to undo last message",
@@ -1071,7 +1071,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         bindings: &[ShortcutBinding {
             key: key_hint::ctrl(KeyCode::Char('x')),
             condition: DisplayCondition::Always,
-            display_label: Some("ctrl + x then y"),
+            display_label: Some("ctrl + x then ctrl + y"),
         }],
         prefix: "",
         label: " to copy last output",
@@ -1081,7 +1081,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         bindings: &[ShortcutBinding {
             key: key_hint::ctrl(KeyCode::Char('x')),
             condition: DisplayCondition::Always,
-            display_label: Some("ctrl + x then r"),
+            display_label: Some("ctrl + x then ctrl + r"),
         }],
         prefix: "",
         label: " to restart Codex",
