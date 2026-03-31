@@ -1574,6 +1574,34 @@ fn web_search_mode_disabled_overrides_legacy_request() {
 }
 
 #[test]
+fn prompt_cache_mode_defaults_to_enabled_if_unset() {
+    let cfg = ConfigToml::default();
+    let profile = ConfigProfile::default();
+
+    assert_eq!(
+        resolve_prompt_cache_mode(&cfg, &profile),
+        PromptCacheMode::Enabled
+    );
+}
+
+#[test]
+fn prompt_cache_mode_prefers_profile_over_base_config() {
+    let cfg = ConfigToml {
+        prompt_cache: Some(PromptCacheMode::Enabled),
+        ..Default::default()
+    };
+    let profile = ConfigProfile {
+        prompt_cache: Some(PromptCacheMode::Disabled),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        resolve_prompt_cache_mode(&cfg, &profile),
+        PromptCacheMode::Disabled
+    );
+}
+
+#[test]
 fn web_search_mode_for_turn_uses_preference_for_read_only() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
     let mode =
@@ -4510,6 +4538,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             forced_login_method: None,
             include_apply_patch_tool: false,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
+            prompt_cache_mode: PromptCacheMode::Enabled,
             web_search_config: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
@@ -4655,6 +4684,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         forced_login_method: None,
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
+        prompt_cache_mode: PromptCacheMode::Enabled,
         web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
@@ -4798,6 +4828,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         forced_login_method: None,
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
+        prompt_cache_mode: PromptCacheMode::Enabled,
         web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
@@ -4927,6 +4958,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         forced_login_method: None,
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
+        prompt_cache_mode: PromptCacheMode::Enabled,
         web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,

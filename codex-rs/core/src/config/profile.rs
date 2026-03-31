@@ -9,6 +9,7 @@ use crate::config::types::Personality;
 use crate::config::types::WindowsToml;
 use crate::protocol::AskForApproval;
 use codex_features::FeaturesToml;
+use codex_protocol::config_types::PromptCacheMode;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::ServiceTier;
@@ -63,6 +64,7 @@ pub struct ConfigProfile {
     #[schemars(schema_with = "crate::config::schema::features_schema")]
     pub features: Option<FeaturesToml>,
     pub oss_provider: Option<String>,
+    pub prompt_cache: Option<PromptCacheMode>,
 }
 
 impl From<ConfigProfile> for codex_app_server_protocol::Profile {

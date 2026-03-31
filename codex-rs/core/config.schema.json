@@ -575,6 +575,9 @@
         "plan_mode_reasoning_effort": {
           "$ref": "#/definitions/ReasoningEffort"
         },
+        "prompt_cache": {
+          "$ref": "#/definitions/PromptCacheMode"
+        },
         "sandbox_mode": {
           "$ref": "#/definitions/SandboxMode"
         },
@@ -1259,6 +1262,13 @@
         }
       },
       "type": "object"
+    },
+    "PromptCacheMode": {
+      "enum": [
+        "disabled",
+        "enabled"
+      ],
+      "type": "string"
     },
     "RawMcpServerConfig": {
       "additionalProperties": {
@@ -2508,6 +2518,14 @@
         "$ref": "#/definitions/ProjectConfig"
       },
       "type": "object"
+    },
+    "prompt_cache": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/PromptCacheMode"
+        }
+      ],
+      "description": "Controls whether Codex sends prompt cache keys to the Responses API."
     },
     "realtime": {
       "allOf": [
