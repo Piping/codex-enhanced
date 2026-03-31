@@ -1152,7 +1152,7 @@ mod tests {
                     SelectionItem {
                         name: "Primary".to_string(),
                         description: Some(
-                            "pri***@example.com · plus · 5h 12/80 · week 34/240".to_string(),
+                            "pri***@example.com · plus · 5h 68/80 · week 206/240".to_string(),
                         ),
                         is_current: true,
                         dismiss_on_select: true,

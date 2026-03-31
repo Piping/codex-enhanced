@@ -2686,7 +2686,7 @@ async fn rate_limit_snapshot_persists_managed_account_pool_state() {
     assert_eq!(state.accounts[0].plan_label, Some("pro".to_string()));
     assert_eq!(
         state.accounts[0].usage_summary(),
-        Some("5h 87/100".to_string())
+        Some("5h 13/100".to_string())
     );
 }
 

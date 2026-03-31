@@ -1,5 +1,6 @@
 ---
 source: tui_app_server/src/bottom_pane/list_selection_view.rs
+assertion_line: 1562
 expression: render_lines(&view)
 ---
                                                 
@@ -7,8 +8,8 @@ expression: render_lines(&view)
   2 account(s) configured. Active: workspace-1  
                                                 
 › 1. Primary (current)  pri***@example.com ·    
-                        plus · 5h 12/80 · week  
-                        34/240                  
+                        plus · 5h 68/80 · week  
+                        206/240                 
   2. Backup             bac***@example.com ·    
                         pro · invalid:          
                         deactivated workspace   

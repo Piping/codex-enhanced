@@ -401,7 +401,11 @@ fn usage_summary_from_windows(windows: &[AccountUsageWindow]) -> Option<String> 
                 AccountUsageWindowKind::Custom => window.label.as_str(),
             };
             match window.estimated_limit_units {
-                Some(limit) => format!("{prefix} {}/{}", window.estimated_used_units, limit),
+                Some(limit) => {
+                    let remaining_units =
+                        limit.saturating_sub(window.estimated_used_units.min(limit));
+                    format!("{prefix} {remaining_units}/{limit}")
+                }
                 None => format!("{prefix} {}", window.estimated_used_units),
             }
         })
@@ -534,6 +538,10 @@ mod tests {
                 reset_at: Some(123),
                 source: UsageEstimateSource::ResponseErrorInference,
             }]
+        );
+        assert_eq!(
+            state.accounts[0].usage_summary(),
+            Some("5h 55/100".to_string())
         );
     }
 }
