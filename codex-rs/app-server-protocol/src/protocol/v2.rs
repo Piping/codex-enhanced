@@ -19,7 +19,6 @@ use codex_protocol::config_types::CollaborationModeMask as CoreCollaborationMode
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
-use codex_protocol::config_types::PromptCacheMode;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode as CoreSandboxMode;
 use codex_protocol::config_types::ServiceTier;
@@ -634,7 +633,6 @@ pub struct ProfileV2 {
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     pub web_search: Option<WebSearchMode>,
-    pub prompt_cache: Option<PromptCacheMode>,
     pub tools: Option<ToolsV2>,
     pub chatgpt_base_url: Option<String>,
     #[serde(default, flatten)]
@@ -738,7 +736,6 @@ pub struct Config {
     pub forced_chatgpt_workspace_id: Option<String>,
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub web_search: Option<WebSearchMode>,
-    pub prompt_cache: Option<PromptCacheMode>,
     pub tools: Option<ToolsV2>,
     pub profile: Option<String>,
     #[experimental(nested)]
@@ -7045,7 +7042,6 @@ mod tests {
             model_reasoning_summary: None,
             model_verbosity: None,
             web_search: None,
-            prompt_cache: None,
             tools: None,
             chatgpt_base_url: None,
             additional: HashMap::new(),
@@ -7075,7 +7071,6 @@ mod tests {
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             web_search: None,
-            prompt_cache: None,
             tools: None,
             profile: None,
             profiles: HashMap::new(),
@@ -7109,7 +7104,6 @@ mod tests {
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             web_search: None,
-            prompt_cache: None,
             tools: None,
             profile: None,
             profiles: HashMap::new(),
@@ -7143,7 +7137,6 @@ mod tests {
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             web_search: None,
-            prompt_cache: None,
             tools: None,
             profile: None,
             profiles: HashMap::from([(
@@ -7164,7 +7157,6 @@ mod tests {
                     model_reasoning_summary: None,
                     model_verbosity: None,
                     web_search: None,
-                    prompt_cache: None,
                     tools: None,
                     chatgpt_base_url: None,
                     additional: HashMap::new(),
@@ -7200,7 +7192,6 @@ mod tests {
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             web_search: None,
-            prompt_cache: None,
             tools: None,
             profile: None,
             profiles: HashMap::from([(
@@ -7215,7 +7206,6 @@ mod tests {
                     model_reasoning_summary: None,
                     model_verbosity: None,
                     web_search: None,
-                    prompt_cache: None,
                     tools: None,
                     chatgpt_base_url: None,
                     additional: HashMap::new(),

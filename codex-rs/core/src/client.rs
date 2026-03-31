@@ -137,7 +137,6 @@ struct ModelClientState {
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
     model_verbosity: Option<VerbosityConfig>,
-    prompt_cache_enabled: bool,
     enable_request_compression: bool,
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
@@ -258,7 +257,6 @@ impl ModelClient {
         provider: ModelProviderInfo,
         session_source: SessionSource,
         model_verbosity: Option<VerbosityConfig>,
-        prompt_cache_enabled: bool,
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
@@ -275,7 +273,6 @@ impl ModelClient {
                 auth_env_telemetry,
                 session_source,
                 model_verbosity,
-                prompt_cache_enabled,
                 enable_request_compression,
                 include_timing_metrics,
                 beta_features_header,
@@ -727,11 +724,7 @@ impl ModelClientSession {
             None
         };
         let text = create_text_param_for_request(verbosity, &prompt.output_schema);
-        let prompt_cache_key = self
-            .client
-            .state
-            .prompt_cache_enabled
-            .then(|| self.client.state.conversation_id.to_string());
+        let prompt_cache_key = Some(self.client.state.conversation_id.to_string());
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
             instructions: instructions.clone(),

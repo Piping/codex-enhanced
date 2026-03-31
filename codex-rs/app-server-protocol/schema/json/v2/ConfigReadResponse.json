@@ -324,16 +324,6 @@
           "default": {},
           "type": "object"
         },
-        "prompt_cache": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/PromptCacheMode"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "review_model": {
           "type": [
             "string",
@@ -666,16 +656,6 @@
             }
           ]
         },
-        "prompt_cache": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/PromptCacheMode"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "service_tier": {
           "anyOf": [
             {
@@ -708,13 +688,6 @@
         }
       },
       "type": "object"
-    },
-    "PromptCacheMode": {
-      "enum": [
-        "disabled",
-        "enabled"
-      ],
-      "type": "string"
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",

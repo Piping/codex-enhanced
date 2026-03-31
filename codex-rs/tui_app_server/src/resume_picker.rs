@@ -649,8 +649,8 @@ impl PickerState {
                     self.request_frame();
                 }
             }
-            KeyCode::PageDown
-                if !self.filtered_rows.is_empty() => {
+            KeyCode::PageDown => {
+                if !self.filtered_rows.is_empty() {
                     let step = self.view_rows.unwrap_or(10).max(1);
                     let max_index = self.filtered_rows.len().saturating_sub(1);
                     self.selected = (self.selected + step).min(max_index);
@@ -658,6 +658,7 @@ impl PickerState {
                     self.maybe_load_more_for_scroll();
                     self.request_frame();
                 }
+            }
             KeyCode::Tab => {
                 self.toggle_sort_key();
                 self.request_frame();
@@ -667,17 +668,18 @@ impl PickerState {
                 new_query.pop();
                 self.set_query(new_query);
             }
-            KeyCode::Char(c)
+            KeyCode::Char(c) => {
                 // basic text input for search
                 if !key
                     .modifiers
                     .contains(crossterm::event::KeyModifiers::CONTROL)
                     && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT)
-                => {
+                {
                     let mut new_query = self.query.clone();
                     new_query.push(c);
                     self.set_query(new_query);
                 }
+            }
             _ => {}
         }
         Ok(None)

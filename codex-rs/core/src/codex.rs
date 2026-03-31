@@ -358,7 +358,6 @@ use codex_otel::TelemetryAuthMode;
 use codex_otel::metrics::names::THREAD_STARTED_METRIC;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
-use codex_protocol::config_types::PromptCacheMode;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -1886,7 +1885,6 @@ impl Session {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
-                config.prompt_cache_mode != PromptCacheMode::Disabled,
                 config.features.enabled(Feature::EnableRequestCompression),
                 config.features.enabled(Feature::RuntimeMetrics),
                 Self::build_model_client_beta_features_header(config.as_ref()),
@@ -7430,11 +7428,7 @@ async fn try_run_sampling_request(
                             .await;
                     }
                 } else {
-                    tracing::warn!(
-                        thread_id = %sess.conversation_id,
-                        turn_id = %turn_context.sub_id,
-                        "dropping output text delta without active item"
-                    );
+                    error_or_panic("OutputTextDelta without active item".to_string());
                 }
             }
             ResponseEvent::ReasoningSummaryDelta {
@@ -7452,12 +7446,7 @@ async fn try_run_sampling_request(
                     sess.send_event(&turn_context, EventMsg::ReasoningContentDelta(event))
                         .await;
                 } else {
-                    tracing::warn!(
-                        thread_id = %sess.conversation_id,
-                        turn_id = %turn_context.sub_id,
-                        summary_index,
-                        "dropping reasoning summary delta without active item"
-                    );
+                    error_or_panic("ReasoningSummaryDelta without active item".to_string());
                 }
             }
             ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
@@ -7469,12 +7458,7 @@ async fn try_run_sampling_request(
                         });
                     sess.send_event(&turn_context, event).await;
                 } else {
-                    tracing::warn!(
-                        thread_id = %sess.conversation_id,
-                        turn_id = %turn_context.sub_id,
-                        summary_index,
-                        "dropping reasoning summary part without active item"
-                    );
+                    error_or_panic("ReasoningSummaryPartAdded without active item".to_string());
                 }
             }
             ResponseEvent::ReasoningContentDelta {
@@ -7492,12 +7476,7 @@ async fn try_run_sampling_request(
                     sess.send_event(&turn_context, EventMsg::ReasoningRawContentDelta(event))
                         .await;
                 } else {
-                    tracing::warn!(
-                        thread_id = %sess.conversation_id,
-                        turn_id = %turn_context.sub_id,
-                        content_index,
-                        "dropping reasoning raw content delta without active item"
-                    );
+                    error_or_panic("ReasoningRawContentDelta without active item".to_string());
                 }
             }
         }

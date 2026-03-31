@@ -6,7 +6,6 @@ use codex_core::shell::default_user_shell;
 use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::PromptCacheMode;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
@@ -642,41 +641,6 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
         user_texts.contains(&"first message"),
         "expected user message text, got {user_texts:?}"
     );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn disabled_prompt_cache_omits_prompt_cache_key() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let req = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
-    )
-    .await;
-
-    let TestCodex { codex, .. } = test_codex()
-        .with_config(|config| {
-            config.prompt_cache_mode = PromptCacheMode::Disabled;
-        })
-        .build(&server)
-        .await?;
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-        })
-        .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    let body = req.single_request().body_json();
-    assert_eq!(body["prompt_cache_key"], serde_json::Value::Null);
 
     Ok(())
 }

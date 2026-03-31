@@ -3034,16 +3034,6 @@
           "default": {},
           "type": "object"
         },
-        "prompt_cache": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/PromptCacheMode"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "review_model": {
           "type": [
             "string",
@@ -6733,16 +6723,6 @@
             }
           ]
         },
-        "prompt_cache": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/PromptCacheMode"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "service_tier": {
           "anyOf": [
             {
@@ -6775,13 +6755,6 @@
         }
       },
       "type": "object"
-    },
-    "PromptCacheMode": {
-      "enum": [
-        "disabled",
-        "enabled"
-      ],
-      "type": "string"
     },
     "RateLimitSnapshot": {
       "properties": {

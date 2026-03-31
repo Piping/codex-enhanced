@@ -71,7 +71,6 @@ use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
-use codex_protocol::config_types::PromptCacheMode;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::ServiceTier;
@@ -557,9 +556,6 @@ pub struct Config {
 
     /// Explicit or feature-derived web search mode.
     pub web_search_mode: Constrained<WebSearchMode>,
-
-    /// Controls whether Codex sends a stable prompt cache key with Responses API requests.
-    pub prompt_cache_mode: PromptCacheMode,
 
     /// Additional parameters for the web search tool when it is enabled.
     pub web_search_config: Option<WebSearchConfig>,
@@ -1343,9 +1339,6 @@ pub struct ConfigToml {
     /// Controls the web search tool mode: disabled, cached, or live.
     pub web_search: Option<WebSearchMode>,
 
-    /// Controls whether Codex sends prompt cache keys to the Responses API.
-    pub prompt_cache: Option<PromptCacheMode>,
-
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
 
@@ -1931,16 +1924,6 @@ fn resolve_web_search_mode(
     None
 }
 
-fn resolve_prompt_cache_mode(
-    config_toml: &ConfigToml,
-    config_profile: &ConfigProfile,
-) -> PromptCacheMode {
-    config_profile
-        .prompt_cache
-        .or(config_toml.prompt_cache)
-        .unwrap_or_default()
-}
-
 fn resolve_web_search_config(
     config_toml: &ConfigToml,
     config_profile: &ConfigProfile,
@@ -2276,7 +2259,6 @@ impl Config {
             .unwrap_or(ApprovalsReviewer::User);
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
             .unwrap_or(WebSearchMode::Cached);
-        let prompt_cache_mode = resolve_prompt_cache_mode(&cfg, &config_profile);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
 
         let agent_roles =
@@ -2703,7 +2685,6 @@ impl Config {
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
             web_search_mode: constrained_web_search_mode.value,
-            prompt_cache_mode,
             web_search_config,
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,

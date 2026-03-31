@@ -51,7 +51,6 @@ export type { NetworkPolicyRuleAction } from "./NetworkPolicyRuleAction";
 export type { ParsedCommand } from "./ParsedCommand";
 export type { Personality } from "./Personality";
 export type { PlanType } from "./PlanType";
-export type { PromptCacheMode } from "./PromptCacheMode";
 export type { RealtimeConversationVersion } from "./RealtimeConversationVersion";
 export type { ReasoningEffort } from "./ReasoningEffort";
 export type { ReasoningItemContent } from "./ReasoningItemContent";
