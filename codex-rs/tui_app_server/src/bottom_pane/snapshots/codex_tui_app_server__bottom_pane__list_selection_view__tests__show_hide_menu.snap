@@ -3,38 +3,51 @@ source: tui_app_server/src/bottom_pane/list_selection_view.rs
 expression: render_lines(&view)
 ---
                                                 
-  Show / Hide UI                                
-  These toggles only affect this TUI session.   
+  UI                                            
+  These settings only affect local TUI renderi  
                                                 
-› 1. Show Raw Thinking       Currently hidden.  
-                             Reveal raw         
-                             reasoning text in  
-                             this TUI only.     
-  2. Hide Startup Tooltips   Currently          
-                             visible. Hide      
-                             welcome and        
-                             session tooltip    
-                             hints.             
-  3. Hide Tool Results       Currently          
-                             visible. Keep      
-                             tool invocations   
-                             but collapse       
-                             result details.    
-  4. Hide Command Execution  Currently          
-                             visible. Hide      
-                             command execution  
-                             cells and keep     
-                             model replies.     
-  5. Hide Waited Messages    Currently          
-                             visible. Hide      
-                             'Waited for ...'   
-                             background         
-                             terminal           
-                             messages.          
-  6. Hide Patch / Edit Diff  Currently          
-                             visible. Collapse  
-                             patch and edit     
-                             diff summaries.    
+›    Text Accent Color (disabled)Planned local  
+                                TUI text-       
+                                accent palette  
+                                control. Not    
+                                wired yet.      
+                                (disabled:      
+                                WIP)            
+  2. Show Raw Thinking          Currently       
+                                hidden. Reveal  
+                                raw reasoning   
+                                text in this    
+                                TUI only.       
+  3. Hide Startup Tooltips      Currently       
+                                visible. Hide   
+                                welcome and     
+                                session         
+                                tooltip hints.  
+  4. Hide Tool Results          Currently       
+                                visible. Keep   
+                                tool            
+                                invocations     
+                                but collapse    
+                                result          
+                                details.        
+  5. Hide Command Execution     Currently       
+                                visible. Hide   
+                                command         
+                                execution       
+                                cells and keep  
+                                model replies.  
+  6. Hide Waited Messages       Currently       
+                                visible. Hide   
+                                'Waited         
+                                for ...'        
+                                background      
+                                terminal        
+                                messages.       
+  7. Hide Patch / Edit Diff     Currently       
+                                visible.        
+                                Collapse patch  
+                                and edit diff   
+                                summaries.      
                                                 
   Model context and persisted rollout history   
   are unchanged.                                

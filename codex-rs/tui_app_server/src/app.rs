@@ -2835,8 +2835,8 @@ impl App {
     ) -> SelectionViewParams {
         SelectionViewParams {
             view_id: Some("fork-display-preferences-panel"),
-            title: Some("Show / Hide UI".to_string()),
-            subtitle: Some("These toggles only affect this TUI session.".to_string()),
+            title: Some("UI".to_string()),
+            subtitle: Some("These settings only affect local TUI rendering.".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
             footer_note: Some(
                 "Model context and persisted rollout history are unchanged."

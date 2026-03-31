@@ -5,10 +5,10 @@ use crate::display_preferences::DisplayPreferences;
 
 pub(crate) fn control_panel_show_hide_item() -> SelectionItem {
     SelectionItem {
-        name: "Show / Hide UI".to_string(),
+        name: "UI".to_string(),
         description: None,
         selected_description: Some(
-            "Toggle local TUI-only transcript and UI visibility settings.".to_string(),
+            "Configure local TUI-only transcript visibility and pending UI settings.".to_string(),
         ),
         actions: vec![Box::new(|tx| {
             tx.send(AppEvent::OpenDisplayPreferencesPanel)
@@ -21,17 +21,34 @@ pub(crate) fn control_panel_show_hide_item() -> SelectionItem {
 pub(crate) fn display_preferences_items(
     display_preferences: &DisplayPreferences,
 ) -> Vec<SelectionItem> {
-    [
-        DisplayPreferenceKey::RawThinking,
-        DisplayPreferenceKey::StartupTooltips,
-        DisplayPreferenceKey::ToolResults,
-        DisplayPreferenceKey::ExecCommands,
-        DisplayPreferenceKey::WaitedMessages,
-        DisplayPreferenceKey::PatchDiffs,
-    ]
-    .into_iter()
-    .map(|key| display_preference_item(display_preferences, key))
-    .collect()
+    std::iter::once(text_accent_color_wip_item())
+        .chain(
+            [
+                DisplayPreferenceKey::RawThinking,
+                DisplayPreferenceKey::StartupTooltips,
+                DisplayPreferenceKey::ToolResults,
+                DisplayPreferenceKey::ExecCommands,
+                DisplayPreferenceKey::WaitedMessages,
+                DisplayPreferenceKey::PatchDiffs,
+            ]
+            .into_iter()
+            .map(|key| display_preference_item(display_preferences, key)),
+        )
+        .collect()
+}
+
+fn text_accent_color_wip_item() -> SelectionItem {
+    SelectionItem {
+        name: "Text Accent Color".to_string(),
+        description: Some("WIP. Accent palette remapping is not available yet.".to_string()),
+        selected_description: Some(
+            "Planned local TUI text-accent palette control. Not wired yet.".to_string(),
+        ),
+        is_disabled: true,
+        disabled_reason: Some("WIP".to_string()),
+        dismiss_on_select: false,
+        ..Default::default()
+    }
 }
 
 fn display_preference_item(

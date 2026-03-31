@@ -6,12 +6,12 @@ expression: render_lines(&view)
   Control Panel                                 
   6 features available.                         
                                                 
-› 1. Accounts        Inspect the managed        
-                     multi-account pool.        
+› 1. Accounts      Inspect the managed multi-   
+                   account pool.                
   2. Sessions                                   
   3. Clawbot                                    
   4. Thread                                     
   5. Loop Manager                               
-  6. Show / Hide UI                             
+  6. UI                                         
                                                 
   Press enter to confirm or esc to go back

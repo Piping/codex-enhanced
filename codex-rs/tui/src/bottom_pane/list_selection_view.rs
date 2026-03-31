@@ -1334,10 +1334,10 @@ mod tests {
                         ..Default::default()
                     },
                     SelectionItem {
-                        name: "Show / Hide UI".to_string(),
+                        name: "UI".to_string(),
                         description: None,
                         selected_description: Some(
-                            "Toggle local TUI-only transcript and UI visibility settings."
+                            "Configure local TUI-only transcript visibility and pending UI settings."
                                 .to_string(),
                         ),
                         dismiss_on_select: false,
@@ -1832,8 +1832,8 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         ListSelectionView::new(
             SelectionViewParams {
-                title: Some("Show / Hide UI".to_string()),
-                subtitle: Some("These toggles only affect this TUI session.".to_string()),
+                title: Some("UI".to_string()),
+                subtitle: Some("These settings only affect local TUI rendering.".to_string()),
                 footer_hint: Some(standard_popup_hint_line()),
                 footer_note: Some(
                     "Model context and persisted rollout history are unchanged."
@@ -1841,6 +1841,20 @@ mod tests {
                         .into(),
                 ),
                 items: vec![
+                    SelectionItem {
+                        name: "Text Accent Color".to_string(),
+                        description: Some(
+                            "WIP. Accent palette remapping is not available yet.".to_string(),
+                        ),
+                        selected_description: Some(
+                            "Planned local TUI text-accent palette control. Not wired yet."
+                                .to_string(),
+                        ),
+                        is_disabled: true,
+                        disabled_reason: Some("WIP".to_string()),
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    },
                     SelectionItem {
                         name: "Show Raw Thinking".to_string(),
                         description: Some(
