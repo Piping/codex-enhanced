@@ -13,7 +13,9 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
+use crate::chatwidget::ProfileFallbackAction;
 use crate::chatwidget::ThreadInputState;
+use crate::chatwidget::profile_fallback_action;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::display_preferences::DisplayPreferences;
@@ -51,7 +53,11 @@ use chrono::Utc;
 use codex_accounts::AccountPoolStore;
 use codex_accounts::AccountRateLimitSnapshot;
 use codex_accounts::AccountRateLimitWindow;
+use codex_accounts::DefaultProfileRouter;
 use codex_accounts::ManagedAccountAuthStore;
+use codex_accounts::ProfileRouterStore;
+use codex_accounts::ProfileRoutingTrigger;
+use codex_accounts::RouteProfileRequest;
 use codex_accounts::activate_managed_account;
 use codex_accounts::load_current_managed_account_snapshot;
 use codex_accounts::persist_current_managed_account_snapshot;
@@ -1030,6 +1036,7 @@ pub(crate) struct App {
     clawbot_provider_tasks: HashMap<ProviderKind, JoinHandle<()>>,
     clawbot_thread_history_cells: HashMap<ThreadId, Vec<Arc<dyn HistoryCell>>>,
     clawbot_pending_turns: HashMap<ThreadId, VecDeque<PendingClawbotTurn>>,
+    pending_api_profile_draft: PendingApiProfileDraft,
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
@@ -1039,6 +1046,25 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
+}
+
+#[derive(Clone, Debug)]
+struct ConfiguredProfileSummary {
+    id: String,
+    model: Option<String>,
+    provider_id: String,
+    provider_name: String,
+    base_url: Option<String>,
+    direct_bearer_token: Option<String>,
+    env_key: Option<String>,
+    requires_openai_auth: bool,
+    shared_provider: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+struct PendingApiProfileDraft {
+    profile_id: Option<String>,
+    endpoint: Option<String>,
 }
 
 #[derive(Default)]
@@ -2368,23 +2394,277 @@ impl App {
         });
     }
 
+    fn profile_router_store(&self) -> ProfileRouterStore {
+        ProfileRouterStore::new(self.config.codex_home.clone())
+    }
+
+    fn configured_profile_summaries(&self) -> Vec<ConfiguredProfileSummary> {
+        let effective_config = self.config.config_layer_stack.effective_config();
+        let Some(table) = effective_config.as_table() else {
+            return Vec::new();
+        };
+        let root_model = table
+            .get("model")
+            .and_then(TomlValue::as_str)
+            .map(ToOwned::to_owned);
+        let root_provider_id = table
+            .get("model_provider")
+            .and_then(TomlValue::as_str)
+            .unwrap_or(self.config.model_provider_id.as_str());
+        let Some(profiles) = table.get("profiles").and_then(TomlValue::as_table) else {
+            return Vec::new();
+        };
+        let provider_ref_counts = profiles
+            .values()
+            .filter_map(TomlValue::as_table)
+            .filter_map(|profile| {
+                profile
+                    .get("model_provider")
+                    .and_then(TomlValue::as_str)
+                    .or(Some(root_provider_id))
+            })
+            .fold(
+                HashMap::<String, usize>::new(),
+                |mut counts, provider_id| {
+                    *counts.entry(provider_id.to_string()).or_default() += 1;
+                    counts
+                },
+            );
+
+        let mut profile_ids = profiles.keys().cloned().collect::<Vec<_>>();
+        profile_ids.sort();
+        profile_ids
+            .into_iter()
+            .map(|id| {
+                let profile = profiles.get(&id).and_then(TomlValue::as_table);
+                let provider_id = profile
+                    .and_then(|profile| profile.get("model_provider"))
+                    .and_then(TomlValue::as_str)
+                    .unwrap_or(root_provider_id)
+                    .to_string();
+                let model = profile
+                    .and_then(|profile| profile.get("model"))
+                    .and_then(TomlValue::as_str)
+                    .map(ToOwned::to_owned)
+                    .or_else(|| root_model.clone());
+                let (provider_name, base_url, direct_bearer_token, env_key, requires_openai_auth) =
+                    if provider_id == self.config.model_provider_id {
+                        (
+                            self.config.model_provider.name.clone(),
+                            self.config.model_provider.base_url.clone(),
+                            self.config.model_provider.experimental_bearer_token.clone(),
+                            self.config.model_provider.env_key.clone(),
+                            self.config.model_provider.requires_openai_auth,
+                        )
+                    } else if let Some(provider) = self.config.model_providers.get(&provider_id) {
+                        (
+                            provider.name.clone(),
+                            provider.base_url.clone(),
+                            provider.experimental_bearer_token.clone(),
+                            provider.env_key.clone(),
+                            provider.requires_openai_auth,
+                        )
+                    } else {
+                        (provider_id.clone(), None, None, None, false)
+                    };
+
+                ConfiguredProfileSummary {
+                    id,
+                    model,
+                    provider_id: provider_id.clone(),
+                    provider_name,
+                    base_url,
+                    direct_bearer_token,
+                    env_key,
+                    requires_openai_auth,
+                    shared_provider: provider_ref_counts.get(&provider_id).copied().unwrap_or(0)
+                        > 1,
+                }
+            })
+            .collect()
+    }
+
+    fn configured_profile_summary(&self, profile_id: &str) -> Option<ConfiguredProfileSummary> {
+        self.configured_profile_summaries()
+            .into_iter()
+            .find(|profile| profile.id == profile_id)
+    }
+
     fn open_accounts_panel(&mut self) {
         let view_id = "fork-accounts-panel";
         let initial_selected_idx = self.chat_widget.selected_index_for_active_view(view_id);
-        let store = AccountPoolStore::new(self.config.codex_home.clone());
-        let path = store.path();
-        let state = self.sync_current_auth_into_account_pool(&store);
+        let account_store = AccountPoolStore::new(self.config.codex_home.clone());
+        let account_path = account_store.path();
+        let account_state = self.sync_current_auth_into_account_pool(&account_store);
+        let router_store = self.profile_router_store();
+        let router_path = router_store.path();
+        let router_state = router_store.load().unwrap_or_default();
+        let profiles = self.configured_profile_summaries();
         let mut items = Vec::new();
-        let subtitle = match &state {
-            Ok(state) => Some(format!(
-                "{} account(s) configured. Active: {}.",
-                state.accounts.len(),
-                state.active_account_id.as_deref().unwrap_or("none")
-            )),
-            Err(err) => Some(format!("Failed to read account pool: {err}")),
+        let account_count = account_state
+            .as_ref()
+            .map_or(0, |state| state.accounts.len());
+        let subtitle = Some(format!(
+            "{} profile(s) from config.toml · {} routed · {} OAuth account(s).",
+            profiles.len(),
+            router_state.routes.len(),
+            account_count
+        ));
+        let config_path = self.config.codex_home.join("config.toml");
+        let active_profile = self.active_profile.as_deref().unwrap_or("default");
+        let active_subscription = match &account_state {
+            Ok(state) if self.config.model_provider.requires_openai_auth => state
+                .active_account_id
+                .as_deref()
+                .and_then(|account_id| {
+                    state
+                        .accounts
+                        .iter()
+                        .find(|account| account.id == account_id)
+                        .map(|account| account.display_name().to_string())
+                })
+                .unwrap_or_else(|| "none".to_string()),
+            Ok(_) => "direct api".to_string(),
+            Err(_) => "unavailable".to_string(),
         };
 
-        match state {
+        items.push(SelectionItem {
+            name: "Active".to_string(),
+            description: Some(format!(
+                "profile: {active_profile} · subscription: {active_subscription}"
+            )),
+            is_disabled: true,
+            ..Default::default()
+        });
+        items.push(SelectionItem {
+            name: "API".to_string(),
+            description: Some(format!("{} profile(s)", profiles.len())),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenApiProfilesPanel))],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+        items.push(SelectionItem {
+            name: "Subscriptions".to_string(),
+            description: Some(match &account_state {
+                Ok(state) => format!("{} OAuth account(s)", state.accounts.len()),
+                Err(err) => format!("unavailable: {err}"),
+            }),
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSubscriptionsPanel))],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            view_id: Some(view_id),
+            title: Some("Accounts".to_string()),
+            subtitle,
+            footer_hint: Some(standard_popup_hint_line()),
+            footer_path: Some(format!(
+                "{} · {} · {}",
+                config_path.display(),
+                router_path.display(),
+                account_path.display()
+            )),
+            initial_selected_idx,
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn open_api_profiles_panel(&mut self) {
+        let profiles = self.configured_profile_summaries();
+        let router_state = self.profile_router_store().load().unwrap_or_default();
+        let mut items = Vec::new();
+
+        if profiles.is_empty() {
+            items.push(SelectionItem {
+                name: "No API profiles yet".to_string(),
+                description: Some("Create one here or add profiles in config.toml.".to_string()),
+                is_disabled: true,
+                ..Default::default()
+            });
+        } else {
+            for profile in &profiles {
+                let profile_id = profile.id.clone();
+                let route_position = router_state
+                    .routes
+                    .iter()
+                    .position(|route| route.profile_id == profile.id)
+                    .map(|index| index + 1);
+                let mut description_parts = vec![format!("provider: {}", profile.provider_name)];
+                if let Some(endpoint) = &profile.base_url {
+                    description_parts.push(endpoint.clone());
+                }
+                if let Some(model) = &profile.model {
+                    description_parts.push(format!("model: {model}"));
+                }
+                description_parts.push(match (&profile.direct_bearer_token, &profile.env_key) {
+                    (Some(_), _) => "key: stored".to_string(),
+                    (None, Some(env_key)) => format!("key env: {env_key}"),
+                    (None, None) => "key: unset".to_string(),
+                });
+                description_parts.push(
+                    route_position
+                        .map(|position| format!("route #{position}"))
+                        .unwrap_or_else(|| "not in route".to_string()),
+                );
+                if profile.shared_provider {
+                    description_parts.push("shared provider".to_string());
+                }
+                items.push(SelectionItem {
+                    name: profile.id.clone(),
+                    description: Some(description_parts.join(" · ")),
+                    is_current: self.active_profile.as_deref() == Some(profile.id.as_str()),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::OpenApiProfileActions {
+                            profile_id: profile_id.clone(),
+                        });
+                    })],
+                    dismiss_on_select: true,
+                    search_value: Some(format!(
+                        "{} {} {} {}",
+                        profile.id,
+                        profile.provider_id,
+                        profile.provider_name,
+                        profile.base_url.clone().unwrap_or_default()
+                    )),
+                    ..Default::default()
+                });
+            }
+        }
+        items.push(SelectionItem {
+            name: "Create API Profile".to_string(),
+            description: Some(
+                "Create a new profile with endpoint and direct bearer token.".to_string(),
+            ),
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenCreateApiProfileNamePrompt)
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            view_id: Some("fork-api-profiles-panel"),
+            title: Some("API".to_string()),
+            subtitle: Some("Profiles from config.toml.".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn open_subscriptions_panel(&mut self) {
+        let account_store = AccountPoolStore::new(self.config.codex_home.clone());
+        let account_path = account_store.path();
+        let account_state = self.sync_current_auth_into_account_pool(&account_store);
+        let mut items = Vec::new();
+        let subtitle = match &account_state {
+            Ok(state) => Some(format!("{} OAuth account(s).", state.accounts.len())),
+            Err(err) => Some(format!("Failed to read OAuth account pool: {err}")),
+        };
+
+        match account_state {
             Ok(state) => {
                 let active_account_id = state.active_account_id.clone();
                 let live_usage_summary = self
@@ -2417,12 +2697,6 @@ impl App {
                     }
 
                     let account_id = account.id.clone();
-                    let search_value = format!(
-                        "{} {} {}",
-                        account.display_name(),
-                        account.id,
-                        account.masked_email.clone().unwrap_or_default()
-                    );
                     items.push(SelectionItem {
                         name: account.display_name().to_string(),
                         description: (!description_parts.is_empty())
@@ -2434,7 +2708,12 @@ impl App {
                             tx.send(AppEvent::SetManagedAccountActive(account_id.clone()));
                         })],
                         dismiss_on_select: true,
-                        search_value: Some(search_value),
+                        search_value: Some(format!(
+                            "{} {} {}",
+                            account.display_name(),
+                            account.id,
+                            account.masked_email.clone().unwrap_or_default()
+                        )),
                         ..Default::default()
                     });
                 }
@@ -2482,6 +2761,17 @@ impl App {
                         ..Default::default()
                     });
                 }
+                if state.accounts.is_empty() {
+                    items.push(SelectionItem {
+                        name: "No OAuth accounts yet".to_string(),
+                        description: Some(format!(
+                            "Persist ChatGPT auth snapshots into {}.",
+                            account_path.display()
+                        )),
+                        is_disabled: true,
+                        ..Default::default()
+                    });
+                }
             }
             Err(err) => {
                 items.push(SelectionItem {
@@ -2493,25 +2783,662 @@ impl App {
             }
         }
 
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            view_id: Some("fork-subscriptions-panel"),
+            title: Some("Subscriptions".to_string()),
+            subtitle,
+            footer_hint: Some(standard_popup_hint_line()),
+            footer_path: Some(account_path.display().to_string()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn open_api_profile_actions(&mut self, profile_id: String) {
+        let Some(profile) = self.configured_profile_summary(&profile_id) else {
+            self.chat_widget.add_error_message(format!(
+                "Profile `{profile_id}` was not found in config.toml."
+            ));
+            return;
+        };
+        let router_state = self.profile_router_store().load().unwrap_or_default();
+        let route_position = router_state
+            .routes
+            .iter()
+            .position(|route| route.profile_id == profile.id);
+        let mut items = Vec::new();
+        let selected_profile_id = profile.id.clone();
+        items.push(SelectionItem {
+            name: format!("Activate {}", profile.id),
+            description: Some("Switch the current session to this profile.".to_string()),
+            actions: vec![Box::new(move |tx| {
+                tx.send(AppEvent::SetProfileRouteActive(selected_profile_id.clone()));
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        let endpoint_profile_id = profile.id.clone();
+        items.push(SelectionItem {
+            name: "Edit Endpoint".to_string(),
+            description: Some("Change the profile base URL.".to_string()),
+            actions: vec![Box::new({
+                let current_endpoint = profile.base_url.clone().unwrap_or_default();
+                move |tx| {
+                    tx.send(AppEvent::OpenEditApiProfileEndpointPrompt {
+                        profile_id: endpoint_profile_id.clone(),
+                        current_endpoint: current_endpoint.clone(),
+                    });
+                }
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        let key_profile_id = profile.id.clone();
+        items.push(SelectionItem {
+            name: "Edit Key".to_string(),
+            description: Some("Change the stored direct bearer token.".to_string()),
+            actions: vec![Box::new({
+                let current_key = profile.direct_bearer_token.clone().unwrap_or_default();
+                move |tx| {
+                    tx.send(AppEvent::OpenEditApiProfileKeyPrompt {
+                        profile_id: key_profile_id.clone(),
+                        current_key: current_key.clone(),
+                    });
+                }
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        if route_position.is_some() {
+            let profile_id_for_remove = profile.id.clone();
+            items.push(SelectionItem {
+                name: "Remove from Route".to_string(),
+                description: Some(
+                    "Keep the profile in config.toml but remove it from routing.".to_string(),
+                ),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::DeleteProfileRoute(profile_id_for_remove.clone()));
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        } else {
+            let profile_id_for_add = profile.id.clone();
+            items.push(SelectionItem {
+                name: "Add to Route".to_string(),
+                description: Some(
+                    "Include this profile in automatic fallback routing.".to_string(),
+                ),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::AddProfileRoute(profile_id_for_add.clone()));
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
+        if let Some(route_position) = route_position {
+            if route_position > 0 {
+                let profile_id_for_up = profile.id.clone();
+                items.push(SelectionItem {
+                    name: "Move Route Up".to_string(),
+                    description: Some("Try this profile earlier in fallback order.".to_string()),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::MoveProfileRoute {
+                            profile_id: profile_id_for_up.clone(),
+                            move_up: true,
+                        });
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                });
+            }
+            if route_position + 1 < router_state.routes.len() {
+                let profile_id_for_down = profile.id.clone();
+                items.push(SelectionItem {
+                    name: "Move Route Down".to_string(),
+                    description: Some("Try this profile later in fallback order.".to_string()),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::MoveProfileRoute {
+                            profile_id: profile_id_for_down.clone(),
+                            move_up: false,
+                        });
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                });
+            }
+        }
+
+        let delete_profile_id = profile.id.clone();
+        items.push(SelectionItem {
+            name: format!("Delete {}", profile.id),
+            description: Some("Delete this profile from config.toml.".to_string()),
+            actions: vec![Box::new(move |tx| {
+                tx.send(AppEvent::DeleteApiProfile {
+                    profile_id: delete_profile_id.clone(),
+                });
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            view_id: Some("fork-api-profile-actions-panel"),
+            title: Some(format!("API Profile: {}", profile.id)),
+            subtitle: Some(format!(
+                "{} · {}",
+                profile.provider_name,
+                profile
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| "no endpoint".to_string())
+            )),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn editable_api_profile(&self, profile_id: &str) -> Result<ConfiguredProfileSummary, String> {
+        let Some(profile) = self.configured_profile_summary(profile_id) else {
+            return Err(format!(
+                "Profile `{profile_id}` was not found in config.toml."
+            ));
+        };
+        if profile.requires_openai_auth {
+            return Err(format!(
+                "Profile `{profile_id}` uses managed OAuth auth and cannot edit endpoint/key here."
+            ));
+        }
+        if profile.shared_provider {
+            return Err(format!(
+                "Profile `{profile_id}` shares provider `{}` with another profile. Split the provider first, then edit it.",
+                profile.provider_id
+            ));
+        }
+        Ok(profile)
+    }
+
+    async fn refresh_after_api_profile_config_change(
+        &mut self,
+        action: &str,
+    ) -> Result<(), String> {
+        self.refresh_in_memory_config_from_disk()
+            .await
+            .map_err(|err| format!("Failed to reload config after {action}: {err}"))?;
+        self.chat_widget
+            .sync_config_for_profile_switch(&self.config);
+        self.chat_widget.submit_op(Op::ReloadUserConfig);
+        Ok(())
+    }
+
+    async fn save_api_profile_endpoint(&mut self, profile_id: String, endpoint: String) {
+        let profile = match self.editable_api_profile(&profile_id) {
+            Ok(profile) => profile,
+            Err(err) => {
+                self.chat_widget.add_error_message(err);
+                return;
+            }
+        };
+        let endpoint = endpoint.trim();
+        if endpoint.is_empty() {
+            self.chat_widget
+                .add_error_message("Endpoint cannot be empty.".to_string());
+            return;
+        }
+
+        let edits = [ConfigEdit::SetPath {
+            segments: vec![
+                "model_providers".to_string(),
+                profile.provider_id.clone(),
+                "base_url".to_string(),
+            ],
+            value: endpoint.to_string().into(),
+        }];
+        if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+            .with_edits(edits)
+            .apply()
+            .await
+        {
+            self.chat_widget.add_error_message(format!(
+                "Failed to save endpoint for profile `{profile_id}`: {err}"
+            ));
+            return;
+        }
+        if let Err(err) = self
+            .refresh_after_api_profile_config_change("saving API endpoint")
+            .await
+        {
+            self.chat_widget.add_error_message(err);
+            return;
+        }
+        self.chat_widget.add_info_message(
+            format!("Updated endpoint for profile `{profile_id}`."),
+            /*hint*/ None,
+        );
+        self.open_api_profile_actions(profile_id);
+    }
+
+    async fn save_api_profile_key(&mut self, profile_id: String, key: String) {
+        let profile = match self.editable_api_profile(&profile_id) {
+            Ok(profile) => profile,
+            Err(err) => {
+                self.chat_widget.add_error_message(err);
+                return;
+            }
+        };
+        let key = key.trim().to_string();
+        let mut edits = vec![
+            ConfigEdit::ClearPath {
+                segments: vec![
+                    "model_providers".to_string(),
+                    profile.provider_id.clone(),
+                    "env_key".to_string(),
+                ],
+            },
+            ConfigEdit::ClearPath {
+                segments: vec![
+                    "model_providers".to_string(),
+                    profile.provider_id.clone(),
+                    "env_key_instructions".to_string(),
+                ],
+            },
+        ];
+        if key.is_empty() {
+            edits.push(ConfigEdit::ClearPath {
+                segments: vec![
+                    "model_providers".to_string(),
+                    profile.provider_id.clone(),
+                    "experimental_bearer_token".to_string(),
+                ],
+            });
+        } else {
+            edits.push(ConfigEdit::SetPath {
+                segments: vec![
+                    "model_providers".to_string(),
+                    profile.provider_id.clone(),
+                    "experimental_bearer_token".to_string(),
+                ],
+                value: key.clone().into(),
+            });
+        }
+        edits.push(ConfigEdit::SetPath {
+            segments: vec![
+                "model_providers".to_string(),
+                profile.provider_id.clone(),
+                "requires_openai_auth".to_string(),
+            ],
+            value: false.into(),
+        });
+
+        if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+            .with_edits(edits)
+            .apply()
+            .await
+        {
+            self.chat_widget.add_error_message(format!(
+                "Failed to save key for profile `{profile_id}`: {err}"
+            ));
+            return;
+        }
+        if let Err(err) = self
+            .refresh_after_api_profile_config_change("saving API key")
+            .await
+        {
+            self.chat_widget.add_error_message(err);
+            return;
+        }
+        self.chat_widget.add_info_message(
+            if key.is_empty() {
+                format!("Cleared stored key for profile `{profile_id}`.")
+            } else {
+                format!("Updated stored key for profile `{profile_id}`.")
+            },
+            /*hint*/ None,
+        );
+        self.open_api_profile_actions(profile_id);
+    }
+
+    async fn delete_api_profile(&mut self, profile_id: String) {
+        let Some(profile) = self.configured_profile_summary(&profile_id) else {
+            self.chat_widget
+                .add_error_message(format!("Profile `{profile_id}` was not found."));
+            return;
+        };
+        if self.active_profile.as_deref() == Some(profile_id.as_str()) {
+            self.chat_widget.add_error_message(format!(
+                "Cannot delete active profile `{profile_id}`. Switch to another profile first."
+            ));
+            return;
+        }
+        if profile.shared_provider {
+            self.chat_widget.add_error_message(format!(
+                "Cannot delete profile `{profile_id}` because provider `{}` is shared with another profile.",
+                profile.provider_id
+            ));
+            return;
+        }
+
+        let edits = vec![
+            ConfigEdit::ClearPath {
+                segments: vec!["profiles".to_string(), profile_id.clone()],
+            },
+            ConfigEdit::ClearPath {
+                segments: vec!["model_providers".to_string(), profile.provider_id.clone()],
+            },
+        ];
+        if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+            .with_edits(edits)
+            .apply()
+            .await
+        {
+            self.chat_widget
+                .add_error_message(format!("Failed to delete profile `{profile_id}`: {err}"));
+            return;
+        }
+        if let Err(err) = self.profile_router_store().update(|state| {
+            state.remove_profile(&profile_id);
+        }) {
+            self.chat_widget.add_error_message(format!(
+                "Deleted profile config but failed to update routing state for `{profile_id}`: {err}"
+            ));
+            return;
+        }
+        if let Err(err) = self
+            .refresh_after_api_profile_config_change("deleting API profile")
+            .await
+        {
+            self.chat_widget.add_error_message(err);
+            return;
+        }
+        self.chat_widget.add_info_message(
+            format!("Deleted API profile `{profile_id}`."),
+            /*hint*/ None,
+        );
+        self.open_api_profiles_panel();
+    }
+
+    async fn save_create_api_profile_name(&mut self, profile_id: String) {
+        let profile_id = profile_id.trim().to_string();
+        if profile_id.is_empty() {
+            self.chat_widget
+                .add_error_message("Profile id cannot be empty.".to_string());
+            return;
+        }
+        if self.configured_profile_summary(&profile_id).is_some() {
+            self.chat_widget
+                .add_error_message(format!("Profile `{profile_id}` already exists."));
+            return;
+        }
+        self.pending_api_profile_draft = PendingApiProfileDraft {
+            profile_id: Some(profile_id.clone()),
+            endpoint: None,
+        };
+        self.chat_widget
+            .open_api_profile_create_endpoint_prompt(profile_id, String::new());
+    }
+
+    fn save_create_api_profile_endpoint(&mut self, endpoint: String) {
+        let endpoint = endpoint.trim().to_string();
+        if endpoint.is_empty() {
+            self.chat_widget
+                .add_error_message("Endpoint cannot be empty.".to_string());
+            return;
+        }
+        let Some(profile_id) = self.pending_api_profile_draft.profile_id.clone() else {
+            self.chat_widget
+                .add_error_message("No API profile draft is active.".to_string());
+            return;
+        };
+        self.pending_api_profile_draft.endpoint = Some(endpoint);
+        self.chat_widget
+            .open_api_profile_create_key_prompt(profile_id);
+    }
+
+    async fn save_create_api_profile_key(&mut self, key: String) {
+        let Some(profile_id) = self.pending_api_profile_draft.profile_id.clone() else {
+            self.chat_widget
+                .add_error_message("No API profile draft is active.".to_string());
+            return;
+        };
+        let Some(endpoint) = self.pending_api_profile_draft.endpoint.clone() else {
+            self.chat_widget
+                .add_error_message("No API endpoint is set for the current draft.".to_string());
+            return;
+        };
+        let key = key.trim().to_string();
+        if key.is_empty() {
+            self.chat_widget
+                .add_error_message("API key cannot be empty.".to_string());
+            return;
+        }
+        let provider_id = profile_id.clone();
+        let edits = vec![
+            ConfigEdit::SetPath {
+                segments: vec![
+                    "profiles".to_string(),
+                    profile_id.clone(),
+                    "model_provider".to_string(),
+                ],
+                value: provider_id.clone().into(),
+            },
+            ConfigEdit::SetPath {
+                segments: vec![
+                    "model_providers".to_string(),
+                    provider_id.clone(),
+                    "name".to_string(),
+                ],
+                value: profile_id.clone().into(),
+            },
+            ConfigEdit::SetPath {
+                segments: vec![
+                    "model_providers".to_string(),
+                    provider_id.clone(),
+                    "base_url".to_string(),
+                ],
+                value: endpoint.into(),
+            },
+            ConfigEdit::SetPath {
+                segments: vec![
+                    "model_providers".to_string(),
+                    provider_id.clone(),
+                    "experimental_bearer_token".to_string(),
+                ],
+                value: key.into(),
+            },
+            ConfigEdit::SetPath {
+                segments: vec![
+                    "model_providers".to_string(),
+                    provider_id.clone(),
+                    "requires_openai_auth".to_string(),
+                ],
+                value: false.into(),
+            },
+            ConfigEdit::ClearPath {
+                segments: vec![
+                    "model_providers".to_string(),
+                    provider_id.clone(),
+                    "env_key".to_string(),
+                ],
+            },
+        ];
+        if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+            .with_edits(edits)
+            .apply()
+            .await
+        {
+            self.chat_widget.add_error_message(format!(
+                "Failed to create API profile `{profile_id}`: {err}"
+            ));
+            return;
+        }
+        if let Err(err) = self.profile_router_store().update(|state| {
+            state.add_profile(&profile_id);
+        }) {
+            self.chat_widget.add_error_message(format!(
+                "Created API profile `{profile_id}` but failed to add it into routing: {err}"
+            ));
+            return;
+        }
+        self.pending_api_profile_draft = PendingApiProfileDraft::default();
+        if let Err(err) = self
+            .refresh_after_api_profile_config_change("creating API profile")
+            .await
+        {
+            self.chat_widget.add_error_message(err);
+            return;
+        }
+        self.chat_widget.add_info_message(
+            format!("Created API profile `{profile_id}`."),
+            /*hint*/ None,
+        );
+        self.open_api_profiles_panel();
+    }
+
+    fn open_profile_route_add_panel(&mut self) {
+        let profiles = self.configured_profile_summaries();
+        let router_state = self.profile_router_store().load().unwrap_or_default();
+        let mut items = Vec::new();
+
+        for profile in profiles.into_iter().filter(|profile| {
+            !router_state
+                .routes
+                .iter()
+                .any(|route| route.profile_id == profile.id)
+        }) {
+            let profile_id = profile.id.clone();
+            let mut description = vec![format!("provider: {}", profile.provider_name)];
+            if let Some(model) = profile.model {
+                description.push(format!("model: {model}"));
+            }
+            items.push(SelectionItem {
+                name: profile.id,
+                description: Some(description.join(" · ")),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::AddProfileRoute(profile_id.clone()));
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
         if items.is_empty() {
             items.push(SelectionItem {
-                name: "No managed accounts yet".to_string(),
-                description: Some(format!(
-                    "Run repeated ChatGPT login flows and persist them into {}.",
-                    path.display()
-                )),
+                name: "No profiles available to add".to_string(),
+                description: Some(
+                    "All config profiles are already in the route group.".to_string(),
+                ),
                 is_disabled: true,
                 ..Default::default()
             });
         }
 
         self.chat_widget.show_selection_view(SelectionViewParams {
-            view_id: Some(view_id),
-            title: Some("Accounts".to_string()),
-            subtitle,
+            view_id: Some("fork-profile-route-add-panel"),
+            title: Some("Add Profile".to_string()),
+            subtitle: Some("Select a config profile to add into the route group.".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
-            footer_path: Some(path.display().to_string()),
-            initial_selected_idx,
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn open_profile_route_delete_panel(&mut self) {
+        let profiles = self.configured_profile_summaries();
+        let router_state = self.profile_router_store().load().unwrap_or_default();
+        let mut items = Vec::new();
+
+        for route in router_state.routes {
+            let profile_id = route.profile_id.clone();
+            let description = profiles
+                .iter()
+                .find(|profile| profile.id == route.profile_id)
+                .map(|profile| format!("provider: {}", profile.provider_name));
+            items.push(SelectionItem {
+                name: format!("Delete {}", route.profile_id),
+                description,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::DeleteProfileRoute(profile_id.clone()));
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
+        if items.is_empty() {
+            items.push(SelectionItem {
+                name: "No routed profiles".to_string(),
+                description: Some("Add a profile before trying to delete one.".to_string()),
+                is_disabled: true,
+                ..Default::default()
+            });
+        }
+
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            view_id: Some("fork-profile-route-delete-panel"),
+            title: Some("Delete Profile".to_string()),
+            subtitle: Some("Remove one profile from the route group.".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn open_profile_route_reorder_panel(&mut self) {
+        let router_state = self.profile_router_store().load().unwrap_or_default();
+        let mut items = Vec::new();
+
+        for (index, route) in router_state.routes.iter().enumerate() {
+            if index > 0 {
+                let profile_id = route.profile_id.clone();
+                items.push(SelectionItem {
+                    name: format!("Move {} up", route.profile_id),
+                    description: Some("Raise this profile earlier in fallback order.".to_string()),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::MoveProfileRoute {
+                            profile_id: profile_id.clone(),
+                            move_up: true,
+                        });
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                });
+            }
+            if index + 1 < router_state.routes.len() {
+                let profile_id = route.profile_id.clone();
+                items.push(SelectionItem {
+                    name: format!("Move {} down", route.profile_id),
+                    description: Some("Lower this profile later in fallback order.".to_string()),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::MoveProfileRoute {
+                            profile_id: profile_id.clone(),
+                            move_up: false,
+                        });
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                });
+            }
+        }
+
+        if items.is_empty() {
+            items.push(SelectionItem {
+                name: "Nothing to reorder".to_string(),
+                description: Some("Add at least two routed profiles first.".to_string()),
+                is_disabled: true,
+                ..Default::default()
+            });
+        }
+
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            view_id: Some("fork-profile-route-reorder-panel"),
+            title: Some("Reorder Profiles".to_string()),
+            subtitle: Some("Adjust routed profile fallback order.".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
         });
@@ -2879,7 +3806,7 @@ impl App {
                     )));
             }
         }
-        self.open_accounts_panel();
+        self.open_subscriptions_panel();
     }
 
     fn delete_all_invalid_managed_accounts(&mut self) {
@@ -3008,7 +3935,248 @@ impl App {
             return;
         }
 
-        self.open_accounts_panel();
+        self.open_subscriptions_panel();
+    }
+
+    async fn switch_runtime_profile(&mut self, profile_id: &str) -> Result<(), String> {
+        if self.active_profile.as_deref() == Some(profile_id) {
+            return Ok(());
+        }
+
+        let previous_override = self.harness_overrides.config_profile.clone();
+        let previous_active_profile = self.active_profile.clone();
+        self.harness_overrides.config_profile = Some(profile_id.to_string());
+
+        let current_cwd = self.chat_widget.config_ref().cwd.to_path_buf();
+        let mut next_config = match self.rebuild_config_for_cwd(current_cwd).await {
+            Ok(config) => config,
+            Err(err) => {
+                self.harness_overrides.config_profile = previous_override;
+                self.active_profile = previous_active_profile;
+                return Err(err.to_string());
+            }
+        };
+        self.apply_runtime_policy_overrides(&mut next_config);
+
+        self.active_profile = next_config.active_profile.clone();
+        self.config = next_config;
+        self.display_preferences.sync_from_config(&self.config);
+        self.chat_widget
+            .sync_config_for_profile_switch(&self.config);
+        self.auth_manager.reload();
+        self.chat_widget.submit_op(Op::ReloadUserConfig);
+        Ok(())
+    }
+
+    async fn set_profile_route_active(&mut self, profile_id: String) {
+        if let Err(err) = self.switch_runtime_profile(&profile_id).await {
+            self.chat_widget
+                .add_error_message(format!("Failed to activate profile `{profile_id}`: {err}"));
+            return;
+        }
+        if let Err(err) = self.profile_router_store().update(|state| {
+            state.add_profile(&profile_id);
+            state.set_active_profile(&profile_id);
+        }) {
+            self.chat_widget.add_error_message(format!(
+                "Failed to persist active routed profile `{profile_id}`: {err}"
+            ));
+            return;
+        }
+
+        self.chat_widget.add_info_message(
+            format!("Switched to profile `{profile_id}`."),
+            /*hint*/ None,
+        );
+        self.open_api_profile_actions(profile_id);
+    }
+
+    async fn add_profile_route(&mut self, profile_id: String) {
+        let state = match self.profile_router_store().update(|state| {
+            state.add_profile(&profile_id);
+        }) {
+            Ok(state) => state,
+            Err(err) => {
+                self.chat_widget.add_error_message(format!(
+                    "Failed to add routed profile `{profile_id}`: {err}"
+                ));
+                return;
+            }
+        };
+
+        if state.active_profile_id.as_deref() == Some(profile_id.as_str())
+            && let Err(err) = self.switch_runtime_profile(&profile_id).await
+        {
+            self.chat_widget.add_error_message(format!(
+                "Added profile `{profile_id}` to the route group, but failed to activate it: {err}"
+            ));
+            return;
+        }
+
+        self.chat_widget.add_info_message(
+            format!("Added profile `{profile_id}` to the route group."),
+            /*hint*/ None,
+        );
+        self.open_api_profile_actions(profile_id);
+    }
+
+    async fn delete_profile_route(&mut self, profile_id: String) {
+        let previous_active = self.active_profile.clone();
+        let state = match self.profile_router_store().update(|state| {
+            state.remove_profile(&profile_id);
+        }) {
+            Ok(state) => state,
+            Err(err) => {
+                self.chat_widget.add_error_message(format!(
+                    "Failed to delete routed profile `{profile_id}`: {err}"
+                ));
+                return;
+            }
+        };
+
+        if previous_active.as_deref() == Some(profile_id.as_str())
+            && let Some(next_active_profile) = state.active_profile_id.clone()
+            && let Err(err) = self.switch_runtime_profile(&next_active_profile).await
+        {
+            self.chat_widget.add_error_message(format!(
+                "Removed profile `{profile_id}`, but failed to activate replacement profile `{next_active_profile}`: {err}"
+            ));
+            return;
+        }
+
+        self.chat_widget.add_info_message(
+            format!("Removed profile `{profile_id}` from the route group."),
+            /*hint*/ None,
+        );
+        self.open_api_profile_actions(profile_id.clone());
+    }
+
+    fn move_profile_route(&mut self, profile_id: String, move_up: bool) {
+        if let Err(err) = self.profile_router_store().update(|state| {
+            state.move_profile(&profile_id, move_up);
+        }) {
+            self.chat_widget.add_error_message(format!(
+                "Failed to reorder routed profile `{profile_id}`: {err}"
+            ));
+            return;
+        }
+
+        self.chat_widget.add_info_message(
+            format!(
+                "Moved profile `{profile_id}` {} in the route group.",
+                if move_up { "up" } else { "down" }
+            ),
+            /*hint*/ None,
+        );
+        self.open_api_profile_actions(profile_id);
+    }
+
+    async fn retry_last_user_turn_with_profile_fallback(
+        &mut self,
+        error_info: codex_protocol::protocol::CodexErrorInfo,
+        error_message: String,
+    ) {
+        let Some(action) = profile_fallback_action(&error_info) else {
+            self.chat_widget.add_error_message(error_message);
+            return;
+        };
+        if !self.chat_widget.has_retryable_user_turn() {
+            self.chat_widget.add_error_message(error_message);
+            return;
+        }
+
+        match action {
+            ProfileFallbackAction::RetrySameProfileFirst => {
+                let profile_label = self
+                    .chat_widget
+                    .active_profile_label()
+                    .unwrap_or_else(|| "current".to_string());
+                if self.chat_widget.profile_retry_attempted()
+                    || !self
+                        .chat_widget
+                        .retry_last_user_turn_for_profile_fallback(format!(
+                            "Retrying the last turn on profile `{profile_label}`."
+                        ))
+                {
+                    let router_state = self.profile_router_store().load().unwrap_or_default();
+                    let decision = DefaultProfileRouter::default().select_profile(
+                        &router_state,
+                        &RouteProfileRequest {
+                            trigger: ProfileRoutingTrigger::RetryAfterFallbackEligibleError,
+                            active_profile_id: self.active_profile.clone(),
+                        },
+                    );
+                    let Some(next_profile_id) = decision.profile_id else {
+                        if !self.chat_widget.retry_user_turn_with_managed_account() {
+                            self.chat_widget.add_error_message(error_message);
+                        }
+                        return;
+                    };
+                    if let Err(err) = self.switch_runtime_profile(&next_profile_id).await {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to switch to fallback profile `{next_profile_id}`: {err}"
+                        ));
+                        return;
+                    }
+                    if let Err(err) = self.profile_router_store().update(|state| {
+                        state.set_active_profile(&next_profile_id);
+                    }) {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to persist fallback profile `{next_profile_id}`: {err}"
+                        ));
+                        return;
+                    }
+                    if !self
+                        .chat_widget
+                        .retry_last_user_turn_for_profile_fallback(format!(
+                            "Retrying the last turn with profile `{next_profile_id}`."
+                        ))
+                        && !self.chat_widget.retry_user_turn_with_managed_account()
+                    {
+                        self.chat_widget.add_error_message(error_message);
+                    }
+                }
+            }
+            ProfileFallbackAction::SwitchProfileImmediately => {
+                let router_state = self.profile_router_store().load().unwrap_or_default();
+                let decision = DefaultProfileRouter::default().select_profile(
+                    &router_state,
+                    &RouteProfileRequest {
+                        trigger: ProfileRoutingTrigger::RetryAfterFallbackEligibleError,
+                        active_profile_id: self.active_profile.clone(),
+                    },
+                );
+                let Some(next_profile_id) = decision.profile_id else {
+                    if !self.chat_widget.retry_user_turn_with_managed_account() {
+                        self.chat_widget.add_error_message(error_message);
+                    }
+                    return;
+                };
+                if let Err(err) = self.switch_runtime_profile(&next_profile_id).await {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to switch to fallback profile `{next_profile_id}`: {err}"
+                    ));
+                    return;
+                }
+                if let Err(err) = self.profile_router_store().update(|state| {
+                    state.set_active_profile(&next_profile_id);
+                }) {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to persist fallback profile `{next_profile_id}`: {err}"
+                    ));
+                    return;
+                }
+                if !self
+                    .chat_widget
+                    .retry_last_user_turn_for_profile_fallback(format!(
+                        "Retrying the last turn with profile `{next_profile_id}`."
+                    ))
+                    && !self.chat_widget.retry_user_turn_with_managed_account()
+                {
+                    self.chat_widget.add_error_message(error_message);
+                }
+            }
+        }
     }
 
     fn save_managed_account_alias(&mut self, account_id: String, alias: String) {
@@ -3500,8 +4668,32 @@ impl App {
         emit_custom_prompt_deprecation_notice(&app_event_tx, &config.codex_home).await;
         tui.set_notification_method(config.tui_notification_method);
 
-        let harness_overrides =
+        let mut harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
+        let mut active_profile = active_profile;
+        if harness_overrides.config_profile.is_none() {
+            let router_store = ProfileRouterStore::new(config.codex_home.clone());
+            let routed_profile = router_store
+                .load()
+                .ok()
+                .and_then(|state| state.active_profile_id);
+            if let Some(routed_profile) = routed_profile {
+                harness_overrides.config_profile = Some(routed_profile.clone());
+                let rebuilt = ConfigBuilder::default()
+                    .codex_home(config.codex_home.clone())
+                    .cli_overrides(cli_kv_overrides.clone())
+                    .harness_overrides(harness_overrides.clone())
+                    .loader_overrides(loader_overrides.clone())
+                    .cloud_requirements(cloud_requirements.clone())
+                    .fallback_cwd(Some(config.cwd.to_path_buf()))
+                    .build()
+                    .await;
+                if let Ok(next_config) = rebuilt {
+                    config = next_config;
+                    active_profile = config.active_profile.clone();
+                }
+            }
+        }
         let environment_manager = Arc::new(EnvironmentManager::from_env());
         let thread_manager = Arc::new(ThreadManager::new(
             &config,
@@ -3743,6 +4935,7 @@ impl App {
             clawbot_provider_tasks: HashMap::new(),
             clawbot_thread_history_cells: HashMap::new(),
             clawbot_pending_turns: HashMap::new(),
+            pending_api_profile_draft: PendingApiProfileDraft::default(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -4335,8 +5528,64 @@ impl App {
                 self.undo_last_user_message();
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::OpenApiProfilesPanel => {
+                self.open_api_profiles_panel();
+            }
+            AppEvent::OpenSubscriptionsPanel => {
+                self.open_subscriptions_panel();
+            }
             AppEvent::OpenManagedAccountRenamePanel => {
                 self.open_managed_account_rename_panel();
+            }
+            AppEvent::OpenProfileRouteAddPanel => {
+                self.open_profile_route_add_panel();
+            }
+            AppEvent::OpenProfileRouteReorderPanel => {
+                self.open_profile_route_reorder_panel();
+            }
+            AppEvent::OpenProfileRouteDeletePanel => {
+                self.open_profile_route_delete_panel();
+            }
+            AppEvent::OpenApiProfileActions { profile_id } => {
+                self.open_api_profile_actions(profile_id);
+            }
+            AppEvent::OpenCreateApiProfileNamePrompt => {
+                self.chat_widget.open_api_profile_create_name_prompt();
+            }
+            AppEvent::SaveCreateApiProfileName { profile_id } => {
+                self.save_create_api_profile_name(profile_id).await;
+            }
+            AppEvent::SaveCreateApiProfileEndpoint { endpoint } => {
+                self.save_create_api_profile_endpoint(endpoint);
+            }
+            AppEvent::SaveCreateApiProfileKey { key } => {
+                self.save_create_api_profile_key(key).await;
+            }
+            AppEvent::OpenEditApiProfileEndpointPrompt {
+                profile_id,
+                current_endpoint,
+            } => {
+                self.chat_widget
+                    .open_api_profile_endpoint_prompt(profile_id, current_endpoint);
+            }
+            AppEvent::SaveApiProfileEndpoint {
+                profile_id,
+                endpoint,
+            } => {
+                self.save_api_profile_endpoint(profile_id, endpoint).await;
+            }
+            AppEvent::OpenEditApiProfileKeyPrompt {
+                profile_id,
+                current_key,
+            } => {
+                self.chat_widget
+                    .open_api_profile_key_prompt(profile_id, current_key);
+            }
+            AppEvent::SaveApiProfileKey { profile_id, key } => {
+                self.save_api_profile_key(profile_id, key).await;
+            }
+            AppEvent::DeleteApiProfile { profile_id } => {
+                self.delete_api_profile(profile_id).await;
             }
             AppEvent::OpenManagedAccountDeletePanel => {
                 self.open_managed_account_delete_panel();
@@ -4346,6 +5595,21 @@ impl App {
             }
             AppEvent::RefreshAllManagedAccountsQuota => {
                 self.refresh_all_managed_accounts_quota();
+            }
+            AppEvent::AddProfileRoute(profile_id) => {
+                self.add_profile_route(profile_id).await;
+            }
+            AppEvent::DeleteProfileRoute(profile_id) => {
+                self.delete_profile_route(profile_id).await;
+            }
+            AppEvent::MoveProfileRoute {
+                profile_id,
+                move_up,
+            } => {
+                self.move_profile_route(profile_id, move_up);
+            }
+            AppEvent::SetProfileRouteActive(profile_id) => {
+                self.set_profile_route_active(profile_id).await;
             }
             AppEvent::SetManagedAccountActive(account_id) => {
                 self.set_managed_account_active(account_id);
@@ -4371,6 +5635,13 @@ impl App {
             }
             AppEvent::DeleteAllInvalidManagedAccounts => {
                 self.delete_all_invalid_managed_accounts();
+            }
+            AppEvent::RetryLastUserTurnWithProfileFallback {
+                error_info,
+                error_message,
+            } => {
+                self.retry_last_user_turn_with_profile_fallback(error_info, error_message)
+                    .await;
             }
             AppEvent::NewSession => {
                 self.start_fresh_session_with_summary_hint(tui).await;

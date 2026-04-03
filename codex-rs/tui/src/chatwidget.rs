@@ -577,6 +577,12 @@ enum RateLimitErrorKind {
     Generic,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProfileFallbackAction {
+    RetrySameProfileFirst,
+    SwitchProfileImmediately,
+}
+
 fn rate_limit_error_kind(info: &CodexErrorInfo) -> Option<RateLimitErrorKind> {
     match info {
         CodexErrorInfo::ServerOverloaded => Some(RateLimitErrorKind::ServerOverloaded),
@@ -585,6 +591,33 @@ fn rate_limit_error_kind(info: &CodexErrorInfo) -> Option<RateLimitErrorKind> {
             http_status_code: Some(429),
         } => Some(RateLimitErrorKind::Generic),
         _ => None,
+    }
+}
+
+pub(crate) fn profile_fallback_action(info: &CodexErrorInfo) -> Option<ProfileFallbackAction> {
+    match info {
+        CodexErrorInfo::UsageLimitExceeded | CodexErrorInfo::Unauthorized => {
+            Some(ProfileFallbackAction::SwitchProfileImmediately)
+        }
+        CodexErrorInfo::ServerOverloaded | CodexErrorInfo::InternalServerError => {
+            Some(ProfileFallbackAction::RetrySameProfileFirst)
+        }
+        CodexErrorInfo::HttpConnectionFailed { http_status_code }
+        | CodexErrorInfo::ResponseStreamConnectionFailed { http_status_code }
+        | CodexErrorInfo::ResponseStreamDisconnected { http_status_code }
+        | CodexErrorInfo::ResponseTooManyFailedAttempts { http_status_code } => {
+            match http_status_code {
+                Some(401 | 403 | 429) => Some(ProfileFallbackAction::SwitchProfileImmediately),
+                Some(500..=599) | None => Some(ProfileFallbackAction::RetrySameProfileFirst),
+                Some(_) => None,
+            }
+        }
+        CodexErrorInfo::ContextWindowExceeded
+        | CodexErrorInfo::BadRequest
+        | CodexErrorInfo::SandboxError
+        | CodexErrorInfo::ActiveTurnNotSteerable { .. }
+        | CodexErrorInfo::ThreadRollbackFailed
+        | CodexErrorInfo::Other => None,
     }
 }
 
@@ -769,6 +802,7 @@ pub(crate) struct ChatWidget {
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
     latest_codex_rate_limit_snapshot: Option<RateLimitSnapshot>,
     last_submitted_user_turn: Option<UserMessage>,
+    profile_retry_attempted: bool,
     managed_account_retry_attempted: bool,
     plan_type: Option<PlanType>,
     rate_limit_warnings: RateLimitWarningState,
@@ -3908,6 +3942,7 @@ impl ChatWidget {
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
             latest_codex_rate_limit_snapshot: None,
             last_submitted_user_turn: None,
+            profile_retry_attempted: false,
             managed_account_retry_attempted: false,
             plan_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
@@ -4120,6 +4155,7 @@ impl ChatWidget {
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
             latest_codex_rate_limit_snapshot: None,
             last_submitted_user_turn: None,
+            profile_retry_attempted: false,
             managed_account_retry_attempted: false,
             plan_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
@@ -4324,6 +4360,7 @@ impl ChatWidget {
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
             latest_codex_rate_limit_snapshot: None,
             last_submitted_user_turn: None,
+            profile_retry_attempted: false,
             managed_account_retry_attempted: false,
             plan_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
@@ -5430,7 +5467,7 @@ impl ChatWidget {
         true
     }
 
-    fn retry_user_turn_with_managed_account(&mut self) -> bool {
+    pub(crate) fn retry_user_turn_with_managed_account(&mut self) -> bool {
         if !self.config.model_provider.requires_openai_auth {
             return false;
         }
@@ -5531,6 +5568,98 @@ impl ChatWidget {
                 });
             }),
         );
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_api_profile_create_name_prompt(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Create API profile".to_string(),
+            "Type a profile id and press Enter".to_string(),
+            Some("Use a short stable id, for example `prod` or `backup`".to_string()),
+            Box::new(move |profile_id: String| {
+                tx.send(AppEvent::SaveCreateApiProfileName { profile_id });
+            }),
+        );
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_api_profile_create_endpoint_prompt(
+        &mut self,
+        profile_id: String,
+        current_endpoint: String,
+    ) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            format!("API endpoint for {profile_id}"),
+            "Type the base URL and press Enter".to_string(),
+            Some("Example: https://example.com/v1".to_string()),
+            Box::new(move |endpoint: String| {
+                tx.send(AppEvent::SaveCreateApiProfileEndpoint { endpoint });
+            }),
+        )
+        .with_initial_text(current_endpoint);
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_api_profile_create_key_prompt(&mut self, profile_id: String) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            format!("API key for {profile_id}"),
+            "Type the bearer token and press Enter".to_string(),
+            Some("This stores the token directly in config.toml".to_string()),
+            Box::new(move |key: String| {
+                tx.send(AppEvent::SaveCreateApiProfileKey { key });
+            }),
+        );
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_api_profile_endpoint_prompt(
+        &mut self,
+        profile_id: String,
+        current_endpoint: String,
+    ) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            format!("Edit endpoint for {profile_id}"),
+            "Type the new base URL and press Enter".to_string(),
+            Some("Example: https://example.com/v1".to_string()),
+            Box::new(move |endpoint: String| {
+                tx.send(AppEvent::SaveApiProfileEndpoint {
+                    profile_id: profile_id.clone(),
+                    endpoint,
+                });
+            }),
+        )
+        .with_initial_text(current_endpoint);
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_api_profile_key_prompt(&mut self, profile_id: String, current_key: String) {
+        let tx = self.app_event_tx.clone();
+        let context_label = if current_key.is_empty() {
+            "Type a direct bearer token".to_string()
+        } else {
+            "Overwrite the stored direct bearer token, or submit empty to clear it".to_string()
+        };
+        let view = CustomPromptView::new(
+            format!("Edit key for {profile_id}"),
+            "Type the bearer token and press Enter".to_string(),
+            Some(context_label),
+            Box::new(move |key: String| {
+                tx.send(AppEvent::SaveApiProfileKey {
+                    profile_id: profile_id.clone(),
+                    key,
+                });
+            }),
+        )
+        .with_initial_text(current_key);
 
         self.bottom_pane.show_view(Box::new(view));
     }
@@ -5952,6 +6081,7 @@ impl ChatWidget {
                 text_elements: text_elements.clone(),
                 mention_bindings: mention_bindings.clone(),
             });
+            self.profile_retry_attempted = false;
             self.managed_account_retry_attempted = false;
             if !self.prepare_managed_account_for_user_turn() {
                 return;
@@ -6358,6 +6488,16 @@ impl ChatWidget {
                     .as_ref()
                     .is_some_and(|info| self.handle_steer_rejected_error(info))
                 {
+                } else if let Some(error_info) = codex_error_info
+                    .as_ref()
+                    .filter(|_| self.has_retryable_user_turn())
+                    .and_then(|info| profile_fallback_action(info).map(|_| info.clone()))
+                {
+                    self.app_event_tx
+                        .send(AppEvent::RetryLastUserTurnWithProfileFallback {
+                            error_info,
+                            error_message: message,
+                        });
                 } else if let Some(kind) = codex_error_info.as_ref().and_then(rate_limit_error_kind)
                 {
                     match kind {
@@ -10019,6 +10159,62 @@ impl ChatWidget {
             .capability_summaries()
             .to_vec();
         self.bottom_pane.set_plugin_mentions(Some(plugins));
+    }
+
+    pub(crate) fn sync_config_for_profile_switch(&mut self, config: &Config) {
+        self.config = config.clone();
+        self.set_approval_policy(self.config.permissions.approval_policy.value());
+        if let Err(err) =
+            self.set_sandbox_policy(self.config.permissions.sandbox_policy.get().clone())
+        {
+            tracing::warn!(%err, "failed to set sandbox policy on chat config after profile switch");
+        }
+        self.set_approvals_reviewer(self.config.approvals_reviewer);
+        self.set_reasoning_effort(self.config.model_reasoning_effort);
+        self.set_plan_mode_reasoning_effort(self.config.plan_mode_reasoning_effort);
+        self.set_service_tier(self.config.service_tier);
+        if let Some(model) = self.config.model.clone() {
+            self.set_model(&model);
+        }
+        self.sync_fast_command_enabled();
+        self.sync_personality_command_enabled();
+        self.sync_plugins_command_enabled();
+        self.refresh_plugin_mentions();
+    }
+
+    pub(crate) fn active_profile_label(&self) -> Option<String> {
+        self.config.active_profile.clone()
+    }
+
+    pub(crate) fn profile_retry_attempted(&self) -> bool {
+        self.profile_retry_attempted
+    }
+
+    pub(crate) fn has_retryable_user_turn(&self) -> bool {
+        self.last_submitted_user_turn.is_some()
+    }
+
+    pub(crate) fn retry_last_user_turn_for_profile_fallback(
+        &mut self,
+        history_message: String,
+    ) -> bool {
+        if self.profile_retry_attempted {
+            return false;
+        }
+        let Some(user_message) = self.last_submitted_user_turn.clone() else {
+            return false;
+        };
+
+        self.profile_retry_attempted = true;
+        self.managed_account_retry_attempted = false;
+        self.submit_pending_steers_after_interrupt = false;
+        self.finalize_turn();
+        self.add_to_history(history_cell::new_info_event(
+            history_message,
+            /*hint*/ None,
+        ));
+        self.submit_user_message_with_kind(user_message, UserTurnSubmissionKind::AutoRetry);
+        true
     }
 
     pub(crate) fn sync_plugin_mentions_config(&mut self, config: &Config) {

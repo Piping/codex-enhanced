@@ -4645,6 +4645,11 @@ impl App {
             AppEvent::OpenManagedAccountRenamePanel => {
                 self.open_managed_account_rename_panel();
             }
+            AppEvent::OpenProfileRouteAddPanel
+            | AppEvent::OpenProfileRouteReorderPanel
+            | AppEvent::OpenProfileRouteDeletePanel => {
+                self.open_accounts_panel();
+            }
             AppEvent::OpenManagedAccountDeletePanel => {
                 self.open_managed_account_delete_panel();
             }
@@ -4653,6 +4658,12 @@ impl App {
             }
             AppEvent::RefreshAllManagedAccountsQuota => {
                 self.refresh_all_managed_accounts_quota();
+            }
+            AppEvent::AddProfileRoute(_)
+            | AppEvent::DeleteProfileRoute(_)
+            | AppEvent::MoveProfileRoute { .. }
+            | AppEvent::SetProfileRouteActive(_) => {
+                self.open_accounts_panel();
             }
             AppEvent::SetManagedAccountActive(account_id) => {
                 self.set_managed_account_active(account_id);
@@ -4678,6 +4689,9 @@ impl App {
             }
             AppEvent::DeleteAllInvalidManagedAccounts => {
                 self.delete_all_invalid_managed_accounts();
+            }
+            AppEvent::RetryLastUserTurnWithProfileFallback { error_message, .. } => {
+                self.chat_widget.add_error_message(error_message);
             }
             AppEvent::NewSession => {
                 self.start_fresh_session_with_summary_hint(tui, app_server)

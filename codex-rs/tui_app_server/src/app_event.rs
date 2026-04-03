@@ -39,6 +39,7 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::SandboxPolicy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,12 +94,36 @@ pub(crate) enum AppEvent {
     UndoLastUserMessage,
     /// Open the managed-account alias rename submenu.
     OpenManagedAccountRenamePanel,
+    /// Open the routed-profile add submenu.
+    #[allow(dead_code)]
+    OpenProfileRouteAddPanel,
+    /// Open the routed-profile reorder submenu.
+    #[allow(dead_code)]
+    OpenProfileRouteReorderPanel,
+    /// Open the routed-profile delete submenu.
+    #[allow(dead_code)]
+    OpenProfileRouteDeletePanel,
     /// Open the managed-account delete submenu.
     OpenManagedAccountDeletePanel,
     /// Refresh cached quota for the current managed ChatGPT account.
     RefreshManagedAccountQuota,
     /// Refresh cached quota for all managed ChatGPT accounts.
     RefreshAllManagedAccountsQuota,
+    /// Add an existing config profile into the routed profile group.
+    #[allow(dead_code)]
+    AddProfileRoute(String),
+    /// Remove one profile from the routed profile group.
+    #[allow(dead_code)]
+    DeleteProfileRoute(String),
+    /// Move one profile earlier or later inside the routed profile group.
+    #[allow(dead_code)]
+    MoveProfileRoute {
+        profile_id: String,
+        move_up: bool,
+    },
+    /// Mark a routed profile as active for future turns.
+    #[allow(dead_code)]
+    SetProfileRouteActive(String),
     /// Mark a managed account as active in the fork-owned registry.
     SetManagedAccountActive(String),
     /// Open an alias editor for a managed account.
@@ -120,6 +145,12 @@ pub(crate) enum AppEvent {
     DeleteManagedAccount(String),
     /// Delete all invalid managed accounts from the pool and remove their saved auth snapshots.
     DeleteAllInvalidManagedAccounts,
+    /// Retry the last turn using the routed profile fallback policy.
+    #[allow(dead_code)]
+    RetryLastUserTurnWithProfileFallback {
+        error_info: CodexErrorInfo,
+        error_message: String,
+    },
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
     /// Switch the active thread to the selected agent.

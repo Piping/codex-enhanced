@@ -48,6 +48,7 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::SandboxPolicy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -453,14 +454,80 @@ pub(crate) enum AppEvent {
     BtwDiscard,
     /// Restore the latest committed user message into the composer and rollback one turn.
     UndoLastUserMessage,
+    /// Open the API profiles submenu inside Accounts.
+    OpenApiProfilesPanel,
+    /// Open the subscriptions submenu inside Accounts.
+    OpenSubscriptionsPanel,
     /// Open the managed-account alias rename submenu.
     OpenManagedAccountRenamePanel,
+    /// Open the routed-profile add submenu.
+    #[allow(dead_code)]
+    OpenProfileRouteAddPanel,
+    /// Open the routed-profile reorder submenu.
+    #[allow(dead_code)]
+    OpenProfileRouteReorderPanel,
+    /// Open the routed-profile delete submenu.
+    #[allow(dead_code)]
+    OpenProfileRouteDeletePanel,
+    /// Open actions for one API profile.
+    OpenApiProfileActions {
+        profile_id: String,
+    },
+    /// Open the create-API-profile name prompt.
+    OpenCreateApiProfileNamePrompt,
+    /// Persist the new API profile id in the in-flight draft.
+    SaveCreateApiProfileName {
+        profile_id: String,
+    },
+    /// Persist the new API profile endpoint in the in-flight draft.
+    SaveCreateApiProfileEndpoint {
+        endpoint: String,
+    },
+    /// Finalize API profile creation from the in-flight draft key input.
+    SaveCreateApiProfileKey {
+        key: String,
+    },
+    /// Open the endpoint editor for one API profile.
+    OpenEditApiProfileEndpointPrompt {
+        profile_id: String,
+        current_endpoint: String,
+    },
+    /// Persist the endpoint for one API profile.
+    SaveApiProfileEndpoint {
+        profile_id: String,
+        endpoint: String,
+    },
+    /// Open the key editor for one API profile.
+    OpenEditApiProfileKeyPrompt {
+        profile_id: String,
+        current_key: String,
+    },
+    /// Persist the direct bearer token for one API profile.
+    SaveApiProfileKey {
+        profile_id: String,
+        key: String,
+    },
+    /// Delete one API profile from config and routing state.
+    DeleteApiProfile {
+        profile_id: String,
+    },
     /// Open the managed-account delete submenu.
     OpenManagedAccountDeletePanel,
     /// Refresh cached quota for the current managed ChatGPT account.
     RefreshManagedAccountQuota,
     /// Refresh cached quota for all managed ChatGPT accounts.
     RefreshAllManagedAccountsQuota,
+    /// Add an existing config profile into the routed profile group.
+    AddProfileRoute(String),
+    /// Remove one profile from the routed profile group.
+    DeleteProfileRoute(String),
+    /// Move one profile earlier or later inside the routed profile group.
+    MoveProfileRoute {
+        profile_id: String,
+        move_up: bool,
+    },
+    /// Mark a routed profile as active for future turns.
+    SetProfileRouteActive(String),
     /// Mark a managed account as active in the fork-owned registry.
     SetManagedAccountActive(String),
     /// Open an alias editor for a managed account.
@@ -482,6 +549,11 @@ pub(crate) enum AppEvent {
     DeleteManagedAccount(String),
     /// Delete all invalid managed accounts from the pool and remove their saved auth snapshots.
     DeleteAllInvalidManagedAccounts,
+    /// Retry the last turn using the routed profile fallback policy.
+    RetryLastUserTurnWithProfileFallback {
+        error_info: CodexErrorInfo,
+        error_message: String,
+    },
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
     /// Switch the active thread to the selected agent.

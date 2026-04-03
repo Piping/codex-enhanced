@@ -1,6 +1,7 @@
 mod account_pool;
 mod account_signal;
 mod managed_account_auth;
+mod profile_router;
 mod router;
 
 pub use account_pool::ACCOUNT_POOL_STATE_RELATIVE_PATH;
@@ -24,6 +25,15 @@ pub use managed_account_auth::activate_managed_account;
 pub use managed_account_auth::load_current_managed_account_snapshot;
 pub use managed_account_auth::persist_current_managed_account_snapshot;
 pub use managed_account_auth::persist_managed_account_auth_snapshot;
+pub use profile_router::DefaultProfileRouter;
+pub use profile_router::PROFILE_ROUTER_STATE_RELATIVE_PATH;
+pub use profile_router::ProfileRouteEntry;
+pub use profile_router::ProfileRouterDecision;
+pub use profile_router::ProfileRouterDecisionReason;
+pub use profile_router::ProfileRouterState;
+pub use profile_router::ProfileRouterStore;
+pub use profile_router::ProfileRoutingTrigger;
+pub use profile_router::RouteProfileRequest;
 pub use router::AccountRouterDecision;
 pub use router::AccountRouterDecisionReason;
 pub use router::DefaultAccountRouter;
