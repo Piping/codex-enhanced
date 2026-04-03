@@ -30,6 +30,7 @@ use codex_tui::ExitReason;
 use codex_tui::update_action::UpdateAction;
 use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
+use std::ffi::OsString;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
@@ -454,6 +455,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
 fn finish_interactive_exit(
     exit_info: AppExitInfo,
     arg0_paths: &Arg0DispatchPaths,
+    respawn_args: &[OsString],
 ) -> anyhow::Result<()> {
     if matches!(exit_info.exit_reason, ExitReason::RespawnRequested) {
         let Some(thread_id) = exit_info.thread_id.as_ref() else {
@@ -461,6 +463,7 @@ fn finish_interactive_exit(
         };
         respawn_current_codex_session(
             arg0_paths,
+            respawn_args,
             &thread_id.to_string(),
             exit_info.respawn_with_yolo,
         )?;
@@ -494,6 +497,7 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
 
 fn respawn_current_codex_session(
     arg0_paths: &Arg0DispatchPaths,
+    respawn_args: &[OsString],
     thread_id: &str,
     respawn_with_yolo: bool,
 ) -> anyhow::Result<()> {
@@ -502,10 +506,11 @@ fn respawn_current_codex_session(
     };
 
     let mut command = std::process::Command::new(exe_path);
-    command.arg("resume").arg(thread_id);
-    if respawn_with_yolo {
-        command.arg("--yolo");
-    }
+    command.args(build_codex_respawn_argv(
+        respawn_args,
+        thread_id,
+        respawn_with_yolo,
+    ));
 
     #[cfg(unix)]
     {
@@ -532,6 +537,127 @@ fn respawn_current_codex_session(
         })?;
         Ok(())
     }
+}
+
+fn build_codex_respawn_argv(
+    respawn_args: &[OsString],
+    thread_id: &str,
+    respawn_with_yolo: bool,
+) -> Vec<OsString> {
+    let mut args = normalize_respawn_mode_args(respawn_args, respawn_with_yolo);
+    args.push("resume".into());
+    args.push(thread_id.into());
+    if respawn_with_yolo {
+        args.push("--yolo".into());
+    }
+    args
+}
+
+fn normalize_respawn_mode_args(args: &[OsString], respawn_with_yolo: bool) -> Vec<OsString> {
+    let mut normalized = Vec::new();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        let Some(arg_str) = arg.to_str() else {
+            normalized.push(arg.clone());
+            continue;
+        };
+        match arg_str {
+            "--yolo" | "--dangerously-bypass-approvals-and-sandbox" => {}
+            "--ask-for-approval" | "--sandbox" if respawn_with_yolo => {
+                let _ = iter.next();
+            }
+            "--full-auto" if respawn_with_yolo => {}
+            _ => normalized.push(arg.clone()),
+        }
+    }
+    normalized
+}
+
+fn approval_mode_cli_arg_name(value: codex_utils_cli::ApprovalModeCliArg) -> &'static str {
+    match value {
+        codex_utils_cli::ApprovalModeCliArg::Untrusted => "untrusted",
+        codex_utils_cli::ApprovalModeCliArg::OnFailure => "on-failure",
+        codex_utils_cli::ApprovalModeCliArg::OnRequest => "on-request",
+        codex_utils_cli::ApprovalModeCliArg::Never => "never",
+    }
+}
+
+fn sandbox_mode_cli_arg_name(value: codex_utils_cli::SandboxModeCliArg) -> &'static str {
+    match value {
+        codex_utils_cli::SandboxModeCliArg::ReadOnly => "read-only",
+        codex_utils_cli::SandboxModeCliArg::WorkspaceWrite => "workspace-write",
+        codex_utils_cli::SandboxModeCliArg::DangerFullAccess => "danger-full-access",
+    }
+}
+
+fn push_arg_value(args: &mut Vec<OsString>, flag: &'static str, value: impl Into<OsString>) {
+    args.push(flag.into());
+    args.push(value.into());
+}
+
+fn extend_tui_cli_respawn_args(args: &mut Vec<OsString>, interactive: &TuiCli) {
+    if let Some(model) = &interactive.model {
+        push_arg_value(args, "--model", model.clone());
+    }
+    if interactive.oss {
+        args.push("--oss".into());
+    }
+    if let Some(provider) = &interactive.oss_provider {
+        push_arg_value(args, "--local-provider", provider.clone());
+    }
+    if let Some(profile) = &interactive.config_profile {
+        push_arg_value(args, "--profile", profile.clone());
+    }
+    if let Some(sandbox_mode) = interactive.sandbox_mode {
+        push_arg_value(args, "--sandbox", sandbox_mode_cli_arg_name(sandbox_mode));
+    }
+    if let Some(approval_policy) = interactive.approval_policy {
+        push_arg_value(
+            args,
+            "--ask-for-approval",
+            approval_mode_cli_arg_name(approval_policy),
+        );
+    }
+    if interactive.full_auto {
+        args.push("--full-auto".into());
+    }
+    if interactive.dangerously_bypass_approvals_and_sandbox {
+        args.push("--yolo".into());
+    }
+    if let Some(cwd) = &interactive.cwd {
+        push_arg_value(args, "--cd", cwd.as_os_str().to_os_string());
+    }
+    if interactive.web_search {
+        args.push("--search".into());
+    }
+    for dir in &interactive.add_dir {
+        push_arg_value(args, "--add-dir", dir.as_os_str().to_os_string());
+    }
+    if interactive.no_alt_screen {
+        args.push("--no-alt-screen".into());
+    }
+    for raw_override in &interactive.config_overrides.raw_overrides {
+        push_arg_value(args, "-c", raw_override.clone());
+    }
+}
+
+fn build_interactive_respawn_args(
+    root_config_overrides: &CliConfigOverrides,
+    remote: &InteractiveRemoteOptions,
+    interactive: &TuiCli,
+) -> Vec<OsString> {
+    let mut args = Vec::new();
+    for raw_override in &root_config_overrides.raw_overrides {
+        push_arg_value(&mut args, "-c", raw_override.clone());
+    }
+    if let Some(remote_addr) = &remote.remote {
+        push_arg_value(&mut args, "--remote", remote_addr.clone());
+    }
+    if let Some(env_var) = &remote.remote_auth_token_env {
+        push_arg_value(&mut args, "--remote-auth-token-env", env_var.clone());
+    }
+    extend_tui_cli_respawn_args(&mut args, interactive);
+    args
 }
 
 /// Run the update action and print the result.
@@ -681,11 +807,13 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     let toggle_overrides = feature_toggles.to_overrides()?;
     root_config_overrides.raw_overrides.extend(toggle_overrides);
-    let root_remote = remote.remote;
-    let root_remote_auth_token_env = remote.remote_auth_token_env;
+    let root_remote = remote.remote.clone();
+    let root_remote_auth_token_env = remote.remote_auth_token_env.clone();
 
     match subcommand {
         None => {
+            let respawn_args =
+                build_interactive_respawn_args(&root_config_overrides, &remote, &interactive);
             prepend_config_flags(
                 &mut interactive.config_overrides,
                 root_config_overrides.clone(),
@@ -697,7 +825,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 arg0_paths.clone(),
             )
             .await?;
-            finish_interactive_exit(exit_info, &arg0_paths)?;
+            finish_interactive_exit(exit_info, &arg0_paths, &respawn_args)?;
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -818,16 +946,25 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 include_non_interactive,
                 config_overrides,
             );
-            let exit_info = run_interactive_tui(
-                interactive,
-                remote.remote.or(root_remote.clone()),
-                remote
+            let effective_remote = InteractiveRemoteOptions {
+                remote: remote.remote.or(root_remote.clone()),
+                remote_auth_token_env: remote
                     .remote_auth_token_env
                     .or(root_remote_auth_token_env.clone()),
+            };
+            let respawn_args = build_interactive_respawn_args(
+                &root_config_overrides,
+                &effective_remote,
+                &interactive,
+            );
+            let exit_info = run_interactive_tui(
+                interactive,
+                effective_remote.remote,
+                effective_remote.remote_auth_token_env,
                 arg0_paths.clone(),
             )
             .await?;
-            finish_interactive_exit(exit_info, &arg0_paths)?;
+            finish_interactive_exit(exit_info, &arg0_paths, &respawn_args)?;
         }
         Some(Subcommand::Fork(ForkCommand {
             session_id,
@@ -844,16 +981,25 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 all,
                 config_overrides,
             );
-            let exit_info = run_interactive_tui(
-                interactive,
-                remote.remote.or(root_remote.clone()),
-                remote
+            let effective_remote = InteractiveRemoteOptions {
+                remote: remote.remote.or(root_remote.clone()),
+                remote_auth_token_env: remote
                     .remote_auth_token_env
                     .or(root_remote_auth_token_env.clone()),
+            };
+            let respawn_args = build_interactive_respawn_args(
+                &root_config_overrides,
+                &effective_remote,
+                &interactive,
+            );
+            let exit_info = run_interactive_tui(
+                interactive,
+                effective_remote.remote,
+                effective_remote.remote_auth_token_env,
                 arg0_paths.clone(),
             )
             .await?;
-            finish_interactive_exit(exit_info, &arg0_paths)?;
+            finish_interactive_exit(exit_info, &arg0_paths, &respawn_args)?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
             reject_remote_mode_for_subcommand(
