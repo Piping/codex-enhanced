@@ -8,6 +8,7 @@ pub use command::LoopCommand;
 pub use command::LoopMode;
 pub use command::LoopSchedule;
 pub use command::parse_loop_command;
+pub use command::parse_loop_idle_after;
 pub use command::parse_loop_schedule;
 pub use command::validate_loop_id;
 pub use execution::PersistedLoopExecutionSettings;

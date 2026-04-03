@@ -200,6 +200,16 @@ mod tests {
                 LoopTriggerBinding {
                     id: "trigger-2".to_string(),
                     enabled: true,
+                    kind: LoopTriggerKind::Idle {
+                        after: LoopSchedule::Interval {
+                            display: "30m".to_string(),
+                            seconds: 1_800,
+                        },
+                    },
+                },
+                LoopTriggerBinding {
+                    id: "trigger-3".to_string(),
+                    enabled: true,
                     kind: LoopTriggerKind::AfterTurn,
                 },
             ],
@@ -229,7 +239,32 @@ mod tests {
                 loop_id: "director".to_string(),
                 binding_id: "trigger-2".to_string(),
             }],
+            queue_entries_for_phase(&queues, LoopTriggerPhase::Idle)
+        );
+        assert_eq!(
+            vec![LoopTriggerQueueEntry {
+                loop_id: "director".to_string(),
+                binding_id: "trigger-3".to_string(),
+            }],
             queue_entries_for_phase(&queues, LoopTriggerPhase::AfterTurn)
+        );
+    }
+
+    #[test]
+    fn sync_trigger_queues_creates_idle_queue_when_empty() {
+        let mut timers = BTreeMap::new();
+        timers.insert("director".to_string(), sample_timer());
+        let mut queues = PersistedLoopTriggerQueuesFile::default();
+
+        sync_trigger_queues_with_timers(&mut queues, &timers);
+
+        assert_eq!(LoopTriggerPhase::USER_SELECTABLE.len(), queues.queues.len());
+        assert_eq!(
+            vec![LoopTriggerQueueEntry {
+                loop_id: "director".to_string(),
+                binding_id: "trigger-2".to_string(),
+            }],
+            queue_entries_for_phase(&queues, LoopTriggerPhase::Idle)
         );
     }
 

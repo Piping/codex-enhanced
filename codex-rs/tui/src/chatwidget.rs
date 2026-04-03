@@ -5617,6 +5617,28 @@ impl ChatWidget {
         self.bottom_pane.show_view(Box::new(view));
     }
 
+    pub(crate) fn open_new_loop_trigger_idle_after_editor(
+        &mut self,
+        timer_id: String,
+        current_after: String,
+    ) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Add loop idle trigger".to_string(),
+            "Type an idle duration like 30m and press Enter".to_string(),
+            Some(format!("Loop: {timer_id}")),
+            Box::new(move |after: String| {
+                tx.send(AppEvent::SaveNewLoopIdleTriggerAfter {
+                    timer_id: timer_id.clone(),
+                    after,
+                });
+            }),
+        )
+        .with_initial_text(current_after);
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
     pub(crate) fn open_loop_trigger_schedule_editor(
         &mut self,
         timer_id: String,
@@ -5637,6 +5659,30 @@ impl ChatWidget {
             }),
         )
         .with_initial_text(current_schedule);
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_loop_trigger_idle_after_editor(
+        &mut self,
+        timer_id: String,
+        binding_id: String,
+        current_after: String,
+    ) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Edit loop idle trigger".to_string(),
+            "Type a new idle duration like 30m and press Enter".to_string(),
+            Some(format!("Loop: {timer_id}")),
+            Box::new(move |after: String| {
+                tx.send(AppEvent::SaveLoopTriggerBindingIdleAfter {
+                    timer_id: timer_id.clone(),
+                    binding_id: binding_id.clone(),
+                    after,
+                });
+            }),
+        )
+        .with_initial_text(current_after);
 
         self.bottom_pane.show_view(Box::new(view));
     }
@@ -5739,6 +5785,20 @@ impl ChatWidget {
             Some("Configure the timer trigger schedule".to_string()),
             Box::new(move |schedule: String| {
                 tx.send(AppEvent::SaveCreateLoopTimerSchedule { schedule });
+            }),
+        );
+
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_create_loop_idle_prompt(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Create loop agent".to_string(),
+            "Example: 30m".to_string(),
+            Some("Configure how long the main thread must stay idle".to_string()),
+            Box::new(move |after: String| {
+                tx.send(AppEvent::SaveCreateLoopIdleTrigger { after });
             }),
         );
 

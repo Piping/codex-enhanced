@@ -156,6 +156,16 @@ pub fn parse_loop_schedule(spec: &str) -> Result<LoopSchedule, String> {
     Ok(schedule)
 }
 
+pub fn parse_loop_idle_after(spec: &str) -> Result<LoopSchedule, String> {
+    let schedule = parse_loop_schedule(spec)?;
+    match schedule {
+        LoopSchedule::Interval { .. } => Ok(schedule),
+        LoopSchedule::Cron { .. } => {
+            Err("idle trigger only supports `5m`-style intervals".to_string())
+        }
+    }
+}
+
 pub fn validate_loop_id(id: &str) -> Result<(), String> {
     if id.is_empty() {
         return Err("loop id cannot be empty".to_string());
@@ -253,6 +263,7 @@ mod tests {
     use super::LoopCommand;
     use super::LoopSchedule;
     use super::parse_loop_command;
+    use super::parse_loop_idle_after;
     use super::parse_loop_schedule;
     use chrono::TimeZone;
     use chrono::Utc;
@@ -296,6 +307,25 @@ mod tests {
                 display: "*/5 * * * *".to_string(),
                 normalized: "0 */5 * * * * *".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn parse_idle_after_accepts_interval() {
+        assert_eq!(
+            parse_loop_idle_after("30m").expect("idle after"),
+            LoopSchedule::Interval {
+                display: "30m".to_string(),
+                seconds: 1_800,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_idle_after_rejects_cron() {
+        assert_eq!(
+            parse_loop_idle_after("*/5 * * * *").expect_err("reject cron"),
+            "idle trigger only supports `5m`-style intervals"
         );
     }
 

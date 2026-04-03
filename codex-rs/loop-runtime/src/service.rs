@@ -15,6 +15,7 @@ use codex_loop::load_loop_trigger_queues;
 use codex_loop::loop_timers_path;
 use codex_loop::loop_trigger_queues_path;
 use codex_loop::parse_loop_cwd;
+use codex_loop::parse_loop_idle_after;
 use codex_loop::parse_loop_schedule;
 use codex_loop::parse_loop_writable_roots;
 use codex_loop::sync_trigger_queues_with_timers;
@@ -44,6 +45,7 @@ pub struct CreateLoopRequest {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CreateLoopTriggerRequest {
     Timer { schedule: String },
+    Idle { after: String },
     BeforeTurn,
     AfterTurn,
 }
@@ -117,6 +119,10 @@ pub fn create_loop(
             schedule: parse_loop_schedule(schedule.trim())
                 .map_err(CreateLoopServiceError::InvalidRequest)?,
         },
+        CreateLoopTriggerRequest::Idle { after } => LoopTriggerKind::Idle {
+            after: parse_loop_idle_after(after.trim())
+                .map_err(CreateLoopServiceError::InvalidRequest)?,
+        },
         CreateLoopTriggerRequest::BeforeTurn => LoopTriggerKind::BeforeTurn,
         CreateLoopTriggerRequest::AfterTurn => LoopTriggerKind::AfterTurn,
     };
@@ -186,6 +192,7 @@ pub fn create_loop(
         execution,
         schedule: match &trigger_kind {
             LoopTriggerKind::Timer { schedule } => schedule.clone(),
+            LoopTriggerKind::Idle { after } => after.clone(),
             LoopTriggerKind::BeforeTurn | LoopTriggerKind::AfterTurn => LoopSchedule::Interval {
                 display: "1h".to_string(),
                 seconds: 60 * 60,
@@ -225,6 +232,7 @@ pub fn create_loop(
         security_mode: request.security_mode,
         trigger_kind: match trigger_kind {
             LoopTriggerKind::Timer { .. } => "timer".to_string(),
+            LoopTriggerKind::Idle { .. } => "idle".to_string(),
             LoopTriggerKind::BeforeTurn => "before_turn".to_string(),
             LoopTriggerKind::AfterTurn => "after_turn".to_string(),
         },
@@ -275,6 +283,7 @@ mod tests {
     use codex_loop::LoopContextMode;
     use codex_loop::LoopResponseMode;
     use codex_loop::LoopSecurityMode;
+    use codex_loop::LoopTriggerPhase;
     use codex_loop::load_loop_timers;
     use codex_loop::load_loop_trigger_queues;
     use codex_loop::loop_timers_path;
@@ -332,9 +341,9 @@ mod tests {
         );
 
         let queues = load_loop_trigger_queues(temp.path()).expect("load queues");
-        assert_eq!(queues.queues.len(), 3);
+        assert_eq!(queues.queues.len(), 4);
         assert_eq!(
-            codex_loop::queue_entries_for_phase(&queues, codex_loop::LoopTriggerPhase::AfterTurn)
+            codex_loop::queue_entries_for_phase(&queues, LoopTriggerPhase::AfterTurn)
                 .iter()
                 .map(|entry| (entry.loop_id.clone(), entry.binding_id.clone()))
                 .collect::<Vec<_>>(),
@@ -391,6 +400,43 @@ mod tests {
             CreateLoopServiceError::InvalidRequest(
                 "specified_directory requires at least one writable root".to_string()
             )
+        );
+    }
+
+    #[test]
+    fn create_loop_accepts_idle_trigger() {
+        let temp = tempdir().expect("create tempdir");
+        let result = create_loop(
+            CreateLoopRequest {
+                id: None,
+                prompt: "summarize what changed".to_string(),
+                action: None,
+                context_mode: LoopContextMode::Ephemeral,
+                response_mode: LoopResponseMode::Assistant,
+                security_mode: LoopSecurityMode::Inherited,
+                cwd: None,
+                writable_roots: Vec::new(),
+                trigger: CreateLoopTriggerRequest::Idle {
+                    after: "15m".to_string(),
+                },
+            },
+            temp.path(),
+        )
+        .expect("create idle loop");
+
+        assert_eq!("idle", result.trigger_kind);
+        let timers = load_loop_timers(temp.path()).expect("load timers");
+        assert_eq!(
+            "idle · 15m",
+            timers.timers[0].trigger_bindings[0].selection_name()
+        );
+        let queues = load_loop_trigger_queues(temp.path()).expect("load queues");
+        assert_eq!(
+            codex_loop::queue_entries_for_phase(&queues, LoopTriggerPhase::Idle)
+                .iter()
+                .map(|entry| (entry.loop_id.clone(), entry.binding_id.clone()))
+                .count(),
+            1
         );
     }
 }

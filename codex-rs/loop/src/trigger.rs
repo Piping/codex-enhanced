@@ -7,16 +7,19 @@ use crate::command::LoopSchedule;
 #[serde(rename_all = "snake_case")]
 pub enum LoopTriggerPhase {
     Timer,
+    Idle,
     BeforeTurn,
     AfterTurn,
 }
 
 impl LoopTriggerPhase {
-    pub const USER_SELECTABLE: [Self; 3] = [Self::Timer, Self::BeforeTurn, Self::AfterTurn];
+    pub const USER_SELECTABLE: [Self; 4] =
+        [Self::Timer, Self::Idle, Self::BeforeTurn, Self::AfterTurn];
 
     pub fn title(self) -> &'static str {
         match self {
             Self::Timer => "Timer",
+            Self::Idle => "Idle",
             Self::BeforeTurn => "Before Turn",
             Self::AfterTurn => "After Turn",
         }
@@ -25,6 +28,7 @@ impl LoopTriggerPhase {
     pub fn description(self) -> &'static str {
         match self {
             Self::Timer => "Runs when timer-based loop triggers become due.",
+            Self::Idle => "Runs after the main thread stays idle for the configured duration.",
             Self::BeforeTurn => "Runs before a user turn is submitted into the main thread model.",
             Self::AfterTurn => "Runs after the assistant final response completes.",
         }
@@ -35,6 +39,7 @@ impl LoopTriggerPhase {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LoopTriggerKind {
     Timer { schedule: LoopSchedule },
+    Idle { after: LoopSchedule },
     BeforeTurn,
     AfterTurn,
 }
@@ -43,6 +48,7 @@ impl LoopTriggerKind {
     pub fn phase(&self) -> LoopTriggerPhase {
         match self {
             Self::Timer { .. } => LoopTriggerPhase::Timer,
+            Self::Idle { .. } => LoopTriggerPhase::Idle,
             Self::BeforeTurn => LoopTriggerPhase::BeforeTurn,
             Self::AfterTurn => LoopTriggerPhase::AfterTurn,
         }
@@ -51,6 +57,7 @@ impl LoopTriggerKind {
     pub fn short_label(&self) -> String {
         match self {
             Self::Timer { schedule } => format!("timer · {}", schedule.display()),
+            Self::Idle { after } => format!("idle · {}", after.display()),
             Self::BeforeTurn => "before turn".to_string(),
             Self::AfterTurn => "after turn".to_string(),
         }
@@ -193,5 +200,22 @@ mod tests {
         });
 
         assert_eq!(LoopTriggerPhase::Timer, binding.kind.phase());
+    }
+
+    #[test]
+    fn idle_binding_uses_idle_phase() {
+        let binding = LoopTriggerBinding {
+            id: "trigger-1".to_string(),
+            enabled: true,
+            kind: LoopTriggerKind::Idle {
+                after: LoopSchedule::Interval {
+                    display: "30m".to_string(),
+                    seconds: 1_800,
+                },
+            },
+        };
+
+        assert_eq!(LoopTriggerPhase::Idle, binding.kind.phase());
+        assert_eq!("idle · 30m", binding.selection_name());
     }
 }

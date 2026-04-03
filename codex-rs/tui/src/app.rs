@@ -1895,6 +1895,9 @@ impl App {
     }
 
     async fn submit_op_to_thread(&mut self, thread_id: ThreadId, op: Op) {
+        if self.primary_thread_id == Some(thread_id) && matches!(op, Op::UserTurn { .. }) {
+            self.cancel_primary_idle_triggers();
+        }
         let replay_state_op =
             ThreadEventStore::op_can_change_pending_replay_state(&op).then(|| op.clone());
         let submitted = if self.active_thread_id == Some(thread_id) {
@@ -4117,8 +4120,14 @@ impl App {
             AppEvent::OpenCreateLoopTimerSchedulePrompt => {
                 self.chat_widget.open_create_loop_schedule_prompt();
             }
+            AppEvent::OpenCreateLoopIdleAfterPrompt => {
+                self.chat_widget.open_create_loop_idle_prompt();
+            }
             AppEvent::SaveCreateLoopTimerSchedule { schedule } => {
                 self.save_create_loop_timer_schedule(schedule);
+            }
+            AppEvent::SaveCreateLoopIdleTrigger { after } => {
+                self.save_create_loop_idle_trigger(after);
             }
             AppEvent::SaveCreateLoopBeforeTurnTrigger => {
                 self.save_create_loop_before_turn_trigger();
@@ -4166,11 +4175,23 @@ impl App {
             AppEvent::AddLoopAfterTurnTrigger { timer_id } => {
                 self.add_loop_trigger(timer_id, codex_loop::LoopTriggerKind::AfterTurn);
             }
+            AppEvent::OpenCreateLoopIdleTriggerAfter { timer_id } => {
+                self.open_new_loop_idle_trigger_after_editor(timer_id);
+            }
             AppEvent::OpenCreateLoopTimerTriggerSchedule { timer_id } => {
                 self.open_new_loop_timer_trigger_schedule_editor(timer_id);
             }
+            AppEvent::SaveNewLoopIdleTriggerAfter { timer_id, after } => {
+                self.save_new_loop_idle_trigger_after(timer_id, after);
+            }
             AppEvent::SaveNewLoopTimerTriggerSchedule { timer_id, schedule } => {
                 self.save_new_loop_timer_trigger_schedule(timer_id, schedule);
+            }
+            AppEvent::OpenEditLoopTriggerBindingIdleAfter {
+                timer_id,
+                binding_id,
+            } => {
+                self.open_loop_trigger_binding_idle_after_editor(timer_id, binding_id);
             }
             AppEvent::OpenEditLoopTriggerBindingSchedule {
                 timer_id,
@@ -4190,6 +4211,13 @@ impl App {
                 schedule,
             } => {
                 self.save_loop_trigger_binding_schedule(timer_id, binding_id, schedule);
+            }
+            AppEvent::SaveLoopTriggerBindingIdleAfter {
+                timer_id,
+                binding_id,
+                after,
+            } => {
+                self.save_loop_trigger_binding_idle_after(timer_id, binding_id, after);
             }
             AppEvent::EnableLoopTriggerBinding {
                 timer_id,
@@ -4676,6 +4704,11 @@ impl App {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => {
+                if self.active_thread_id == self.primary_thread_id
+                    && matches!(op, Op::UserTurn { .. })
+                {
+                    self.cancel_primary_idle_triggers();
+                }
                 let (op, loop_cells) = self
                     .augment_primary_user_turn_with_before_turn_loops(op)
                     .await;

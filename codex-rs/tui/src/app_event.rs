@@ -87,7 +87,8 @@ pub(crate) struct ConnectorsSnapshot {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LoopTimerTriggerSource {
-    Scheduled,
+    ScheduledTimer,
+    ScheduledIdle,
     Manual,
 }
 
@@ -232,9 +233,15 @@ pub(crate) enum AppEvent {
     OpenCreateLoopDraftTriggerMenu,
     /// Open the timer-schedule prompt for the active create draft.
     OpenCreateLoopTimerSchedulePrompt,
+    /// Open the idle-after prompt for the active create draft.
+    OpenCreateLoopIdleAfterPrompt,
     /// Persist a timer trigger schedule for the active create draft.
     SaveCreateLoopTimerSchedule {
         schedule: String,
+    },
+    /// Persist an idle trigger for the active create draft.
+    SaveCreateLoopIdleTrigger {
+        after: String,
     },
     /// Persist a before-turn trigger for the active create draft.
     SaveCreateLoopBeforeTurnTrigger,
@@ -280,14 +287,28 @@ pub(crate) enum AppEvent {
     AddLoopAfterTurnTrigger {
         timer_id: String,
     },
+    /// Open an editor to create an idle trigger for a loop timer.
+    OpenCreateLoopIdleTriggerAfter {
+        timer_id: String,
+    },
     /// Open an editor to create a timer trigger for a loop timer.
     OpenCreateLoopTimerTriggerSchedule {
         timer_id: String,
+    },
+    /// Persist a newly created idle trigger for a loop timer.
+    SaveNewLoopIdleTriggerAfter {
+        timer_id: String,
+        after: String,
     },
     /// Persist a newly created timer trigger for a loop timer.
     SaveNewLoopTimerTriggerSchedule {
         timer_id: String,
         schedule: String,
+    },
+    /// Open an editor for an existing idle trigger duration.
+    OpenEditLoopTriggerBindingIdleAfter {
+        timer_id: String,
+        binding_id: String,
     },
     /// Open an editor for an existing timer trigger schedule.
     OpenEditLoopTriggerBindingSchedule {
@@ -304,6 +325,12 @@ pub(crate) enum AppEvent {
         timer_id: String,
         binding_id: String,
         schedule: String,
+    },
+    /// Persist a new idle-after duration for an existing idle trigger.
+    SaveLoopTriggerBindingIdleAfter {
+        timer_id: String,
+        binding_id: String,
+        after: String,
     },
     /// Enable one loop trigger binding.
     EnableLoopTriggerBinding {

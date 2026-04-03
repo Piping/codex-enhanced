@@ -45,6 +45,7 @@ use codex_loop::next_due_for_timer;
 use codex_loop::next_trigger_binding_id;
 use codex_loop::parse_loop_command;
 use codex_loop::parse_loop_cwd;
+use codex_loop::parse_loop_idle_after;
 use codex_loop::parse_loop_schedule;
 use codex_loop::parse_loop_writable_roots;
 use codex_loop::prompt_prefix;
@@ -99,6 +100,8 @@ pub(crate) struct LoopTimersState {
     trigger_queues: PersistedLoopTriggerQueuesFile,
     pub(crate) create_draft: Option<LoopCreateDraft>,
     scheduler_tasks: HashMap<String, JoinHandle<()>>,
+    idle_scheduler_tasks: HashMap<String, JoinHandle<()>>,
+    idle_due_at_unix_seconds: HashMap<String, i64>,
     active_runs: HashMap<String, ActiveLoopRun>,
     pub(super) thread_history_cells: HashMap<ThreadId, Vec<Arc<dyn HistoryCell>>>,
     pub(super) after_turn_scheduler: AfterTurnSchedulerState,
@@ -130,6 +133,8 @@ impl Default for LoopTimersState {
             trigger_queues: PersistedLoopTriggerQueuesFile::default(),
             create_draft: None,
             scheduler_tasks: HashMap::new(),
+            idle_scheduler_tasks: HashMap::new(),
+            idle_due_at_unix_seconds: HashMap::new(),
             active_runs: HashMap::new(),
             thread_history_cells: HashMap::new(),
             after_turn_scheduler: AfterTurnSchedulerState::default(),
@@ -756,6 +761,7 @@ impl App {
                 {
                     self.schedule_loop_timer(&timer_id, due);
                 }
+                self.arm_idle_triggers_for_loop_from_now(&timer_id, now);
                 self.chat_widget.add_info_message(message, /*hint*/ None);
                 self.refresh_loop_timers_panel_if_active();
                 self.open_loop_timer_actions(timer_id);
@@ -839,6 +845,7 @@ impl App {
         }
         let schedule = match &trigger_kind {
             LoopTriggerKind::Timer { schedule } => schedule.clone(),
+            LoopTriggerKind::Idle { after } => after.clone(),
             LoopTriggerKind::BeforeTurn | LoopTriggerKind::AfterTurn => {
                 codex_loop::LoopSchedule::Interval {
                     display: "1h".to_string(),
@@ -872,6 +879,7 @@ impl App {
         self.loop_timers.timers.insert(timer.id.clone(), timer);
         let trigger_summary = match &trigger_kind {
             LoopTriggerKind::Timer { schedule } => schedule.display().to_string(),
+            LoopTriggerKind::Idle { after } => format!("idle {}", after.display()),
             LoopTriggerKind::BeforeTurn => "before turn".to_string(),
             LoopTriggerKind::AfterTurn => "after turn".to_string(),
         };
@@ -951,9 +959,7 @@ impl App {
             subtitle: Some(format!(
                 "{} · {}",
                 timer_descriptor(timer),
-                effective_timer_schedule(timer)
-                    .map(|schedule| schedule.display().to_string())
-                    .unwrap_or_else(|| "no timer trigger".to_string())
+                scheduled_trigger_label(timer)
             )),
             footer_hint: Some(standard_popup_hint_line()),
             items: vec![
@@ -1101,6 +1107,9 @@ impl App {
                     LoopTriggerKind::Timer { schedule } => {
                         format!("Timer trigger · {}", schedule.display())
                     }
+                    LoopTriggerKind::Idle { after } => {
+                        format!("Idle trigger · {}", after.display())
+                    }
                     LoopTriggerKind::BeforeTurn => {
                         "Runs before a main-thread user turn is submitted.".to_string()
                     }
@@ -1131,7 +1140,8 @@ impl App {
             SelectionItem {
                 name: "Add Trigger".to_string(),
                 description: Some(
-                    "Attach a timer, before-turn, or after-turn trigger to this loop.".to_string(),
+                    "Attach a timer, idle, before-turn, or after-turn trigger to this loop."
+                        .to_string(),
                 ),
                 actions: vec![Box::new(move |tx| {
                     tx.send(AppEvent::OpenCreateLoopTriggerMenu {
@@ -1161,6 +1171,7 @@ impl App {
     pub(crate) fn open_create_loop_trigger_menu(&mut self, timer_id: String) {
         self.ensure_loop_timers_loaded();
         let timer_id_for_timer_trigger = timer_id.clone();
+        let timer_id_for_idle_trigger = timer_id.clone();
         let timer_id_for_before_turn = timer_id.clone();
         let timer_id_for_after_turn = timer_id.clone();
         let timer_id_for_cancel = timer_id.clone();
@@ -1177,6 +1188,22 @@ impl App {
                         move |tx| {
                             tx.send(AppEvent::OpenCreateLoopTimerTriggerSchedule {
                                 timer_id: timer_id_for_timer_trigger.clone(),
+                            })
+                        }
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: "Idle".to_string(),
+                    description: Some(
+                        "Run this loop after the main thread stays idle for a configured duration."
+                            .to_string(),
+                    ),
+                    actions: vec![Box::new({
+                        move |tx| {
+                            tx.send(AppEvent::OpenCreateLoopIdleTriggerAfter {
+                                timer_id: timer_id_for_idle_trigger.clone(),
                             })
                         }
                     })],
@@ -1235,6 +1262,19 @@ impl App {
             .open_new_loop_trigger_schedule_editor(timer_id, initial);
     }
 
+    pub(crate) fn open_new_loop_idle_trigger_after_editor(&mut self, timer_id: String) {
+        self.ensure_loop_timers_loaded();
+        let Some(timer) = self.loop_timers.timers.get(&timer_id) else {
+            self.open_loop_timers_panel();
+            return;
+        };
+        let initial = effective_idle_after(timer)
+            .map(|after| after.display().to_string())
+            .unwrap_or_default();
+        self.chat_widget
+            .open_new_loop_trigger_idle_after_editor(timer_id, initial);
+    }
+
     pub(crate) fn open_loop_trigger_binding_schedule_editor(
         &mut self,
         timer_id: String,
@@ -1260,6 +1300,34 @@ impl App {
             timer_id,
             binding_id,
             schedule.display().to_string(),
+        );
+    }
+
+    pub(crate) fn open_loop_trigger_binding_idle_after_editor(
+        &mut self,
+        timer_id: String,
+        binding_id: String,
+    ) {
+        self.ensure_loop_timers_loaded();
+        let Some(timer) = self.loop_timers.timers.get(&timer_id) else {
+            self.open_loop_timers_panel();
+            return;
+        };
+        let Some(binding) = trigger_bindings(timer)
+            .into_iter()
+            .find(|binding| binding.id == binding_id)
+        else {
+            self.open_loop_timer_triggers_panel(timer_id);
+            return;
+        };
+        let LoopTriggerKind::Idle { after } = binding.kind else {
+            self.open_loop_trigger_binding_actions(timer_id, binding_id);
+            return;
+        };
+        self.chat_widget.open_loop_trigger_idle_after_editor(
+            timer_id,
+            binding_id,
+            after.display().to_string(),
         );
     }
 
@@ -1309,6 +1377,19 @@ impl App {
         self.open_loop_timer_triggers_panel(timer_id);
     }
 
+    pub(crate) fn save_new_loop_idle_trigger_after(&mut self, timer_id: String, after: String) {
+        let after = match parse_loop_idle_after(after.trim()) {
+            Ok(after) => after,
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to add loop idle trigger: {err}"));
+                return;
+            }
+        };
+        self.add_loop_trigger(timer_id.clone(), LoopTriggerKind::Idle { after });
+        self.open_loop_timer_triggers_panel(timer_id);
+    }
+
     pub(crate) fn open_loop_trigger_binding_actions(
         &mut self,
         timer_id: String,
@@ -1329,18 +1410,36 @@ impl App {
         let timer_id_for_delete = timer_id.clone();
         let timer_id_for_cancel = timer_id.clone();
         let mut items = Vec::new();
-        if let LoopTriggerKind::Timer { schedule } = &binding.kind {
+        if let Some(current_schedule) = match &binding.kind {
+            LoopTriggerKind::Timer { schedule } => Some((
+                "Edit Schedule",
+                format!("Current schedule: {}", schedule.display()),
+            )),
+            LoopTriggerKind::Idle { after } => Some((
+                "Edit Idle Duration",
+                format!("Current idle duration: {}", after.display()),
+            )),
+            LoopTriggerKind::BeforeTurn | LoopTriggerKind::AfterTurn => None,
+        } {
+            let is_idle = matches!(&binding.kind, LoopTriggerKind::Idle { .. });
             items.push(SelectionItem {
-                name: "Edit Schedule".to_string(),
-                description: Some(format!("Current schedule: {}", schedule.display())),
+                name: current_schedule.0.to_string(),
+                description: Some(current_schedule.1),
                 actions: vec![Box::new({
                     let timer_id = timer_id.clone();
                     let binding_id = binding.id.clone();
                     move |tx| {
-                        tx.send(AppEvent::OpenEditLoopTriggerBindingSchedule {
-                            timer_id: timer_id.clone(),
-                            binding_id: binding_id.clone(),
-                        })
+                        if is_idle {
+                            tx.send(AppEvent::OpenEditLoopTriggerBindingIdleAfter {
+                                timer_id: timer_id.clone(),
+                                binding_id: binding_id.clone(),
+                            })
+                        } else {
+                            tx.send(AppEvent::OpenEditLoopTriggerBindingSchedule {
+                                timer_id: timer_id.clone(),
+                                binding_id: binding_id.clone(),
+                            })
+                        }
                     }
                 })],
                 dismiss_on_select: true,
@@ -1447,6 +1546,43 @@ impl App {
         self.open_loop_timer_triggers_panel(timer_id);
     }
 
+    pub(crate) fn save_loop_trigger_binding_idle_after(
+        &mut self,
+        timer_id: String,
+        binding_id: String,
+        after: String,
+    ) {
+        self.ensure_loop_timers_loaded();
+        let after = match parse_loop_idle_after(after.trim()) {
+            Ok(after) => after,
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to update loop trigger: {err}"));
+                return;
+            }
+        };
+        {
+            let Some(timer) = self.loop_timers.timers.get_mut(&timer_id) else {
+                self.open_loop_timers_panel();
+                return;
+            };
+            let Some(binding) = timer
+                .trigger_bindings
+                .iter_mut()
+                .find(|binding| binding.id == binding_id)
+            else {
+                self.open_loop_timer_triggers_panel(timer_id.clone());
+                return;
+            };
+            binding.kind = LoopTriggerKind::Idle {
+                after: after.clone(),
+            };
+            timer.schedule = after;
+        }
+        self.normalize_loop_after_trigger_change(&timer_id);
+        self.open_loop_timer_triggers_panel(timer_id);
+    }
+
     pub(crate) fn set_loop_trigger_binding_enabled(
         &mut self,
         timer_id: String,
@@ -1490,7 +1626,7 @@ impl App {
 
     fn normalize_loop_after_trigger_change(&mut self, timer_id: &str) {
         if let Some(timer) = self.loop_timers.timers.get_mut(timer_id)
-            && let Some(schedule) = effective_timer_schedule(timer)
+            && let Some(schedule) = primary_scheduled_trigger(timer)
         {
             timer.schedule = schedule;
         }
@@ -1498,6 +1634,8 @@ impl App {
             &mut self.loop_timers.trigger_queues,
             &self.loop_timers.timers,
         );
+        self.cancel_idle_triggers_for_loop(timer_id);
+        self.arm_idle_triggers_for_loop_from_now(timer_id, Utc::now());
         if let Err(err) = self.persist_loop_timers() {
             self.chat_widget
                 .add_error_message(format!("Failed to persist loop trigger changes: {err}"));
@@ -1921,10 +2059,14 @@ impl App {
         if !enabled {
             self.stop_loop_timer_scheduler(&timer_id);
             self.stop_loop_timer_run(&timer_id);
+            self.cancel_idle_triggers_for_loop(&timer_id);
         } else if let Some(timer) = next_due
             && let Some(due) = next_due_for_timer(&timer, Utc::now())
         {
             self.schedule_loop_timer(&timer_id, due);
+        }
+        if enabled {
+            self.arm_idle_triggers_for_loop_from_now(&timer_id, Utc::now());
         }
         if let Err(err) = self.persist_loop_timers() {
             self.chat_widget
@@ -1937,6 +2079,7 @@ impl App {
         self.ensure_loop_timers_loaded();
         self.stop_loop_timer_scheduler(&timer_id);
         self.stop_loop_timer_run(&timer_id);
+        self.cancel_idle_triggers_for_loop(&timer_id);
         self.loop_timers.timers.remove(&timer_id);
         sync_trigger_queues_with_timers(
             &mut self.loop_timers.trigger_queues,
@@ -2056,6 +2199,8 @@ impl App {
         &mut self,
         last_agent_message: Option<String>,
     ) {
+        self.ensure_loop_timers_loaded();
+        self.arm_idle_triggers_for_primary_round(Utc::now());
         self.loop_timers
             .after_turn_scheduler
             .note_turn_complete(last_agent_message);
@@ -2386,19 +2531,33 @@ impl App {
         scheduled_for_unix_seconds: i64,
         source: LoopTimerTriggerSource,
     ) -> Vec<Arc<dyn HistoryCell>> {
-        if matches!(source, LoopTimerTriggerSource::Scheduled) {
-            self.trigger_due_timer_phase(scheduled_for_unix_seconds)
-                .await;
-            return Vec::new();
+        match source {
+            LoopTimerTriggerSource::ScheduledTimer => {
+                self.trigger_due_timer_phase(scheduled_for_unix_seconds)
+                    .await;
+                Vec::new()
+            }
+            LoopTimerTriggerSource::ScheduledIdle => {
+                self.trigger_due_idle_phase(scheduled_for_unix_seconds)
+                    .await;
+                Vec::new()
+            }
+            LoopTimerTriggerSource::Manual => {
+                self.trigger_loop_timer_now(
+                    timer_id,
+                    scheduled_for_unix_seconds,
+                    /*update_timer_schedule*/ true,
+                )
+                .await
+            }
         }
-        self.trigger_loop_timer_now(timer_id, scheduled_for_unix_seconds)
-            .await
     }
 
     async fn trigger_loop_timer_now(
         &mut self,
         timer_id: String,
         scheduled_for_unix_seconds: i64,
+        update_timer_schedule: bool,
     ) -> Vec<Arc<dyn HistoryCell>> {
         self.ensure_loop_timers_loaded();
         let now = Utc::now();
@@ -2406,19 +2565,23 @@ impl App {
             let Some(timer) = self.loop_timers.timers.get_mut(&timer_id) else {
                 return Vec::new();
             };
-            timer.last_scheduled_at_unix_seconds = Some(scheduled_for_unix_seconds);
+            if update_timer_schedule {
+                timer.last_scheduled_at_unix_seconds = Some(scheduled_for_unix_seconds);
+            }
             timer.clone()
         };
-        let next_due = timer
-            .enabled
-            .then(|| next_due_for_timer(&timer, now))
-            .flatten();
-        if let Err(err) = self.persist_loop_timers() {
-            self.chat_widget
-                .add_error_message(format!("Failed to update loop timer schedule: {err}"));
-        }
-        if let Some(next_due) = next_due {
-            self.schedule_loop_timer(&timer_id, next_due);
+        if update_timer_schedule {
+            let next_due = timer
+                .enabled
+                .then(|| next_due_for_timer(&timer, now))
+                .flatten();
+            if let Err(err) = self.persist_loop_timers() {
+                self.chat_widget
+                    .add_error_message(format!("Failed to update loop timer schedule: {err}"));
+            }
+            if let Some(next_due) = next_due {
+                self.schedule_loop_timer(&timer_id, next_due);
+            }
         }
 
         if self.loop_timers.active_runs.contains_key(&timer_id) {
@@ -2612,7 +2775,45 @@ impl App {
                 .collect::<Vec<_>>();
         for loop_id in due_loop_ids {
             let _ = self
-                .trigger_loop_timer_now(loop_id, scheduled_for_unix_seconds)
+                .trigger_loop_timer_now(
+                    loop_id,
+                    scheduled_for_unix_seconds,
+                    /*update_timer_schedule*/ true,
+                )
+                .await;
+        }
+    }
+
+    async fn trigger_due_idle_phase(&mut self, scheduled_for_unix_seconds: i64) {
+        self.ensure_loop_timers_loaded();
+        let due_entries =
+            queue_entries_for_phase(&self.loop_timers.trigger_queues, LoopTriggerPhase::Idle)
+                .iter()
+                .filter_map(|entry| {
+                    let timer = self.loop_timers.timers.get(&entry.loop_id)?;
+                    let binding = trigger_bindings(timer)
+                        .into_iter()
+                        .find(|binding| binding.id == entry.binding_id)?;
+                    let key = idle_binding_task_key(&entry.loop_id, &entry.binding_id);
+                    let due_at = *self.loop_timers.idle_due_at_unix_seconds.get(&key)?;
+                    (timer.enabled
+                        && binding.enabled
+                        && matches!(binding.kind, LoopTriggerKind::Idle { .. })
+                        && due_at <= scheduled_for_unix_seconds)
+                        .then_some((entry.loop_id.clone(), key))
+                })
+                .collect::<Vec<_>>();
+        for (_, key) in &due_entries {
+            self.loop_timers.idle_due_at_unix_seconds.remove(key);
+            self.loop_timers.idle_scheduler_tasks.remove(key);
+        }
+        for (loop_id, _) in due_entries {
+            let _ = self
+                .trigger_loop_timer_now(
+                    loop_id,
+                    scheduled_for_unix_seconds,
+                    /*update_timer_schedule*/ false,
+                )
                 .await;
         }
     }
@@ -2783,15 +2984,124 @@ impl App {
             app_event_tx.send(AppEvent::TriggerLoopTimer {
                 timer_id: timer_id_for_event,
                 scheduled_for_unix_seconds: due_at.timestamp(),
-                source: LoopTimerTriggerSource::Scheduled,
+                source: LoopTimerTriggerSource::ScheduledTimer,
             });
         });
         self.loop_timers.scheduler_tasks.insert(timer_id, handle);
     }
 
+    fn schedule_idle_trigger(&mut self, loop_id: &str, binding_id: &str, due_at: DateTime<Utc>) {
+        let task_key = idle_binding_task_key(loop_id, binding_id);
+        self.stop_idle_trigger_scheduler(&task_key);
+        self.loop_timers
+            .idle_due_at_unix_seconds
+            .insert(task_key.clone(), due_at.timestamp());
+        let loop_id = loop_id.to_string();
+        let app_event_tx = self.app_event_tx.clone();
+        let handle = tokio::spawn(async move {
+            let now = Utc::now();
+            let delay = due_at
+                .signed_duration_since(now)
+                .to_std()
+                .unwrap_or(Duration::ZERO);
+            tokio::time::sleep(delay).await;
+            app_event_tx.send(AppEvent::TriggerLoopTimer {
+                timer_id: loop_id,
+                scheduled_for_unix_seconds: due_at.timestamp(),
+                source: LoopTimerTriggerSource::ScheduledIdle,
+            });
+        });
+        self.loop_timers
+            .idle_scheduler_tasks
+            .insert(task_key, handle);
+    }
+
     fn stop_loop_timer_scheduler(&mut self, timer_id: &str) {
         if let Some(handle) = self.loop_timers.scheduler_tasks.remove(timer_id) {
             handle.abort();
+        }
+    }
+
+    fn stop_idle_trigger_scheduler(&mut self, task_key: &str) {
+        self.loop_timers.idle_due_at_unix_seconds.remove(task_key);
+        if let Some(handle) = self.loop_timers.idle_scheduler_tasks.remove(task_key) {
+            handle.abort();
+        }
+    }
+
+    pub(crate) fn cancel_primary_idle_triggers(&mut self) {
+        let task_keys = self
+            .loop_timers
+            .idle_scheduler_tasks
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for task_key in task_keys {
+            self.stop_idle_trigger_scheduler(&task_key);
+        }
+    }
+
+    fn cancel_idle_triggers_for_loop(&mut self, loop_id: &str) {
+        let prefix = format!("{loop_id}:");
+        let task_keys = self
+            .loop_timers
+            .idle_scheduler_tasks
+            .keys()
+            .filter(|task_key| task_key.starts_with(&prefix))
+            .cloned()
+            .collect::<Vec<_>>();
+        for task_key in task_keys {
+            self.stop_idle_trigger_scheduler(&task_key);
+        }
+    }
+
+    fn arm_idle_triggers_for_primary_round(&mut self, completed_at: DateTime<Utc>) {
+        self.cancel_primary_idle_triggers();
+        let due_entries =
+            queue_entries_for_phase(&self.loop_timers.trigger_queues, LoopTriggerPhase::Idle)
+                .iter()
+                .filter_map(|entry| {
+                    let timer = self.loop_timers.timers.get(&entry.loop_id)?;
+                    let binding = trigger_bindings(timer)
+                        .into_iter()
+                        .find(|binding| binding.id == entry.binding_id)?;
+                    let LoopTriggerKind::Idle { after } = binding.kind else {
+                        return None;
+                    };
+                    (timer.enabled && binding.enabled).then_some((
+                        entry.loop_id.clone(),
+                        entry.binding_id.clone(),
+                        after.first_due_after_creation(completed_at),
+                    ))
+                })
+                .collect::<Vec<_>>();
+        for (loop_id, binding_id, due_at) in due_entries {
+            self.schedule_idle_trigger(&loop_id, &binding_id, due_at);
+        }
+    }
+
+    fn arm_idle_triggers_for_loop_from_now(&mut self, loop_id: &str, started_at: DateTime<Utc>) {
+        let due_entries =
+            queue_entries_for_phase(&self.loop_timers.trigger_queues, LoopTriggerPhase::Idle)
+                .iter()
+                .filter(|entry| entry.loop_id == loop_id)
+                .filter_map(|entry| {
+                    let timer = self.loop_timers.timers.get(&entry.loop_id)?;
+                    let binding = trigger_bindings(timer)
+                        .into_iter()
+                        .find(|binding| binding.id == entry.binding_id)?;
+                    let LoopTriggerKind::Idle { after } = binding.kind else {
+                        return None;
+                    };
+                    (timer.enabled && binding.enabled).then_some((
+                        entry.loop_id.clone(),
+                        entry.binding_id.clone(),
+                        after.first_due_after_creation(started_at),
+                    ))
+                })
+                .collect::<Vec<_>>();
+        for (loop_id, binding_id, due_at) in due_entries {
+            self.schedule_idle_trigger(&loop_id, &binding_id, due_at);
         }
     }
 
@@ -2834,6 +3144,15 @@ impl App {
         {
             handle.abort();
         }
+        for handle in self
+            .loop_timers
+            .idle_scheduler_tasks
+            .drain()
+            .map(|(_, handle)| handle)
+        {
+            handle.abort();
+        }
+        self.loop_timers.idle_due_at_unix_seconds.clear();
         let active_ids = self
             .loop_timers
             .active_runs
@@ -2925,9 +3244,7 @@ fn loop_timer_selection_item(timer: &PersistedLoopTimer, is_running: bool) -> Se
     let bindings = trigger_bindings(timer);
     let mut description_parts = vec![
         timer_descriptor(timer).to_string(),
-        effective_timer_schedule(timer)
-            .map(|schedule| schedule.display().to_string())
-            .unwrap_or_else(|| "no timer trigger".to_string()),
+        scheduled_trigger_label(timer),
         format!("{} trigger(s)", bindings.len()),
         prompt_prefix(&timer.prompt),
         timer.response_mode.title().to_string(),
@@ -2990,11 +3307,36 @@ fn loop_status_label(timer: &PersistedLoopTimer) -> String {
     format!(
         "{} ({}) · {}",
         loop_item_name(timer),
-        effective_timer_schedule(timer)
-            .map(|schedule| schedule.display().to_string())
-            .unwrap_or_else(|| "no timer trigger".to_string()),
+        scheduled_trigger_label(timer),
         prompt_prefix(&timer.prompt),
     )
+}
+
+fn effective_idle_after(timer: &PersistedLoopTimer) -> Option<LoopSchedule> {
+    timer
+        .trigger_bindings
+        .iter()
+        .find_map(|binding| match &binding.kind {
+            LoopTriggerKind::Idle { after } if binding.enabled => Some(after.clone()),
+            _ => None,
+        })
+}
+
+fn primary_scheduled_trigger(timer: &PersistedLoopTimer) -> Option<LoopSchedule> {
+    effective_timer_schedule(timer).or_else(|| effective_idle_after(timer))
+}
+
+fn scheduled_trigger_label(timer: &PersistedLoopTimer) -> String {
+    match effective_timer_schedule(timer) {
+        Some(schedule) => schedule.display().to_string(),
+        None => effective_idle_after(timer)
+            .map(|after| format!("idle {}", after.display()))
+            .unwrap_or_else(|| "no scheduled trigger".to_string()),
+    }
+}
+
+fn idle_binding_task_key(loop_id: &str, binding_id: &str) -> String {
+    format!("{loop_id}:{binding_id}")
 }
 
 fn ordered_trigger_timers_for_phase(
@@ -3436,6 +3778,7 @@ mod tests {
     use codex_loop::PersistedLoopExecutionSettings;
     use codex_loop::PersistedLoopTimer;
     use codex_loop::PersistedLoopTriggerQueuesFile;
+    use codex_loop::sync_trigger_queues_with_timers;
     use codex_otel::SessionTelemetry;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::SessionSource;
@@ -3689,6 +4032,67 @@ mod tests {
 
         assert_eq!(app.loop_timers.after_turn_scheduler.status_label(), None);
         assert_eq!(app.chat_widget.background_loop_status_text(), None);
+    }
+
+    #[tokio::test]
+    async fn arm_idle_triggers_tracks_due_time_until_canceled() {
+        let mut app = make_test_app().await;
+        app.loop_timers.workspace_cwd = Some(app.config.cwd.to_path_buf());
+        app.loop_timers.timers.insert(
+            "idle-review".to_string(),
+            PersistedLoopTimer {
+                id: "idle-review".to_string(),
+                mode: codex_loop::LoopMode::Persistent,
+                prompt: "review recent work".to_string(),
+                action: None,
+                context_mode: codex_loop::LoopContextMode::Persistent,
+                response_mode: LoopResponseMode::Assistant,
+                security_mode: codex_loop::LoopSecurityMode::Inherited,
+                execution: PersistedLoopExecutionSettings::default(),
+                schedule: LoopSchedule::Interval {
+                    display: "5m".to_string(),
+                    seconds: 300,
+                },
+                trigger_bindings: vec![LoopTriggerBinding {
+                    id: "trigger-1".to_string(),
+                    enabled: true,
+                    kind: LoopTriggerKind::Idle {
+                        after: LoopSchedule::Interval {
+                            display: "5m".to_string(),
+                            seconds: 300,
+                        },
+                    },
+                }],
+                enabled: true,
+                rollout_path: None,
+                created_at_unix_seconds: 1,
+                last_scheduled_at_unix_seconds: None,
+                last_completed_at_unix_seconds: None,
+            },
+        );
+        sync_trigger_queues_with_timers(
+            &mut app.loop_timers.trigger_queues,
+            &app.loop_timers.timers,
+        );
+        let completed_at = Utc
+            .with_ymd_and_hms(2026, 4, 2, 10, 0, 0)
+            .single()
+            .expect("timestamp");
+
+        app.arm_idle_triggers_for_primary_round(completed_at);
+
+        assert_eq!(
+            app.loop_timers
+                .idle_due_at_unix_seconds
+                .get("idle-review:trigger-1"),
+            Some(&completed_at.timestamp().saturating_add(300))
+        );
+        assert_eq!(app.loop_timers.idle_scheduler_tasks.len(), 1);
+
+        app.cancel_primary_idle_triggers();
+
+        assert!(app.loop_timers.idle_due_at_unix_seconds.is_empty());
+        assert!(app.loop_timers.idle_scheduler_tasks.is_empty());
     }
 
     #[test]

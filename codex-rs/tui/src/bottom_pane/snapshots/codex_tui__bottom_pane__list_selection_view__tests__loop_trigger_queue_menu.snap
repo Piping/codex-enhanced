@@ -1,0 +1,22 @@
+---
+source: tui/src/bottom_pane/list_selection_view.rs
+assertion_line: 2194
+expression: render_lines(&view)
+---
+                                                
+  Loop Manager                                  
+  Trigger Queue                                 
+                                                
+› 1. Timer        Runs when timer-based loop    
+                  triggers become due.          
+  2. Idle         Runs after the main thread    
+                  stays idle for the            
+                  configured duration.          
+  3. Before Turn  Runs before a user turn is    
+                  submitted into the main       
+                  thread model.                 
+  4. After Turn   Runs after the assistant      
+                  final response completes.     
+                                                
+  /workspace/…/loop/loop_trigger_queues.json    
+  Press enter to confirm or esc to go back

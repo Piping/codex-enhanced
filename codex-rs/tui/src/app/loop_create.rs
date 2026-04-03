@@ -118,6 +118,18 @@ impl App {
                     ..Default::default()
                 },
                 SelectionItem {
+                    name: "Idle".to_string(),
+                    description: Some(
+                        "Run after the main thread stays idle for a configured duration."
+                            .to_string(),
+                    ),
+                    actions: vec![Box::new(|tx| {
+                        tx.send(AppEvent::OpenCreateLoopIdleAfterPrompt)
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+                SelectionItem {
                     name: "Before Turn".to_string(),
                     description: Some(
                         "Run before a main-thread user turn is submitted.".to_string(),
@@ -159,6 +171,24 @@ impl App {
             }
         };
         draft.trigger_kind = Some(LoopTriggerKind::Timer { schedule });
+        self.open_create_loop_response_mode_menu();
+    }
+
+    pub(crate) fn save_create_loop_idle_trigger(&mut self, after: String) {
+        let Some(draft) = self.loop_timers.create_draft.as_mut() else {
+            self.chat_widget
+                .add_error_message("Loop creation is no longer active.".to_string());
+            return;
+        };
+        let after = match codex_loop::parse_loop_idle_after(after.trim()) {
+            Ok(after) => after,
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to create `/loop`: {err}"));
+                return;
+            }
+        };
+        draft.trigger_kind = Some(LoopTriggerKind::Idle { after });
         self.open_create_loop_response_mode_menu();
     }
 

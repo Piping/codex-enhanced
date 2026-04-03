@@ -1,0 +1,22 @@
+---
+source: tui/src/bottom_pane/list_selection_view.rs
+assertion_line: 2188
+expression: render_lines(&view)
+---
+                                                
+  Loop Manager                                  
+  Add Trigger · director                        
+                                                
+› 1. Timer Trigger  Run this loop on an         
+                    interval or cron schedule.  
+  2. Idle           Run this loop after the     
+                    main thread stays idle for  
+                    a configured duration.      
+  3. Before Turn    Run this loop before the    
+                    next main-thread user turn  
+                    is submitted.               
+  4. After Turn     Run this loop after the     
+                    assistant final response    
+                    completes.                  
+                                                
+  Press enter to confirm or esc to go back

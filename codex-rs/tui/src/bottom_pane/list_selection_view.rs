@@ -1825,6 +1825,110 @@ mod tests {
         )
     }
 
+    fn make_loop_trigger_create_view() -> ListSelectionView {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Loop Manager".to_string()),
+                subtitle: Some("Add Trigger · director".to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
+                items: vec![
+                    SelectionItem {
+                        name: "Timer Trigger".to_string(),
+                        description: Some(
+                            "Run this loop on an interval or cron schedule.".to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Idle".to_string(),
+                        description: Some(
+                            "Run this loop after the main thread stays idle for a configured duration."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Before Turn".to_string(),
+                        description: Some(
+                            "Run this loop before the next main-thread user turn is submitted."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "After Turn".to_string(),
+                        description: Some(
+                            "Run this loop after the assistant final response completes."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            tx,
+        )
+    }
+
+    fn make_loop_trigger_queue_view() -> ListSelectionView {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Loop Manager".to_string()),
+                subtitle: Some("Trigger Queue".to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
+                footer_path: Some(
+                    "/workspace/project/.codex/loop/loop_trigger_queues.json".to_string(),
+                ),
+                items: vec![
+                    SelectionItem {
+                        name: "Timer".to_string(),
+                        description: Some(
+                            "Runs when timer-based loop triggers become due.".to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Idle".to_string(),
+                        description: Some(
+                            "Runs after the main thread stays idle for the configured duration."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Before Turn".to_string(),
+                        description: Some(
+                            "Runs before a user turn is submitted into the main thread model."
+                                .to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "After Turn".to_string(),
+                        description: Some(
+                            "Runs after the assistant final response completes.".to_string(),
+                        ),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            tx,
+        )
+    }
+
     fn make_display_preferences_view() -> ListSelectionView {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -2078,6 +2182,18 @@ mod tests {
     fn loop_timers_menu_snapshot() {
         let view = make_loop_timers_view();
         assert_snapshot!("loop_timers_menu", render_lines(&view));
+    }
+
+    #[test]
+    fn loop_trigger_create_menu_snapshot() {
+        let view = make_loop_trigger_create_view();
+        assert_snapshot!("loop_trigger_create_menu", render_lines(&view));
+    }
+
+    #[test]
+    fn loop_trigger_queue_menu_snapshot() {
+        let view = make_loop_trigger_queue_view();
+        assert_snapshot!("loop_trigger_queue_menu", render_lines(&view));
     }
 
     #[test]

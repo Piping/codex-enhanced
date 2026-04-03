@@ -11,6 +11,7 @@ use codex_loop::loop_item_name;
 use codex_loop::loop_timers_path;
 use codex_loop::loop_trigger_queues_path;
 use codex_loop::parse_loop_cwd;
+use codex_loop::parse_loop_idle_after;
 use codex_loop::parse_loop_schedule;
 use codex_loop::parse_loop_writable_roots;
 use codex_loop::prompt_prefix;
@@ -229,6 +230,10 @@ pub fn update_loop(
                         schedule: parse_loop_schedule(schedule.trim())
                             .map_err(CreateLoopServiceError::InvalidRequest)?,
                     },
+                    CreateLoopTriggerRequest::Idle { after } => LoopTriggerKind::Idle {
+                        after: parse_loop_idle_after(after.trim())
+                            .map_err(CreateLoopServiceError::InvalidRequest)?,
+                    },
                     CreateLoopTriggerRequest::BeforeTurn => LoopTriggerKind::BeforeTurn,
                     CreateLoopTriggerRequest::AfterTurn => LoopTriggerKind::AfterTurn,
                 };
@@ -246,6 +251,7 @@ pub fn update_loop(
         .iter()
         .find_map(|binding| match &binding.kind {
             LoopTriggerKind::Timer { schedule } => Some(schedule.clone()),
+            LoopTriggerKind::Idle { after } => Some(after.clone()),
             LoopTriggerKind::BeforeTurn | LoopTriggerKind::AfterTurn => None,
         })
         .unwrap_or(LoopSchedule::Interval {
@@ -321,6 +327,7 @@ mod tests {
     use crate::create_loop;
     use codex_loop::LoopContextMode;
     use codex_loop::LoopResponseMode;
+    use codex_loop::LoopSchedule;
     use codex_loop::LoopSecurityMode;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
@@ -391,6 +398,43 @@ mod tests {
         assert_eq!(
             updated.timer.trigger_bindings[0].selection_name(),
             "timer · 10m"
+        );
+    }
+
+    #[test]
+    fn update_loop_supports_idle_trigger() {
+        let temp = tempdir().expect("tempdir");
+        seed_loop(&temp);
+
+        let updated = update_loop(
+            UpdateLoopRequest {
+                id: "director".to_string(),
+                prompt: None,
+                action: None,
+                context_mode: None,
+                response_mode: None,
+                security_mode: None,
+                cwd: None,
+                writable_roots: None,
+                enabled: None,
+                trigger_bindings: Some(vec![CreateLoopTriggerRequest::Idle {
+                    after: "20m".to_string(),
+                }]),
+            },
+            temp.path(),
+        )
+        .expect("update loop");
+
+        assert_eq!(
+            "idle · 20m",
+            updated.timer.trigger_bindings[0].selection_name()
+        );
+        assert_eq!(
+            updated.timer.schedule,
+            LoopSchedule::Interval {
+                display: "20m".to_string(),
+                seconds: 1_200,
+            }
         );
     }
 
