@@ -125,6 +125,18 @@ pub(crate) enum WorkflowOutputDelivery {
     UserFollowup,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkflowRunPhase {
+    BeforeTurn,
+    AfterTurn,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WorkflowPhaseContext<'a> {
+    pub(crate) current_user_turn: Option<&'a str>,
+    pub(crate) last_assistant_message: Option<&'a str>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WorkflowJobRunResult {
     pub(crate) delivery: WorkflowOutputDelivery,
@@ -365,6 +377,46 @@ impl WorkflowRuntimeClient for AppServerWorkflowRuntimeClient {
 
 #[allow(dead_code)]
 impl App {
+    pub(crate) async fn run_phase_workflows(
+        &self,
+        app_server: &AppServerSession,
+        phase: WorkflowRunPhase,
+        phase_context: WorkflowPhaseContext<'_>,
+    ) -> Result<Vec<WorkflowJobRunResult>, String> {
+        let registry = load_workflow_registry(self.config.cwd.as_path())
+            .map_err(|error| format!("failed to load workflows: {error}"))?;
+        let client = AppServerWorkflowRuntimeClient::new(
+            app_server,
+            self.config.clone(),
+            self.primary_thread_id,
+        );
+        let mut results = Vec::new();
+        for workflow in &registry.files {
+            for trigger in &workflow.triggers {
+                if !trigger.enabled || !workflow_trigger_matches_phase(&trigger.kind, phase) {
+                    continue;
+                }
+                results.extend(
+                    run_workflow_jobs(
+                        &client,
+                        &registry,
+                        &workflow.name,
+                        &trigger.id,
+                        &trigger.jobs,
+                        phase_context,
+                        /*cancellation*/ None,
+                    )
+                    .await
+                    .map_err(|error| match error {
+                        WorkflowRunError::Failed(message) => message,
+                        WorkflowRunError::Cancelled => "workflow run cancelled".to_string(),
+                    })?,
+                );
+            }
+        }
+        Ok(results)
+    }
+
     pub(crate) fn start_manual_workflow_trigger_run(
         &mut self,
         app_server: &AppServerSession,
@@ -653,7 +705,11 @@ async fn run_background_workflow_selection(
                 workflow_name,
                 trigger_id,
                 &trigger.jobs,
-                cancellation,
+                WorkflowPhaseContext {
+                    current_user_turn: None,
+                    last_assistant_message: None,
+                },
+                Some(cancellation),
             )
             .await
         }
@@ -675,11 +731,25 @@ async fn run_background_workflow_selection(
                 workflow_name,
                 &manual_workflow_job_trigger_id(job_name),
                 std::slice::from_ref(job_name),
-                cancellation,
+                WorkflowPhaseContext {
+                    current_user_turn: None,
+                    last_assistant_message: None,
+                },
+                Some(cancellation),
             )
             .await
         }
     }
+}
+
+fn workflow_trigger_matches_phase(trigger: &WorkflowTriggerKind, phase: WorkflowRunPhase) -> bool {
+    matches!(
+        (trigger, phase),
+        (
+            &WorkflowTriggerKind::BeforeTurn,
+            WorkflowRunPhase::BeforeTurn
+        ) | (&WorkflowTriggerKind::AfterTurn, WorkflowRunPhase::AfterTurn)
+    )
 }
 
 async fn run_workflow_jobs(
@@ -688,14 +758,15 @@ async fn run_workflow_jobs(
     workflow_name: &str,
     trigger_id: &str,
     root_jobs: &[String],
-    cancellation: &CancellationToken,
+    phase_context: WorkflowPhaseContext<'_>,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<Vec<WorkflowJobRunResult>, WorkflowRunError> {
     let ordered = ordered_jobs_for_roots(registry, root_jobs)
         .map_err(|error| WorkflowRunError::Failed(error.to_string()))?;
     let mut results = Vec::new();
     let mut completed = BTreeMap::<String, bool>::new();
     for job_name in ordered {
-        if cancellation.is_cancelled() {
+        if cancellation.is_some_and(CancellationToken::is_cancelled) {
             return Err(WorkflowRunError::Cancelled);
         }
         let job = registry.jobs.get(&job_name).ok_or_else(|| {
@@ -714,7 +785,15 @@ async fn run_workflow_jobs(
             completed.insert(job.name.clone(), false);
             continue;
         }
-        let result = run_workflow_job(client, workflow_name, trigger_id, job, cancellation).await?;
+        let result = run_workflow_job(
+            client,
+            workflow_name,
+            trigger_id,
+            job,
+            phase_context,
+            cancellation,
+        )
+        .await?;
         completed.insert(job.name.clone(), true);
         results.push(result);
     }
@@ -726,7 +805,8 @@ async fn run_workflow_job(
     workflow_name: &str,
     trigger_id: &str,
     job: &LoadedWorkflowJob,
-    cancellation: &CancellationToken,
+    phase_context: WorkflowPhaseContext<'_>,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<WorkflowJobRunResult, WorkflowRunError> {
     if matches!(job.config.context, WorkflowContextMode::Embed) {
         let prompt = job
@@ -759,7 +839,7 @@ async fn run_workflow_job(
         let attempts = step.retry_attempts();
         let mut last_error = None;
         for attempt in 1..=attempts {
-            if cancellation.is_cancelled() {
+            if cancellation.is_some_and(CancellationToken::is_cancelled) {
                 if let Some(thread) = thread.as_ref() {
                     let _ = client.unsubscribe_thread(thread.thread_id.clone()).await;
                 }
@@ -773,6 +853,7 @@ async fn run_workflow_job(
                 job,
                 step,
                 &step_outputs,
+                phase_context,
                 cancellation,
             )
             .await;
@@ -832,7 +913,8 @@ async fn execute_workflow_step(
     job: &LoadedWorkflowJob,
     step: &WorkflowStep,
     step_outputs: &[String],
-    cancellation: &CancellationToken,
+    phase_context: WorkflowPhaseContext<'_>,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<Option<String>, WorkflowRunError> {
     match step {
         WorkflowStep::Run { run, .. } => {
@@ -855,6 +937,7 @@ async fn execute_workflow_step(
                 trigger_id,
                 &job.name,
                 prompt,
+                phase_context,
                 step_outputs,
             );
             run_workflow_prompt(client, &thread, prompt, cancellation).await
@@ -866,14 +949,14 @@ async fn run_workflow_prompt(
     client: &dyn WorkflowRuntimeClient,
     thread: &WorkflowThreadSession,
     prompt: String,
-    cancellation: &CancellationToken,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<Option<String>, WorkflowRunError> {
     let turn_id = client
         .start_turn(thread.thread_id.clone(), thread.cwd.clone(), prompt)
         .await
         .map_err(WorkflowRunError::Failed)?;
     loop {
-        if cancellation.is_cancelled() {
+        if cancellation.is_some_and(CancellationToken::is_cancelled) {
             interrupt_active_workflow_turn(client, thread.thread_id.clone(), turn_id.clone()).await;
             return Err(WorkflowRunError::Cancelled);
         }
@@ -914,8 +997,8 @@ async fn interrupt_active_workflow_turn(
 
 async fn run_workflow_command(
     command: &str,
-    workflow_path: &PathBuf,
-    cancellation: &CancellationToken,
+    workflow_path: &std::path::Path,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<Option<String>, WorkflowRunError> {
     #[cfg(windows)]
     let mut cmd = {
@@ -934,7 +1017,7 @@ async fn run_workflow_command(
         .parent()
         .and_then(|parent| parent.parent())
         .and_then(|parent| parent.parent())
-        .unwrap_or(workflow_path.as_path());
+        .unwrap_or(workflow_path);
     let child = cmd
         .current_dir(workflow_dir)
         .stdin(Stdio::null())
@@ -947,7 +1030,13 @@ async fn run_workflow_command(
     let wait_with_output = child.wait_with_output();
     tokio::pin!(wait_with_output);
     let output = tokio::select! {
-        _ = cancellation.cancelled() => return Err(WorkflowRunError::Cancelled),
+        _ = async {
+            if let Some(cancellation) = cancellation {
+                cancellation.cancelled().await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => return Err(WorkflowRunError::Cancelled),
         output = &mut wait_with_output => output,
     }
     .map_err(|err| {
@@ -984,11 +1073,30 @@ fn build_workflow_prompt_input(
     trigger_id: &str,
     job_name: &str,
     prompt: &str,
+    phase_context: WorkflowPhaseContext<'_>,
     step_outputs: &[String],
 ) -> String {
     let mut sections = vec![format!(
         "Workflow: {workflow_name}\nTrigger: {trigger_id}\nJob: {job_name}"
     )];
+    if let Some(current_user_turn) = phase_context
+        .current_user_turn
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    {
+        sections.push(format!(
+            "Current main-thread user turn:\n{current_user_turn}"
+        ));
+    }
+    if let Some(last_assistant_message) = phase_context
+        .last_assistant_message
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    {
+        sections.push(format!(
+            "Latest main-thread assistant response:\n{last_assistant_message}"
+        ));
+    }
     if !step_outputs.is_empty() {
         sections.push(format!(
             "Previous workflow step outputs:\n{}",

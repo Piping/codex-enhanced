@@ -249,6 +249,36 @@ fn collab_receiver_thread_ids(notification: &ServerNotification) -> Option<&[Str
     }
 }
 
+fn workflow_after_turn_last_agent_message(
+    primary_thread_id: Option<ThreadId>,
+    thread_id: ThreadId,
+    notification: &ServerNotification,
+) -> Option<Option<String>> {
+    if primary_thread_id != Some(thread_id) {
+        return None;
+    }
+    let ServerNotification::TurnCompleted(notification) = notification else {
+        return None;
+    };
+    if !matches!(
+        notification.turn.status,
+        TurnStatus::Completed | TurnStatus::Failed
+    ) {
+        return None;
+    }
+    Some(last_agent_message_for_turn(&notification.turn))
+}
+
+fn last_agent_message_for_turn(turn: &Turn) -> Option<String> {
+    turn.items.iter().fold(None, |_, item| match item {
+        ThreadItem::AgentMessage { text, .. } => {
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        _ => None,
+    })
+}
+
 fn default_exec_approval_decisions(
     network_approval_context: Option<&codex_protocol::protocol::NetworkApprovalContext>,
     proposed_execpolicy_amendment: Option<&codex_protocol::approvals::ExecPolicyAmendment>,
@@ -2309,6 +2339,9 @@ impl App {
         thread_id: ThreadId,
         op: AppCommand,
     ) -> Result<()> {
+        let (op, workflow_cells) = self
+            .augment_primary_thread_op_with_before_turn_workflows(app_server, thread_id, op)
+            .await;
         crate::session_log::log_outbound_op(&op);
 
         if self.try_handle_local_history_op(thread_id, &op).await? {
@@ -2335,6 +2368,11 @@ impl App {
             if ThreadEventStore::op_can_change_pending_replay_state(&op) {
                 self.note_thread_outbound_op(thread_id, &op).await;
                 self.refresh_pending_thread_approvals().await;
+            }
+            for cell in workflow_cells {
+                if let Some(visible_cell) = self.record_workflow_history_cell(thread_id, cell) {
+                    self.insert_visible_history_cell(tui, visible_cell);
+                }
             }
             return Ok(());
         }
@@ -3696,7 +3734,7 @@ impl App {
             };
             self.chat_widget.add_info_message(message, /*hint*/ None);
         }
-        self.drain_active_thread_events(tui).await?;
+        self.drain_active_thread_events(tui, app_server).await?;
         self.refresh_pending_thread_approvals().await;
 
         Ok(())
@@ -3913,7 +3951,11 @@ impl App {
         config
     }
 
-    async fn drain_active_thread_events(&mut self, tui: &mut tui::Tui) -> Result<()> {
+    async fn drain_active_thread_events(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &AppServerSession,
+    ) -> Result<()> {
         let Some(mut rx) = self.active_thread_rx.take() else {
             return Ok(());
         };
@@ -3921,7 +3963,32 @@ impl App {
         let mut disconnected = false;
         loop {
             match rx.try_recv() {
-                Ok(event) => self.handle_thread_event_now(event),
+                Ok(event) => {
+                    let after_turn =
+                        self.active_thread_id
+                            .and_then(|active_thread_id| match &event {
+                                ThreadBufferedEvent::Notification(notification) => {
+                                    workflow_after_turn_last_agent_message(
+                                        self.primary_thread_id,
+                                        active_thread_id,
+                                        notification,
+                                    )
+                                }
+                                _ => None,
+                            });
+                    self.handle_thread_event_now(event);
+                    if let Some(last_agent_message) = after_turn {
+                        for cell in self
+                            .handle_primary_thread_turn_complete_for_workflows(
+                                app_server,
+                                last_agent_message,
+                            )
+                            .await
+                        {
+                            self.insert_visible_history_cell(tui, cell);
+                        }
+                    }
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     disconnected = true;
@@ -6193,7 +6260,27 @@ impl App {
                 .await;
         }
 
+        let after_turn = self
+            .active_thread_id
+            .and_then(|active_thread_id| match &event {
+                ThreadBufferedEvent::Notification(notification) => {
+                    workflow_after_turn_last_agent_message(
+                        self.primary_thread_id,
+                        active_thread_id,
+                        notification,
+                    )
+                }
+                _ => None,
+            });
         self.handle_thread_event_now(event);
+        if let Some(last_agent_message) = after_turn {
+            for cell in self
+                .handle_primary_thread_turn_complete_for_workflows(app_server, last_agent_message)
+                .await
+            {
+                self.insert_visible_history_cell(tui, cell);
+            }
+        }
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();
         }
@@ -6711,6 +6798,7 @@ mod tests {
     use crate::history_cell::new_session_info;
     use crate::multi_agents::AgentPickerThreadEntry;
     use assert_matches::assert_matches;
+    use codex_app_server_client::AppServerEvent;
 
     use codex_app_server_protocol::AdditionalFileSystemPermissions;
     use codex_app_server_protocol::AdditionalNetworkPermissions;
@@ -6785,6 +6873,7 @@ mod tests {
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -9661,6 +9750,50 @@ guardian_approval = true
         )
     }
 
+    fn write_test_before_turn_workflow(workspace_cwd: &Path) -> Result<()> {
+        let workflows_dir = workspace_cwd.join(".codex/workflows");
+        std::fs::create_dir_all(&workflows_dir)?;
+        std::fs::write(
+            workflows_dir.join("before_turn.yaml"),
+            r#"name: director
+
+triggers:
+  - type: before_turn
+    jobs: [augment]
+
+jobs:
+  augment:
+    context: embed
+    steps:
+      - prompt: |
+          added by before_turn
+"#,
+        )?;
+        Ok(())
+    }
+
+    fn write_test_after_turn_workflow(workspace_cwd: &Path) -> Result<()> {
+        let workflows_dir = workspace_cwd.join(".codex/workflows");
+        std::fs::create_dir_all(&workflows_dir)?;
+        std::fs::write(
+            workflows_dir.join("after_turn.yaml"),
+            r#"name: director
+
+triggers:
+  - type: after_turn
+    jobs: [followup]
+
+jobs:
+  followup:
+    context: embed
+    steps:
+      - prompt: |
+          follow up from workflow
+"#,
+        )?;
+        Ok(())
+    }
+
     fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {
         ThreadSessionState {
             thread_id,
@@ -9705,6 +9838,27 @@ guardian_approval = true
         ServerNotification::TurnCompleted(TurnCompletedNotification {
             thread_id: thread_id.to_string(),
             turn: test_turn(turn_id, status, Vec::new()),
+        })
+    }
+
+    fn turn_completed_notification_with_agent_message(
+        thread_id: ThreadId,
+        turn_id: &str,
+        status: TurnStatus,
+        message: &str,
+    ) -> ServerNotification {
+        ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: thread_id.to_string(),
+            turn: test_turn(
+                turn_id,
+                status,
+                vec![ThreadItem::AgentMessage {
+                    id: "agent-1".to_string(),
+                    text: message.to_string(),
+                    phase: None,
+                    memory_citation: None,
+                }],
+            ),
         })
     }
 
@@ -11488,6 +11642,208 @@ model = "gpt-5.2"
 
         assert!(app.background_workflow_labels().is_empty());
         assert!(app.queued_trigger_labels().is_empty());
+    }
+
+    #[tokio::test]
+    async fn before_turn_workflow_augments_primary_user_turn() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+        write_test_before_turn_workflow(app.config.cwd.as_path())?;
+
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start thread");
+        let thread_id = started.session.thread_id;
+        app.primary_thread_id = Some(thread_id);
+
+        let (op, cells) = app
+            .augment_primary_thread_op_with_before_turn_workflows(
+                &app_server,
+                thread_id,
+                AppCommand::from_core(Op::UserTurn {
+                    items: vec![UserInput::Text {
+                        text: "original prompt".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    cwd: app.config.cwd.to_path_buf(),
+                    approval_policy: AskForApproval::Never,
+                    approvals_reviewer: Some(ApprovalsReviewer::User),
+                    sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                    model: "gpt-test".to_string(),
+                    effort: None,
+                    summary: None,
+                    service_tier: None,
+                    final_output_json_schema: None,
+                    collaboration_mode: None,
+                    personality: None,
+                }),
+            )
+            .await;
+
+        let AppCommandView::UserTurn { items, .. } = op.view() else {
+            panic!("expected user turn");
+        };
+        assert_eq!(
+            items,
+            &[
+                UserInput::Text {
+                    text: "original prompt".to_string(),
+                    text_elements: Vec::new(),
+                },
+                UserInput::Text {
+                    text: "added by before_turn".to_string(),
+                    text_elements: Vec::new(),
+                }
+            ]
+        );
+        let rendered_cells: Vec<String> = cells
+            .iter()
+            .map(|cell| lines_to_single_string(&cell.transcript_lines(/*width*/ 80)))
+            .collect();
+        assert_eq!(rendered_cells.len(), 1);
+        assert!(rendered_cells[0].contains("Workflow job completed"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_primary_turn_complete_waits_for_consumption_before_after_turn() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+        write_test_after_turn_workflow(app.config.cwd.as_path())?;
+
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start thread");
+        let thread_id = started.session.thread_id;
+        app.enqueue_primary_thread_session(started.session, Vec::new())
+            .await?;
+        while app_event_rx.try_recv().is_ok() {}
+
+        app.enqueue_thread_notification(
+            thread_id,
+            turn_completed_notification_with_agent_message(
+                thread_id,
+                "turn-1",
+                TurnStatus::Completed,
+                "final reply",
+            ),
+        )
+        .await?;
+
+        assert!(
+            app_event_rx.try_recv().is_err(),
+            "after_turn should not run before the active thread consumes TurnCompleted"
+        );
+
+        let queued_event = app
+            .active_thread_rx
+            .as_mut()
+            .expect("active thread receiver")
+            .recv()
+            .await
+            .expect("queued active-thread event");
+        app.handle_thread_event_now(queued_event);
+
+        assert!(
+            app_event_rx.try_recv().is_err(),
+            "after_turn should not run before event consumption finishes"
+        );
+
+        let visible_cells = app
+            .handle_primary_thread_turn_complete_for_workflows(
+                &app_server,
+                Some("final reply".to_string()),
+            )
+            .await;
+        assert_eq!(visible_cells.len(), 2);
+
+        match app_event_rx
+            .try_recv()
+            .expect("expected workflow follow-up submission")
+        {
+            AppEvent::SubmitThreadOp {
+                thread_id: submit_thread_id,
+                op: Op::UserTurn { items, .. },
+            } => {
+                assert_eq!(submit_thread_id, thread_id);
+                assert_eq!(
+                    items,
+                    vec![UserInput::Text {
+                        text: "follow up from workflow".to_string(),
+                        text_elements: Vec::new(),
+                    }]
+                );
+            }
+            other => panic!("expected workflow follow-up submission, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn inactive_primary_turn_complete_still_runs_after_turn_continuity() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+        write_test_after_turn_workflow(app.config.cwd.as_path())?;
+
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start thread");
+        let thread_id = started.session.thread_id;
+        app.enqueue_primary_thread_session(started.session, Vec::new())
+            .await?;
+        let agent_thread_id = ThreadId::new();
+        app.active_thread_id = Some(agent_thread_id);
+        while app_event_rx.try_recv().is_ok() {}
+
+        app.handle_app_server_event(
+            &app_server,
+            AppServerEvent::ServerNotification(turn_completed_notification_with_agent_message(
+                thread_id,
+                "turn-1",
+                TurnStatus::Completed,
+                "final reply",
+            )),
+        )
+        .await;
+
+        match app_event_rx
+            .try_recv()
+            .expect("expected inactive primary workflow follow-up submission")
+        {
+            AppEvent::SubmitThreadOp {
+                thread_id: submit_thread_id,
+                op: Op::UserTurn { items, .. },
+            } => {
+                assert_eq!(submit_thread_id, thread_id);
+                assert_eq!(
+                    items,
+                    vec![UserInput::Text {
+                        text: "follow up from workflow".to_string(),
+                        text_elements: Vec::new(),
+                    }]
+                );
+            }
+            other => panic!("expected workflow follow-up submission, got {other:?}"),
+        }
+        Ok(())
     }
 
     #[tokio::test]
