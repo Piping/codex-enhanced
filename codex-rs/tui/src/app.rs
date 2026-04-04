@@ -1120,6 +1120,7 @@ impl App {
             .rebuild_config_for_cwd(self.chat_widget.config_ref().cwd.to_path_buf())
             .await?;
         self.apply_runtime_policy_overrides(&mut config);
+        self.active_profile = config.active_profile.clone();
         self.config = config;
         self.chat_widget.sync_plugin_mentions_config(&self.config);
         Ok(())
@@ -1137,6 +1138,13 @@ impl App {
 
     fn profile_router_store(&self) -> ProfileRouterStore {
         ProfileRouterStore::new(self.config.codex_home.clone())
+    }
+
+    fn routed_profile_runtime_changed(current_config: &Config, next_config: &Config) -> bool {
+        current_config.active_profile != next_config.active_profile
+            || current_config.model_provider_id != next_config.model_provider_id
+            || current_config.model_provider != next_config.model_provider
+            || current_config.chatgpt_base_url != next_config.chatgpt_base_url
     }
 
     async fn apply_runtime_config_change(
@@ -1183,6 +1191,40 @@ impl App {
             .await
             .map_err(|err| err.to_string())?;
         self.chat_widget.restore_thread_input_state(input_state);
+        Ok(())
+    }
+
+    async fn reload_user_config_for_app_server_runtime(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+    ) -> Result<()> {
+        let current_cwd = self.chat_widget.config_ref().cwd.to_path_buf();
+        let mut next_config = self.rebuild_config_for_cwd(current_cwd).await?;
+        self.apply_runtime_policy_overrides(&mut next_config);
+
+        let reload_live_thread = Self::routed_profile_runtime_changed(&self.config, &next_config);
+        if reload_live_thread {
+            self.apply_runtime_config_change(
+                tui,
+                app_server,
+                next_config,
+                /*reload_live_thread*/ true,
+            )
+            .await
+            .map_err(|err| color_eyre::eyre::eyre!(err))?;
+            app_server.reload_user_config().await?;
+        } else {
+            app_server.reload_user_config().await?;
+            self.apply_runtime_config_change(
+                tui,
+                app_server,
+                next_config,
+                /*reload_live_thread*/ false,
+            )
+            .await
+            .map_err(|err| color_eyre::eyre::eyre!(err))?;
+        }
         Ok(())
     }
 
@@ -2019,6 +2061,7 @@ impl App {
 
     async fn submit_active_thread_op(
         &mut self,
+        tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         op: AppCommand,
     ) -> Result<()> {
@@ -2028,11 +2071,12 @@ impl App {
             return Ok(());
         };
 
-        self.submit_thread_op(app_server, thread_id, op).await
+        self.submit_thread_op(tui, app_server, thread_id, op).await
     }
 
     async fn submit_thread_op(
         &mut self,
+        tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
         op: AppCommand,
@@ -2047,6 +2091,12 @@ impl App {
             .try_resolve_app_server_request(app_server, thread_id, &op)
             .await?
         {
+            return Ok(());
+        }
+
+        if matches!(op.view(), AppCommandView::ReloadUserConfig) {
+            self.reload_user_config_for_app_server_runtime(tui, app_server)
+                .await?;
             return Ok(());
         }
 
@@ -4472,10 +4522,11 @@ impl App {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => {
-                self.submit_active_thread_op(app_server, op.into()).await?;
+                self.submit_active_thread_op(tui, app_server, op.into())
+                    .await?;
             }
             AppEvent::SubmitThreadOp { thread_id, op } => {
-                self.submit_thread_op(app_server, thread_id, op.into())
+                self.submit_thread_op(tui, app_server, thread_id, op.into())
                     .await?;
             }
             AppEvent::ThreadHistoryEntryResponse { thread_id, event } => {
@@ -10305,6 +10356,63 @@ guardian_approval = true
 
         assert_eq!(app.config.cwd, app.chat_widget.config_ref().cwd);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_in_memory_config_from_disk_syncs_active_profile() -> Result<()> {
+        let mut app = make_test_app().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+        app.active_profile = Some("stale".to_string());
+
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            r#"
+profile = "fresh"
+
+[profiles.fresh]
+model = "gpt-5.2"
+"#,
+        )?;
+
+        app.refresh_in_memory_config_from_disk().await?;
+
+        assert_eq!(app.config.active_profile.as_deref(), Some("fresh"));
+        assert_eq!(app.active_profile.as_deref(), Some("fresh"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn routed_profile_runtime_changed_detects_profile_and_provider_reload_inputs() {
+        let app = make_test_app().await;
+        let current_config = app.config.clone();
+
+        let mut next_profile = current_config.clone();
+        next_profile.active_profile = Some("secondary".to_string());
+        assert!(App::routed_profile_runtime_changed(
+            &current_config,
+            &next_profile
+        ));
+
+        let mut next_provider = current_config.clone();
+        next_provider.model_provider.base_url = Some("https://example.com/v1".to_string());
+        assert!(App::routed_profile_runtime_changed(
+            &current_config,
+            &next_provider
+        ));
+
+        let mut next_chatgpt_base_url = current_config.clone();
+        next_chatgpt_base_url.chatgpt_base_url =
+            "https://chatgpt.example.com/backend-api/".to_string();
+        assert!(App::routed_profile_runtime_changed(
+            &current_config,
+            &next_chatgpt_base_url
+        ));
+
+        assert!(!App::routed_profile_runtime_changed(
+            &current_config,
+            &current_config
+        ));
     }
 
     #[tokio::test]
