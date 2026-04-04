@@ -126,11 +126,13 @@ pub(crate) mod announcement {
     use chrono::NaiveDate;
     use chrono::Utc;
     use codex_protocol::account::PlanType;
+    use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
     use regex_lite::Regex;
     use serde::Deserialize;
     use std::sync::OnceLock;
     use std::thread;
     use std::time::Duration;
+    use tracing::warn;
 
     static ANNOUNCEMENT_TIP: OnceLock<Option<String>> = OnceLock::new();
     const CURRENT_OS: TargetOs = TargetOs::current();
@@ -208,16 +210,40 @@ pub(crate) mod announcement {
 
     fn blocking_init_announcement_tip() -> Option<String> {
         // Avoid system proxy detection to prevent macOS system-configuration panics (#8912).
-        let client = reqwest::blocking::Client::builder()
-            .no_proxy()
-            .build()
-            .ok()?;
-        let response = client
+        ensure_rustls_crypto_provider();
+
+        let client = match reqwest::blocking::Client::builder().no_proxy().build() {
+            Ok(client) => client,
+            Err(error) => {
+                warn!(error = %error, "failed to build announcement tooltip HTTP client");
+                return None;
+            }
+        };
+        let response = match client
             .get(ANNOUNCEMENT_TIP_URL)
             .timeout(Duration::from_millis(2000))
             .send()
-            .ok()?;
-        response.error_for_status().ok()?.text().ok()
+        {
+            Ok(response) => response,
+            Err(error) => {
+                warn!(error = %error, url = ANNOUNCEMENT_TIP_URL, "failed to fetch announcement tooltip");
+                return None;
+            }
+        };
+        let response = match response.error_for_status() {
+            Ok(response) => response,
+            Err(error) => {
+                warn!(error = %error, url = ANNOUNCEMENT_TIP_URL, "announcement tooltip request returned error status");
+                return None;
+            }
+        };
+        match response.text() {
+            Ok(text) => Some(text),
+            Err(error) => {
+                warn!(error = %error, url = ANNOUNCEMENT_TIP_URL, "failed to read announcement tooltip response body");
+                None
+            }
+        }
     }
 
     pub(crate) fn parse_announcement_tip_toml(
