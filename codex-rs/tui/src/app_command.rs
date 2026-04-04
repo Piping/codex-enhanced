@@ -272,6 +272,10 @@ impl AppCommand {
         Self::ApproveGuardianDeniedAction { event }
     }
 
+    pub(crate) fn from_core(op: Op) -> Self {
+        Self(op)
+    }
+
     pub(crate) fn is_review(&self) -> bool {
         matches!(self, Self::Review { .. })
     }
