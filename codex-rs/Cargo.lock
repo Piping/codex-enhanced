@@ -2975,6 +2975,7 @@ dependencies = [
  "codex-utils-fuzzy-match",
  "codex-utils-oss",
  "codex-utils-pty",
+ "codex-utils-rustls-provider",
  "codex-utils-sandbox-summary",
  "codex-utils-sleep-inhibitor",
  "codex-utils-string",

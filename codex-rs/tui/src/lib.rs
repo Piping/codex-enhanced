@@ -1035,8 +1035,6 @@ async fn run_ratatui_app(
     let remote_mode = matches!(&app_server_target, AppServerTarget::Remote { .. });
     color_eyre::install()?;
 
-    tooltips::announcement::prewarm();
-
     // Forward panic reports through tracing so they appear in the UI status
     // line, but do not swallow the default/color-eyre panic handler.
     // Chain to the previous hook so users still get a rich panic report
@@ -1046,6 +1044,9 @@ async fn run_ratatui_app(
         tracing::error!("panic: {info}");
         prev_hook(info);
     }));
+
+    tooltips::announcement::prewarm();
+
     let mut terminal = tui::init()?;
     terminal.clear()?;
 
