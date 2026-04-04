@@ -1,11 +1,17 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::time::Duration;
 use tokio::task::JoinHandle;
+use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
+
+use super::workflow_runtime::BackgroundWorkflowRunTarget;
 
 pub(crate) struct BackgroundWorkflowRunState {
     pub(crate) label: String,
-    #[cfg(test)]
     pub(crate) is_trigger: bool,
+    pub(crate) target: BackgroundWorkflowRunTarget,
+    pub(crate) cancellation: CancellationToken,
     pub(crate) handle: JoinHandle<()>,
 }
 
@@ -19,12 +25,10 @@ pub(crate) struct QueuedWorkflowTriggerRun {
 pub(crate) struct WorkflowSchedulerState {
     running_workflows: HashMap<String, BackgroundWorkflowRunState>,
     queued_trigger_runs: VecDeque<QueuedWorkflowTriggerRun>,
-    #[cfg(test)]
     next_background_run_id: u64,
 }
 
 impl WorkflowSchedulerState {
-    #[cfg(test)]
     pub(crate) fn next_background_run_id(
         &mut self,
         workflow_name: &str,
@@ -37,26 +41,27 @@ impl WorkflowSchedulerState {
         )
     }
 
-    #[cfg(test)]
     pub(crate) fn register_background_workflow_run(
         &mut self,
         run_id: String,
-        label: String,
-        is_trigger: bool,
+        target: BackgroundWorkflowRunTarget,
+        cancellation: CancellationToken,
         handle: JoinHandle<()>,
     ) {
+        let label = target.label();
+        let is_trigger = matches!(target, BackgroundWorkflowRunTarget::Trigger { .. });
         self.running_workflows.insert(
             run_id,
             BackgroundWorkflowRunState {
                 label,
-                #[cfg(test)]
                 is_trigger,
+                target,
+                cancellation,
                 handle,
             },
         );
     }
 
-    #[cfg(test)]
     pub(crate) fn take_background_workflow_run(
         &mut self,
         run_id: &str,
@@ -81,12 +86,11 @@ impl WorkflowSchedulerState {
             .collect()
     }
 
-    #[cfg(test)]
     pub(crate) fn has_running_trigger_run(&self) -> bool {
         self.running_workflows.values().any(|run| run.is_trigger)
     }
 
-    #[cfg(test)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn enqueue_trigger_run(&mut self, workflow_name: String, trigger_id: String) {
         self.queued_trigger_runs
             .push_back(QueuedWorkflowTriggerRun {
@@ -95,7 +99,6 @@ impl WorkflowSchedulerState {
             });
     }
 
-    #[cfg(test)]
     pub(crate) fn dequeue_trigger_run(&mut self) -> Option<QueuedWorkflowTriggerRun> {
         self.queued_trigger_runs.pop_front()
     }
@@ -107,9 +110,15 @@ impl WorkflowSchedulerState {
             .map(|(_, run)| run)
             .collect::<Vec<_>>();
         let stopped_count = runs.len();
-        for run in runs {
-            run.handle.abort();
-            let _ = run.handle.await;
+        for mut run in runs {
+            run.cancellation.cancel();
+            if timeout(Duration::from_secs(1), &mut run.handle)
+                .await
+                .is_err()
+            {
+                run.handle.abort();
+                let _ = run.handle.await;
+            }
         }
         self.queued_trigger_runs.clear();
         stopped_count
