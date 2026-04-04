@@ -802,6 +802,8 @@ pub(crate) struct ChatWidget {
     turn_sleep_inhibitor: SleepInhibitor,
     task_complete_pending: bool,
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
+    background_workflow_labels: Vec<String>,
+    queued_workflow_labels: Vec<String>,
     /// Tracks whether codex-core currently considers an agent turn to be in progress.
     ///
     /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
@@ -3652,7 +3654,18 @@ impl ChatWidget {
             .iter()
             .map(|process| process.command_display.clone())
             .collect();
-        self.bottom_pane.set_unified_exec_processes(processes);
+        self.bottom_pane
+            .set_unified_exec_activity(processes, self.background_workflow_labels.clone());
+    }
+
+    pub(crate) fn sync_background_workflow_status(
+        &mut self,
+        running_workflows: Vec<String>,
+        queued_workflows: Vec<String>,
+    ) {
+        self.background_workflow_labels = running_workflows;
+        self.queued_workflow_labels = queued_workflows;
+        self.sync_unified_exec_footer();
     }
 
     /// Record recent stdout/stderr lines for the unified exec footer.
@@ -4680,6 +4693,8 @@ impl ChatWidget {
             turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
+            background_workflow_labels: Vec::new(),
+            queued_workflow_labels: Vec::new(),
             agent_turn_running: false,
             mcp_startup_status: None,
             pending_turn_copyable_output: None,
@@ -7517,7 +7532,11 @@ impl ChatWidget {
                 recent_chunks: process.recent_chunks.clone(),
             })
             .collect();
-        self.add_to_history(history_cell::new_unified_exec_processes_output(processes));
+        self.add_to_history(history_cell::new_background_tasks_output(
+            processes,
+            self.background_workflow_labels.clone(),
+            self.queued_workflow_labels.clone(),
+        ));
     }
 
     fn clean_background_terminals(&mut self) {

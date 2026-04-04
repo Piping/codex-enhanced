@@ -13,28 +13,31 @@ use ratatui::widgets::Paragraph;
 use crate::live_wrap::take_prefix_by_width;
 use crate::render::renderable::Renderable;
 
-/// Tracks active unified-exec processes and renders a compact summary.
+/// Tracks active unified-exec processes and workflows and renders a compact summary.
 pub(crate) struct UnifiedExecFooter {
-    processes: Vec<String>,
+    terminals: Vec<String>,
+    workflows: Vec<String>,
 }
 
 impl UnifiedExecFooter {
     pub(crate) fn new() -> Self {
         Self {
-            processes: Vec::new(),
+            terminals: Vec::new(),
+            workflows: Vec::new(),
         }
     }
 
-    pub(crate) fn set_processes(&mut self, processes: Vec<String>) -> bool {
-        if self.processes == processes {
+    pub(crate) fn set_activity(&mut self, terminals: Vec<String>, workflows: Vec<String>) -> bool {
+        if self.terminals == terminals && self.workflows == workflows {
             return false;
         }
-        self.processes = processes;
+        self.terminals = terminals;
+        self.workflows = workflows;
         true
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.processes.is_empty()
+        self.terminals.is_empty() && self.workflows.is_empty()
     }
 
     /// Returns the unindented summary text used by both footer and status-row rendering.
@@ -43,14 +46,27 @@ impl UnifiedExecFooter {
     /// callers can choose layout-specific framing (inline separator vs. row
     /// indentation). Returning `None` means there is nothing to surface.
     pub(crate) fn summary_text(&self) -> Option<String> {
-        if self.processes.is_empty() {
+        let terminal_count = self.terminals.len();
+        let workflow_count = self.workflows.len();
+        if terminal_count == 0 && workflow_count == 0 {
             return None;
         }
-
-        let count = self.processes.len();
-        let plural = if count == 1 { "" } else { "s" };
+        let mut parts = Vec::new();
+        if terminal_count > 0 {
+            let plural = if terminal_count == 1 { "" } else { "s" };
+            parts.push(format!(
+                "{terminal_count} background terminal{plural} running"
+            ));
+        }
+        if workflow_count > 0 {
+            let plural = if workflow_count == 1 { "" } else { "s" };
+            parts.push(format!(
+                "{workflow_count} background workflow{plural} running"
+            ));
+        }
         Some(format!(
-            "{count} background terminal{plural} running · /ps to view · /stop to close"
+            "{} · /ps to view · /stop to close",
+            parts.join(" · ")
         ))
     }
 
@@ -96,7 +112,7 @@ mod tests {
     #[test]
     fn render_more_sessions() {
         let mut footer = UnifiedExecFooter::new();
-        footer.set_processes(vec!["rg \"foo\" src".to_string()]);
+        footer.set_activity(vec!["rg \"foo\" src".to_string()], Vec::new());
         let width = 50;
         let height = footer.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
@@ -107,11 +123,31 @@ mod tests {
     #[test]
     fn render_many_sessions() {
         let mut footer = UnifiedExecFooter::new();
-        footer.set_processes((0..123).map(|idx| format!("cmd {idx}")).collect());
+        footer.set_activity(
+            (0..123).map(|idx| format!("cmd {idx}")).collect(),
+            Vec::new(),
+        );
         let width = 50;
         let height = footer.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
         footer.render(Rect::new(0, 0, width, height), &mut buf);
         assert_snapshot!("render_many_sessions", format!("{buf:?}"));
+    }
+
+    #[test]
+    fn summary_text_includes_workflows() {
+        let mut footer = UnifiedExecFooter::new();
+        footer.set_activity(
+            vec!["rg \"foo\" src".to_string()],
+            vec!["director · after_turn".to_string()],
+        );
+
+        assert_eq!(
+            footer.summary_text(),
+            Some(
+                "1 background terminal running · 1 background workflow running · /ps to view · /stop to close"
+                    .to_string()
+            )
+        );
     }
 }
