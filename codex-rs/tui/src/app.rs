@@ -206,6 +206,7 @@ mod thread_events;
 mod thread_goal_actions;
 mod thread_routing;
 mod thread_session_state;
+mod workflow_scheduler;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
@@ -218,6 +219,7 @@ use self::side::SideParentStatusChange;
 use self::side::SideThreadState;
 use self::startup_prompts::*;
 use self::thread_events::*;
+use self::workflow_scheduler::WorkflowSchedulerState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
@@ -990,6 +992,31 @@ pub(crate) struct App {
     // Serialize hook enablement writes per hook so stale completions cannot
     // persist an older toggle after a newer one.
     pending_hook_enabled_writes: HashMap<String, Option<bool>>,
+    workflow_scheduler: WorkflowSchedulerState,
+}
+
+#[derive(Default)]
+struct WindowsSandboxState {
+    setup_started_at: Option<Instant>,
+    // One-shot suppression of the next world-writable scan after user confirmation.
+    skip_world_writable_scan_once: bool,
+}
+
+fn normalize_harness_overrides_for_cwd(
+    mut overrides: ConfigOverrides,
+    base_cwd: &AbsolutePathBuf,
+) -> Result<ConfigOverrides> {
+    if overrides.additional_writable_roots.is_empty() {
+        return Ok(overrides);
+    }
+
+    let mut normalized = Vec::with_capacity(overrides.additional_writable_roots.len());
+    for root in overrides.additional_writable_roots.drain(..) {
+        let absolute = base_cwd.join(root);
+        normalized.push(absolute.into_path_buf());
+    }
+    overrides.additional_writable_roots = normalized;
+    Ok(overrides)
 }
 
 fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<AppServerTurnError> {
@@ -1921,13 +1948,101 @@ impl App {
 
     async fn shutdown_current_thread(&mut self, app_server: &mut AppServerSession) {
         if let Some(thread_id) = self.chat_widget.thread_id() {
+            let shutting_down_primary = self.primary_thread_id == Some(thread_id);
             // Clear any in-flight rollback guard when switching threads.
             self.backtrack.pending_rollback = None;
             if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
                 tracing::warn!("failed to unsubscribe thread {thread_id}: {err}");
             }
             self.abort_thread_event_listener(thread_id);
+            if shutting_down_primary {
+                let stopped_count = self.workflow_scheduler.stop_active_workflow_runs().await;
+                if stopped_count > 0 {
+                    self.sync_background_workflow_status();
+                }
+            }
         }
+    }
+
+    fn background_workflow_labels(&self) -> Vec<String> {
+        self.workflow_scheduler.background_workflow_labels()
+    }
+
+    fn queued_trigger_labels(&self) -> Vec<String> {
+        self.workflow_scheduler.queued_trigger_labels()
+    }
+
+    fn sync_background_workflow_status(&mut self) {
+        self.chat_widget.sync_background_workflow_status(
+            self.background_workflow_labels(),
+            self.queued_trigger_labels(),
+        );
+    }
+
+    #[cfg(test)]
+    fn start_test_background_workflow_run(
+        &mut self,
+        workflow_name: String,
+        target_name: String,
+        is_trigger: bool,
+    ) -> String {
+        let run_id = self
+            .workflow_scheduler
+            .next_background_run_id(&workflow_name, &target_name);
+        let label = format!("{workflow_name} · {target_name}");
+        let handle = tokio::spawn(async {
+            std::future::pending::<()>().await;
+        });
+        self.workflow_scheduler.register_background_workflow_run(
+            run_id.clone(),
+            label,
+            is_trigger,
+            handle,
+        );
+        self.sync_background_workflow_status();
+        run_id
+    }
+
+    #[cfg(test)]
+    fn start_test_manual_workflow_trigger_run(
+        &mut self,
+        workflow_name: String,
+        trigger_id: String,
+    ) -> Option<String> {
+        if self.workflow_scheduler.has_running_trigger_run() {
+            self.workflow_scheduler
+                .enqueue_trigger_run(workflow_name, trigger_id);
+            self.sync_background_workflow_status();
+            None
+        } else {
+            Some(self.start_test_background_workflow_run(
+                workflow_name,
+                trigger_id,
+                /*is_trigger*/ true,
+            ))
+        }
+    }
+
+    #[cfg(test)]
+    async fn finish_test_background_workflow_run(&mut self, run_id: String) {
+        let Some(run) = self
+            .workflow_scheduler
+            .take_background_workflow_run(&run_id)
+        else {
+            return;
+        };
+        run.handle.abort();
+        let _ = run.handle.await;
+        if run.is_trigger
+            && let Some(next) = self.workflow_scheduler.dequeue_trigger_run()
+        {
+            self.start_test_background_workflow_run(
+                next.workflow_name,
+                next.trigger_id,
+                /*is_trigger*/ true,
+            );
+        }
+        self.sync_background_workflow_status();
     }
 
     fn abort_thread_event_listener(&mut self, thread_id: ThreadId) {
@@ -4321,6 +4436,7 @@ See the Codex keymap documentation for supported actions and examples."
             pending_app_server_requests: PendingAppServerRequests::default(),
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
+            workflow_scheduler: WorkflowSchedulerState::default(),
         };
         if let Some(started) = initial_started_thread {
             let thread_id = started.session.thread_id;
@@ -10068,6 +10184,9 @@ guardian_approval = true
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            pending_plugin_enabled_writes: HashMap::new(),
+            pending_hook_enabled_writes: HashMap::new(),
+            workflow_scheduler: WorkflowSchedulerState::default(),
         }
     }
 
@@ -10125,6 +10244,9 @@ guardian_approval = true
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),
+                pending_plugin_enabled_writes: HashMap::new(),
+                pending_hook_enabled_writes: HashMap::new(),
+                workflow_scheduler: WorkflowSchedulerState::default(),
             },
             rx,
             op_rx,
@@ -11813,6 +11935,88 @@ model = "gpt-5.2"
             op_rx.try_recv().is_err(),
             "shutdown should not submit Op::Shutdown"
         );
+    }
+
+    #[tokio::test]
+    async fn shutting_down_primary_thread_stops_background_workflow_runs() {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start thread");
+        let thread_id = started.session.thread_id;
+        app.primary_thread_id = Some(thread_id);
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: started.session.forked_from_id,
+                thread_name: started.session.thread_name.clone(),
+                model: started.session.model.clone(),
+                model_provider_id: started.session.model_provider_id.clone(),
+                service_tier: started.session.service_tier,
+                approval_policy: started.session.approval_policy,
+                approvals_reviewer: started.session.approvals_reviewer,
+                sandbox_policy: started.session.sandbox_policy.clone(),
+                cwd: started.session.cwd.clone(),
+                reasoning_effort: started.session.reasoning_effort,
+                history_log_id: started.session.history_log_id,
+                history_entry_count: usize::try_from(started.session.history_entry_count)
+                    .expect("history entry count fits usize"),
+                initial_messages: None,
+                network_proxy: started.session.network_proxy.clone(),
+                rollout_path: started.session.rollout_path.clone(),
+            }),
+        });
+
+        let _run_id = app.start_test_background_workflow_run(
+            "director".to_string(),
+            "review_backlog".to_string(),
+            /*is_trigger*/ false,
+        );
+        assert_eq!(
+            app.background_workflow_labels(),
+            vec!["director · review_backlog".to_string()]
+        );
+
+        app.shutdown_current_thread(&mut app_server).await;
+
+        assert!(app.background_workflow_labels().is_empty());
+        assert!(app.queued_trigger_labels().is_empty());
+    }
+
+    #[tokio::test]
+    async fn manual_triggers_use_a_global_fifo_queue() {
+        let mut app = make_test_app().await;
+
+        let slow_run =
+            app.start_test_manual_workflow_trigger_run("director".to_string(), "slow".to_string());
+        let fast_run =
+            app.start_test_manual_workflow_trigger_run("director".to_string(), "fast".to_string());
+
+        assert!(slow_run.is_some());
+        assert!(fast_run.is_none());
+        assert_eq!(
+            app.background_workflow_labels(),
+            vec!["director · slow".to_string()]
+        );
+        assert_eq!(
+            app.queued_trigger_labels(),
+            vec!["director · fast".to_string()]
+        );
+
+        app.finish_test_background_workflow_run(slow_run.expect("slow run id"))
+            .await;
+
+        assert_eq!(
+            app.background_workflow_labels(),
+            vec!["director · fast".to_string()]
+        );
+        assert!(app.queued_trigger_labels().is_empty());
     }
 
     #[tokio::test]
