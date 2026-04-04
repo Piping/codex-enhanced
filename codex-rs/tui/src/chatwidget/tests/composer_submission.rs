@@ -797,6 +797,8 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
         pending_steers: VecDeque::new(),
         rejected_steers_queue: VecDeque::new(),
         queued_user_messages: VecDeque::new(),
+        last_submitted_user_turn: None,
+        profile_retry_attempted: false,
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         task_running: true,
@@ -812,6 +814,63 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
     assert!(!chat.agent_turn_running);
     assert!(!chat.turn_sleep_inhibitor.is_turn_running());
     assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
+async fn capture_and_restore_thread_input_state_preserves_profile_fallback_retry_state() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(codex_protocol::protocol::SessionConfiguredEvent {
+            session_id: conversation_id,
+            forked_from_id: None,
+            thread_name: None,
+            model: "test-model".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            cwd: PathBuf::from("/home/user/project"),
+            reasoning_effort: Some(ReasoningEffortConfig::default()),
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: Some(rollout_file.path().to_path_buf()),
+        }),
+    });
+    drain_insert_history(&mut rx);
+
+    chat.bottom_pane
+        .set_composer_text("retry me".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let _ = next_submit_op(&mut op_rx);
+
+    assert_eq!(
+        chat.last_submitted_user_turn(),
+        Some(UserMessage::from("retry me"))
+    );
+    assert!(!chat.profile_retry_attempted());
+
+    let snapshot = chat.capture_thread_input_state();
+    chat.restore_thread_input_state(/*input_state*/ None);
+
+    assert_eq!(chat.last_submitted_user_turn(), None);
+    assert!(!chat.profile_retry_attempted());
+
+    chat.restore_thread_input_state(snapshot);
+
+    assert_eq!(
+        chat.last_submitted_user_turn(),
+        Some(UserMessage::from("retry me"))
+    );
+    assert!(!chat.profile_retry_attempted());
+    assert!(chat.retry_last_user_turn_for_profile_fallback(
+        "Retrying the last turn on profile `primary`.".to_string()
+    ));
 }
 
 #[tokio::test]

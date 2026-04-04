@@ -1079,6 +1079,8 @@ pub(crate) struct ThreadInputState {
     pending_steers: VecDeque<UserMessage>,
     rejected_steers_queue: VecDeque<UserMessage>,
     queued_user_messages: VecDeque<UserMessage>,
+    last_submitted_user_turn: Option<UserMessage>,
+    profile_retry_attempted: bool,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
     task_running: bool,
@@ -3285,6 +3287,8 @@ impl ChatWidget {
                 .collect(),
             rejected_steers_queue: self.rejected_steers_queue.clone(),
             queued_user_messages: self.queued_user_messages.clone(),
+            last_submitted_user_turn: self.last_submitted_user_turn.clone(),
+            profile_retry_attempted: self.profile_retry_attempted,
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             task_running: self.bottom_pane.is_task_running(),
@@ -3339,6 +3343,8 @@ impl ChatWidget {
                 .collect();
             self.rejected_steers_queue = input_state.rejected_steers_queue;
             self.queued_user_messages = input_state.queued_user_messages;
+            self.last_submitted_user_turn = input_state.last_submitted_user_turn;
+            self.profile_retry_attempted = input_state.profile_retry_attempted;
         } else {
             self.agent_turn_running = false;
             self.pending_steers.clear();
@@ -3352,6 +3358,8 @@ impl ChatWidget {
             );
             self.bottom_pane.set_composer_pending_pastes(Vec::new());
             self.queued_user_messages.clear();
+            self.last_submitted_user_turn = None;
+            self.profile_retry_attempted = false;
         }
         self.turn_sleep_inhibitor
             .set_turn_running(self.agent_turn_running);
