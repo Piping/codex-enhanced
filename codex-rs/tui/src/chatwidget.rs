@@ -68,6 +68,10 @@ use crate::mention_codec::LinkedMention;
 use crate::mention_codec::encode_history_mentions;
 use crate::model_catalog::ModelCatalog;
 use crate::multi_agents;
+use crate::profile_router::ProfileFallbackAction;
+use crate::profile_router::app_server_profile_fallback_action;
+#[cfg(test)]
+use crate::profile_router::core_profile_fallback_action;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::StatusAccountDisplay;
 use crate::status::StatusHistoryHandle;
@@ -613,6 +617,13 @@ enum RateLimitErrorKind {
     Generic,
 }
 
+fn profile_fallback_action_label(action: ProfileFallbackAction) -> &'static str {
+    match action {
+        ProfileFallbackAction::RetrySameProfileFirst => "retry_same_profile_first",
+        ProfileFallbackAction::SwitchProfileImmediately => "switch_profile_immediately",
+    }
+}
+
 #[cfg(test)]
 fn core_rate_limit_error_kind(info: &CoreCodexErrorInfo) -> Option<RateLimitErrorKind> {
     match info {
@@ -981,6 +992,8 @@ pub(crate) struct ChatWidget {
     realtime_conversation: RealtimeConversationUiState,
     last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
     last_non_retry_error: Option<(String, String)>,
+    last_submitted_user_turn: Option<UserMessage>,
+    profile_retry_attempted: bool,
 }
 
 /// Cached nickname and role for a collab agent thread, used to attach human-readable labels to
@@ -2879,6 +2892,21 @@ impl ChatWidget {
             .as_ref()
             .is_some_and(|info| self.handle_app_server_steer_rejected_error(info))
         {
+        } else if let Some(action) = codex_error_info
+            .as_ref()
+            .filter(|_| self.has_retryable_user_turn())
+            .and_then(app_server_profile_fallback_action)
+        {
+            self.session_telemetry.counter(
+                "codex.profile_fallback.app_server",
+                /*inc*/ 1,
+                &[("action", profile_fallback_action_label(action))],
+            );
+            self.app_event_tx
+                .send(AppEvent::RetryLastUserTurnWithProfileFallback {
+                    action,
+                    error_message: message,
+                });
         } else if let Some(info) = codex_error_info
             .as_ref()
             .and_then(app_server_rate_limit_error_kind)
@@ -4967,6 +4995,8 @@ impl ChatWidget {
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
             last_non_retry_error: None,
+            last_submitted_user_turn: None,
+            profile_retry_attempted: false,
         };
 
         widget
@@ -5396,6 +5426,16 @@ impl ChatWidget {
         }
 
         let render_in_history = !self.agent_turn_running;
+        if render_in_history {
+            self.last_submitted_user_turn = Some(UserMessage {
+                text: text.clone(),
+                local_images: local_images.clone(),
+                remote_image_urls: remote_image_urls.clone(),
+                text_elements: text_elements.clone(),
+                mention_bindings: mention_bindings.clone(),
+            });
+            self.profile_retry_attempted = false;
+        }
         let mut items: Vec<UserInput> = Vec::new();
 
         // Special-case: "!cmd" executes a local shell command instead of sending to the model.
@@ -6730,6 +6770,21 @@ impl ChatWidget {
                     .as_ref()
                     .is_some_and(|info| self.handle_steer_rejected_error(info))
                 {
+                } else if let Some(action) = codex_error_info
+                    .as_ref()
+                    .filter(|_| self.has_retryable_user_turn())
+                    .and_then(core_profile_fallback_action)
+                {
+                    self.session_telemetry.counter(
+                        "codex.profile_fallback.core",
+                        /*inc*/ 1,
+                        &[("action", profile_fallback_action_label(action))],
+                    );
+                    self.app_event_tx
+                        .send(AppEvent::RetryLastUserTurnWithProfileFallback {
+                            action,
+                            error_message: message,
+                        });
                 } else if let Some(kind) = codex_error_info
                     .as_ref()
                     .and_then(core_rate_limit_error_kind)
@@ -10199,6 +10254,10 @@ impl ChatWidget {
         self.bottom_pane.composer_is_empty()
     }
 
+    pub(crate) fn is_task_running(&self) -> bool {
+        self.bottom_pane.is_task_running()
+    }
+
     #[cfg(test)]
     pub(crate) fn is_task_running_for_test(&self) -> bool {
         self.bottom_pane.is_task_running()
@@ -10466,6 +10525,90 @@ impl ChatWidget {
         self.config.config_layer_stack = config.config_layer_stack.clone();
         self.config.realtime = config.realtime.clone();
         self.config.memories = config.memories.clone();
+    }
+
+    pub(crate) fn sync_config_for_profile_switch(&mut self, config: &Config) {
+        self.config = config.clone();
+        self.set_approval_policy(self.config.permissions.approval_policy.value());
+        if let Err(err) =
+            self.set_sandbox_policy(self.config.permissions.sandbox_policy.get().clone())
+        {
+            tracing::warn!(%err, "failed to set sandbox policy after profile switch");
+        }
+        self.set_approvals_reviewer(self.config.approvals_reviewer);
+        self.set_reasoning_effort(self.config.model_reasoning_effort);
+        self.set_plan_mode_reasoning_effort(self.config.plan_mode_reasoning_effort);
+        self.set_service_tier(self.config.service_tier);
+        if let Some(model) = self.config.model.clone() {
+            self.set_model(&model);
+        }
+        self.sync_fast_command_enabled();
+        self.sync_personality_command_enabled();
+        self.sync_plugins_command_enabled();
+        self.refresh_plugin_mentions();
+    }
+
+    pub(crate) fn active_profile_label(&self) -> Option<String> {
+        self.config.active_profile.clone()
+    }
+
+    pub(crate) fn profile_retry_attempted(&self) -> bool {
+        self.profile_retry_attempted
+    }
+
+    pub(crate) fn has_retryable_user_turn(&self) -> bool {
+        self.last_submitted_user_turn.is_some()
+    }
+
+    pub(crate) fn last_submitted_user_turn(&self) -> Option<UserMessage> {
+        self.last_submitted_user_turn.clone()
+    }
+
+    pub(crate) fn retry_last_user_turn_for_profile_fallback(
+        &mut self,
+        history_message: String,
+    ) -> bool {
+        if self.profile_retry_attempted {
+            return false;
+        }
+        let Some(user_message) = self.last_submitted_user_turn.clone() else {
+            return false;
+        };
+
+        self.profile_retry_attempted = true;
+        self.submit_pending_steers_after_interrupt = false;
+        self.finalize_turn();
+        self.add_to_history(history_cell::new_info_event(
+            history_message,
+            /*hint*/ None,
+        ));
+        self.submit_user_message(user_message);
+        true
+    }
+
+    pub(crate) fn submit_profile_fallback_retry(
+        &mut self,
+        user_message: UserMessage,
+        history_message: String,
+    ) {
+        self.last_submitted_user_turn = Some(user_message.clone());
+        self.profile_retry_attempted = true;
+        self.submit_pending_steers_after_interrupt = false;
+        self.add_to_history(history_cell::new_info_event(
+            history_message,
+            /*hint*/ None,
+        ));
+        self.submit_user_message(user_message);
+    }
+
+    pub(crate) fn finish_failed_turn_for_profile_fallback(&mut self) {
+        if !self.bottom_pane.is_task_running() {
+            return;
+        }
+
+        self.submit_pending_steers_after_interrupt = false;
+        self.finalize_turn();
+        self.request_redraw();
     }
 
     pub(crate) fn open_review_popup(&mut self) {

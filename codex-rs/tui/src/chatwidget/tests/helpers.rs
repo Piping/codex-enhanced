@@ -292,6 +292,8 @@ pub(super) async fn make_chatwidget_manual(
         realtime_conversation: RealtimeConversationUiState::default(),
         last_rendered_user_message_event: None,
         last_non_retry_error: None,
+        last_submitted_user_turn: None,
+        profile_retry_attempted: false,
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)

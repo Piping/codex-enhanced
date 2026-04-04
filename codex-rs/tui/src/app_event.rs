@@ -31,6 +31,7 @@ use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::history_cell::HistoryCell;
 use crate::legacy_core::plugins::PluginCapabilitySummary;
+use crate::profile_router::ProfileFallbackAction;
 
 use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
@@ -296,6 +297,12 @@ pub(crate) enum AppEvent {
     },
 
     InsertHistoryCell(Box<dyn HistoryCell>),
+
+    /// Retry the last turn using the routed profile fallback policy.
+    RetryLastUserTurnWithProfileFallback {
+        action: ProfileFallbackAction,
+        error_message: String,
+    },
 
     /// Apply rollback semantics to local transcript cells.
     ///
