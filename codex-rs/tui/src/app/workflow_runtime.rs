@@ -7,6 +7,8 @@ use super::workflow_definition::WorkflowStep;
 use super::workflow_definition::WorkflowTriggerKind;
 use super::workflow_definition::load_workflow_registry;
 use super::workflow_definition::ordered_jobs_for_roots;
+use super::workflow_history::WorkflowReplySource;
+use super::workflow_history::workflow_result_cell;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
 use crate::history_cell;
@@ -86,6 +88,7 @@ impl BackgroundWorkflowRunTarget {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(dead_code)]
     fn started_message(&self) -> &'static str {
         match self {
             Self::Trigger { .. } => "Workflow trigger started",
@@ -141,6 +144,7 @@ pub(crate) enum BackgroundWorkflowRunOutcome {
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug)]
 pub(crate) struct BackgroundWorkflowRunResult {
+    #[allow(dead_code)]
     pub(crate) target: BackgroundWorkflowRunTarget,
     pub(crate) outcome: BackgroundWorkflowRunOutcome,
 }
@@ -359,7 +363,7 @@ impl WorkflowRuntimeClient for AppServerWorkflowRuntimeClient {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[allow(dead_code)]
 impl App {
     pub(crate) fn start_manual_workflow_trigger_run(
         &mut self,
@@ -440,36 +444,71 @@ impl App {
 
         let mut visible_cells = Vec::new();
         if let Some(primary_thread_id) = self.primary_thread_id {
-            let visible = self.active_thread_id == Some(primary_thread_id);
             match result.outcome {
                 BackgroundWorkflowRunOutcome::Completed(results) => {
                     for result in results {
-                        let cell: Arc<dyn HistoryCell> = Arc::new(history_cell::new_info_event(
-                            run.target.completed_message().to_string(),
-                            Some(format!(
-                                "{}/{}/{}",
-                                result.workflow_name, result.trigger_id, result.job_name
-                            )),
-                        ));
-                        if visible {
+                        let source = WorkflowReplySource::new(
+                            workflow_job_source(&result),
+                            /*action*/ None,
+                        );
+                        let completed_cell: Arc<dyn HistoryCell> =
+                            Arc::new(history_cell::new_info_event(
+                                run.target.completed_message().to_string(),
+                                Some(source.hint()),
+                            ));
+                        if let Some(cell) =
+                            self.record_workflow_history_cell(primary_thread_id, completed_cell)
+                        {
                             visible_cells.push(cell);
+                        }
+
+                        let Some(message) =
+                            result.message.filter(|message| !message.trim().is_empty())
+                        else {
+                            continue;
+                        };
+
+                        match result.delivery {
+                            WorkflowOutputDelivery::AssistantCell => {
+                                let assistant_cell: Arc<dyn HistoryCell> = Arc::new(
+                                    workflow_result_cell(&message, self.config.cwd.as_path()),
+                                );
+                                if let Some(cell) = self
+                                    .record_workflow_history_cell(primary_thread_id, assistant_cell)
+                                {
+                                    visible_cells.push(cell);
+                                }
+                            }
+                            WorkflowOutputDelivery::MainThreadInput
+                            | WorkflowOutputDelivery::UserFollowup => {
+                                if let Some(cell) =
+                                    self.queue_workflow_followup_to_primary(message, source)
+                                {
+                                    visible_cells.push(cell);
+                                }
+                            }
                         }
                     }
                 }
                 BackgroundWorkflowRunOutcome::Cancelled => {
-                    let cell: Arc<dyn HistoryCell> = Arc::new(history_cell::new_info_event(
-                        run.target.stopped_message().to_string(),
-                        Some(run.target.label()),
-                    ));
-                    if visible {
+                    let cancelled_cell: Arc<dyn HistoryCell> =
+                        Arc::new(history_cell::new_info_event(
+                            run.target.stopped_message().to_string(),
+                            Some(run.target.label()),
+                        ));
+                    if let Some(cell) =
+                        self.record_workflow_history_cell(primary_thread_id, cancelled_cell)
+                    {
                         visible_cells.push(cell);
                     }
                 }
                 BackgroundWorkflowRunOutcome::Failed(error) => {
-                    let cell: Arc<dyn HistoryCell> = Arc::new(history_cell::new_error_event(
+                    let error_cell: Arc<dyn HistoryCell> = Arc::new(history_cell::new_error_event(
                         format!("{}: {error}", run.target.failed_message()),
                     ));
-                    if visible {
+                    if let Some(cell) =
+                        self.record_workflow_history_cell(primary_thread_id, error_cell)
+                    {
                         visible_cells.push(cell);
                     }
                 }
@@ -549,7 +588,7 @@ impl App {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
+#[allow(dead_code)]
 enum TriggerRunDispatch {
     Started,
     Queued,
@@ -1037,6 +1076,13 @@ fn request_id() -> RequestId {
 
 fn manual_workflow_job_trigger_id(job_name: &str) -> String {
     format!("job:{job_name}")
+}
+
+fn workflow_job_source(result: &WorkflowJobRunResult) -> String {
+    format!(
+        "{}/{}:{}",
+        result.workflow_name, result.trigger_id, result.job_name
+    )
 }
 
 fn retry_backoff_delay(attempt: u32) -> Duration {
