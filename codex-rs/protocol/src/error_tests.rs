@@ -72,6 +72,41 @@ fn server_overloaded_maps_to_protocol() {
 }
 
 #[test]
+fn unexpected_status_503_maps_to_response_too_many_failed_attempts() {
+    let err = CodexErr::UnexpectedStatus(UnexpectedResponseError {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        body: "Service temporarily unavailable".to_string(),
+        url: Some("https://example.com/v1/responses".to_string()),
+        cf_ray: None,
+        request_id: None,
+        identity_authorization_error: None,
+        identity_error_code: None,
+    });
+
+    assert_eq!(
+        err.to_codex_protocol_error(),
+        CodexErrorInfo::ResponseTooManyFailedAttempts {
+            http_status_code: Some(503),
+        }
+    );
+}
+
+#[test]
+fn unexpected_status_401_maps_to_unauthorized() {
+    let err = CodexErr::UnexpectedStatus(UnexpectedResponseError {
+        status: StatusCode::UNAUTHORIZED,
+        body: "Unauthorized".to_string(),
+        url: Some("https://example.com/v1/responses".to_string()),
+        cf_ray: None,
+        request_id: None,
+        identity_authorization_error: None,
+        identity_error_code: None,
+    });
+
+    assert_eq!(err.to_codex_protocol_error(), CodexErrorInfo::Unauthorized);
+}
+
+#[test]
 fn sandbox_denied_uses_aggregated_output_when_stderr_empty() {
     let output = ExecToolCallOutput {
         exit_code: 77,
