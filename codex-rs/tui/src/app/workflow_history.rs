@@ -1,5 +1,11 @@
 use super::App;
+use super::workflow_runtime::WorkflowOutputDelivery;
+use super::workflow_runtime::WorkflowPhaseContext;
+use super::workflow_runtime::WorkflowRunPhase;
+use crate::app_command::AppCommand;
+use crate::app_command::AppCommandView;
 use crate::app_event::AppEvent;
+use crate::app_server_session::AppServerSession;
 use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
@@ -46,6 +52,122 @@ impl WorkflowReplySource {
 }
 
 impl App {
+    pub(crate) async fn augment_primary_thread_op_with_before_turn_workflows(
+        &mut self,
+        app_server: &AppServerSession,
+        thread_id: ThreadId,
+        op: AppCommand,
+    ) -> (AppCommand, Vec<Arc<dyn HistoryCell>>) {
+        if self.primary_thread_id != Some(thread_id)
+            || !matches!(op.view(), AppCommandView::UserTurn { .. })
+        {
+            return (op, Vec::new());
+        }
+
+        let Op::UserTurn {
+            mut items,
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            sandbox_policy,
+            model,
+            effort,
+            summary,
+            service_tier,
+            final_output_json_schema,
+            collaboration_mode,
+            personality,
+        } = op.into_core()
+        else {
+            unreachable!("UserTurn view should match UserTurn core op");
+        };
+
+        let current_user_turn = user_text_from_inputs(&items);
+        if current_user_turn.trim().is_empty() {
+            return (
+                AppCommand::from_core(Op::UserTurn {
+                    items,
+                    cwd,
+                    approval_policy,
+                    approvals_reviewer,
+                    sandbox_policy,
+                    model,
+                    effort,
+                    summary,
+                    service_tier,
+                    final_output_json_schema,
+                    collaboration_mode,
+                    personality,
+                }),
+                Vec::new(),
+            );
+        }
+
+        let mut cells: Vec<Arc<dyn HistoryCell>> = Vec::new();
+        match self
+            .run_phase_workflows(
+                app_server,
+                WorkflowRunPhase::BeforeTurn,
+                WorkflowPhaseContext {
+                    current_user_turn: Some(current_user_turn.as_str()),
+                    last_assistant_message: None,
+                },
+            )
+            .await
+        {
+            Ok(results) => {
+                for result in results {
+                    let source = WorkflowReplySource::new(workflow_job_source_hint(&result), None);
+                    cells.push(Arc::new(history_cell::new_info_event(
+                        "Workflow job completed".to_string(),
+                        Some(source.hint()),
+                    )));
+                    let Some(message) = result.message.filter(|message| !message.trim().is_empty())
+                    else {
+                        continue;
+                    };
+                    let message = message.trim().to_string();
+                    match result.delivery {
+                        WorkflowOutputDelivery::AssistantCell => {
+                            cells.push(Arc::new(workflow_result_cell(
+                                &message,
+                                self.config.cwd.as_path(),
+                            )));
+                        }
+                        WorkflowOutputDelivery::MainThreadInput
+                        | WorkflowOutputDelivery::UserFollowup => {
+                            items.push(UserInput::Text {
+                                text: message,
+                                text_elements: Vec::new(),
+                            });
+                        }
+                    }
+                }
+            }
+            Err(error) => cells.push(Arc::new(history_cell::new_error_event(format!(
+                "Workflow before_turn failed: {error}"
+            )))),
+        }
+
+        (
+            AppCommand::from_core(Op::UserTurn {
+                items,
+                cwd,
+                approval_policy,
+                approvals_reviewer,
+                sandbox_policy,
+                model,
+                effort,
+                summary,
+                service_tier,
+                final_output_json_schema,
+                collaboration_mode,
+                personality,
+            }),
+            cells,
+        )
+    }
+
     pub(crate) fn queue_workflow_history_replay_for_thread(&self, thread_id: ThreadId) {
         if self
             .workflow_history
@@ -173,6 +295,69 @@ impl App {
             personality: self.config.personality,
         })
     }
+
+    pub(crate) async fn handle_primary_thread_turn_complete_for_workflows(
+        &mut self,
+        app_server: &AppServerSession,
+        last_agent_message: Option<String>,
+    ) -> Vec<Arc<dyn HistoryCell>> {
+        let Some(primary_thread_id) = self.primary_thread_id else {
+            return Vec::new();
+        };
+
+        let results = match self
+            .run_phase_workflows(
+                app_server,
+                WorkflowRunPhase::AfterTurn,
+                WorkflowPhaseContext {
+                    current_user_turn: None,
+                    last_assistant_message: last_agent_message.as_deref(),
+                },
+            )
+            .await
+        {
+            Ok(results) => results,
+            Err(error) => {
+                self.chat_widget
+                    .add_error_message(format!("Workflow after_turn failed: {error}"));
+                return Vec::new();
+            }
+        };
+
+        let mut visible_cells = Vec::new();
+        for result in results {
+            let source = WorkflowReplySource::new(workflow_job_source_hint(&result), None);
+            let completed_cell: Arc<dyn HistoryCell> = Arc::new(history_cell::new_info_event(
+                "Workflow job completed".to_string(),
+                Some(source.hint()),
+            ));
+            let visible_completed =
+                self.record_workflow_history_cell(primary_thread_id, completed_cell);
+
+            if let Some(cell) = visible_completed {
+                visible_cells.push(cell);
+            }
+
+            let Some(message) = result.message.filter(|message| !message.trim().is_empty()) else {
+                continue;
+            };
+
+            let next_visible = match result.delivery {
+                WorkflowOutputDelivery::AssistantCell => {
+                    let cell: Arc<dyn HistoryCell> =
+                        Arc::new(workflow_result_cell(&message, self.config.cwd.as_path()));
+                    self.record_workflow_history_cell(primary_thread_id, cell)
+                }
+                WorkflowOutputDelivery::MainThreadInput | WorkflowOutputDelivery::UserFollowup => {
+                    self.queue_workflow_followup_to_primary(message, source)
+                }
+            };
+            if let Some(cell) = next_visible {
+                visible_cells.push(cell);
+            }
+        }
+        visible_cells
+    }
 }
 
 pub(crate) fn workflow_result_cell(message: &str, cwd: &Path) -> AgentMessageCell {
@@ -192,6 +377,28 @@ fn workflow_prompt_prefix(prompt: &str) -> String {
     } else {
         prefix
     }
+}
+
+fn workflow_job_source_hint(result: &super::workflow_runtime::WorkflowJobRunResult) -> String {
+    format!(
+        "{}/{}:{}",
+        result.workflow_name, result.trigger_id, result.job_name
+    )
+}
+
+fn user_text_from_inputs(items: &[UserInput]) -> String {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            UserInput::Text { text, .. } => Some(text.as_str()),
+            UserInput::Image { .. }
+            | UserInput::LocalImage { .. }
+            | UserInput::Skill { .. }
+            | UserInput::Mention { .. }
+            | _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
