@@ -357,6 +357,8 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
         queued_user_messages,
         queued_user_message_history_records: VecDeque::new(),
         user_turn_pending_start: false,
+        last_submitted_user_turn: None,
+        profile_retry_attempted: false,
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         task_running: false,

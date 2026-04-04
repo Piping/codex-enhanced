@@ -1195,6 +1195,8 @@ pub(crate) struct ThreadInputState {
     queued_user_messages: VecDeque<QueuedUserMessage>,
     queued_user_message_history_records: VecDeque<UserMessageHistoryRecord>,
     user_turn_pending_start: bool,
+    last_submitted_user_turn: Option<UserMessage>,
+    profile_retry_attempted: bool,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
     task_running: bool,
@@ -3351,6 +3353,8 @@ impl ChatWidget {
             queued_user_messages: self.queued_user_messages.clone(),
             queued_user_message_history_records: self.queued_user_message_history_records.clone(),
             user_turn_pending_start: self.user_turn_pending_start,
+            last_submitted_user_turn: self.last_submitted_user_turn.clone(),
+            profile_retry_attempted: self.profile_retry_attempted,
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             task_running: self.bottom_pane.is_task_running(),
@@ -3429,6 +3433,8 @@ impl ChatWidget {
                 self.queued_user_messages.len(),
                 UserMessageHistoryRecord::UserMessageText,
             );
+            self.last_submitted_user_turn = input_state.last_submitted_user_turn;
+            self.profile_retry_attempted = input_state.profile_retry_attempted;
         } else {
             self.agent_turn_running = false;
             self.goal_status_active_turn_started_at = None;
@@ -3446,6 +3452,8 @@ impl ChatWidget {
             self.bottom_pane.set_composer_pending_pastes(Vec::new());
             self.queued_user_messages.clear();
             self.queued_user_message_history_records.clear();
+            self.last_submitted_user_turn = None;
+            self.profile_retry_attempted = false;
         }
         self.turn_sleep_inhibitor
             .set_turn_running(self.agent_turn_running);
