@@ -662,11 +662,30 @@ pub(crate) fn new_unified_exec_interaction(
 #[derive(Debug)]
 struct UnifiedExecProcessesCell {
     processes: Vec<UnifiedExecProcessDetails>,
+    running_workflows: Vec<String>,
+    queued_workflows: Vec<String>,
 }
 
 impl UnifiedExecProcessesCell {
+    #[cfg(test)]
     fn new(processes: Vec<UnifiedExecProcessDetails>) -> Self {
-        Self { processes }
+        Self {
+            processes,
+            running_workflows: Vec::new(),
+            queued_workflows: Vec::new(),
+        }
+    }
+
+    fn new_with_workflows(
+        processes: Vec<UnifiedExecProcessDetails>,
+        running_workflows: Vec<String>,
+        queued_workflows: Vec<String>,
+    ) -> Self {
+        Self {
+            processes,
+            running_workflows,
+            queued_workflows,
+        }
     }
 }
 
@@ -685,12 +704,61 @@ impl HistoryCell for UnifiedExecProcessesCell {
         let wrap_width = width as usize;
         let max_processes = 16usize;
         let mut out: Vec<Line<'static>> = Vec::new();
-        out.push(vec!["Background terminals".bold()].into());
+        let show_workflows =
+            !self.running_workflows.is_empty() || !self.queued_workflows.is_empty();
+        out.push(
+            vec![if show_workflows {
+                "Background tasks".bold()
+            } else {
+                "Background terminals".bold()
+            }]
+            .into(),
+        );
         out.push("".into());
 
-        if self.processes.is_empty() {
+        if !show_workflows && self.processes.is_empty() {
             out.push("  • No background terminals running.".italic().into());
             return out;
+        }
+
+        if show_workflows && self.processes.is_empty() {
+            if !self.running_workflows.is_empty() {
+                out.push("Running workflows".bold().into());
+                for workflow in &self.running_workflows {
+                    out.push(vec!["  • ".dim(), workflow.clone().cyan()].into());
+                }
+            }
+            if !self.running_workflows.is_empty() && !self.queued_workflows.is_empty() {
+                out.push("".into());
+            }
+            if !self.queued_workflows.is_empty() {
+                out.push("Queued workflows".bold().into());
+                for workflow in &self.queued_workflows {
+                    out.push(vec!["  • ".dim(), workflow.clone().magenta()].into());
+                }
+            }
+            return out;
+        }
+
+        if !self.running_workflows.is_empty() {
+            out.push("Running workflows".bold().into());
+            for workflow in &self.running_workflows {
+                out.push(vec!["  • ".dim(), workflow.clone().cyan()].into());
+            }
+            out.push("".into());
+        }
+
+        if !self.queued_workflows.is_empty() {
+            out.push("Queued workflows".bold().into());
+            for workflow in &self.queued_workflows {
+                out.push(vec!["  • ".dim(), workflow.clone().magenta()].into());
+            }
+            out.push("".into());
+        }
+
+        if show_workflows {
+            out.push("Background terminals".bold().into());
+            out.push("".into());
         }
 
         let prefix = "  • ";
@@ -786,11 +854,26 @@ impl HistoryCell for UnifiedExecProcessesCell {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn new_unified_exec_processes_output(
     processes: Vec<UnifiedExecProcessDetails>,
 ) -> CompositeHistoryCell {
     let command = PlainHistoryCell::new(vec!["/ps".magenta().into()]);
     let summary = UnifiedExecProcessesCell::new(processes);
+    CompositeHistoryCell::new(vec![Box::new(command), Box::new(summary)])
+}
+
+pub(crate) fn new_background_tasks_output(
+    processes: Vec<UnifiedExecProcessDetails>,
+    running_workflows: Vec<String>,
+    queued_workflows: Vec<String>,
+) -> CompositeHistoryCell {
+    let command = PlainHistoryCell::new(vec!["/ps".magenta().into()]);
+    let summary = UnifiedExecProcessesCell::new_with_workflows(
+        processes,
+        running_workflows,
+        queued_workflows,
+    );
     CompositeHistoryCell::new(vec![Box::new(command), Box::new(summary)])
 }
 
@@ -3285,6 +3368,21 @@ mod tests {
         }]);
         let rendered = render_lines(&cell.display_lines(/*width*/ 60)).join("\n");
         insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn ps_output_shows_running_and_queued_workflows() {
+        let cell = new_background_tasks_output(
+            Vec::new(),
+            vec!["build-index · after_turn".to_string()],
+            vec!["sync-docs · manual".to_string()],
+        );
+        let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
+
+        assert!(rendered.contains("Running workflows"));
+        assert!(rendered.contains("Queued workflows"));
+        assert!(rendered.contains("build-index · after_turn"));
+        assert!(rendered.contains("sync-docs · manual"));
     }
 
     #[test]

@@ -887,15 +887,24 @@ impl BottomPane {
         self.pending_thread_approvals.threads()
     }
 
-    /// Update the unified-exec process set and refresh whichever summary surface is active.
+    /// Update the unified-exec activity set and refresh whichever summary surface is active.
     ///
     /// The summary may be displayed inline in the status row or as a dedicated
     /// footer row depending on whether a status indicator is currently visible.
-    pub(crate) fn set_unified_exec_processes(&mut self, processes: Vec<String>) {
-        if self.unified_exec_footer.set_processes(processes) {
+    pub(crate) fn set_unified_exec_activity(
+        &mut self,
+        processes: Vec<String>,
+        workflows: Vec<String>,
+    ) {
+        if self.unified_exec_footer.set_activity(processes, workflows) {
             self.sync_status_inline_message();
             self.request_redraw();
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_unified_exec_processes(&mut self, processes: Vec<String>) {
+        self.set_unified_exec_activity(processes, Vec::new());
     }
 
     /// Copy unified-exec summary text into the active status row, if any.
