@@ -26,6 +26,7 @@ use codex_protocol::protocol::RateLimitSnapshot;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
 
+use crate::app::workflow_runtime::BackgroundWorkflowRunResult;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
@@ -266,6 +267,12 @@ pub(crate) enum AppEvent {
     },
 
     InsertHistoryCell(Box<dyn HistoryCell>),
+
+    /// Final result for one background workflow execution.
+    BackgroundWorkflowRunCompleted {
+        run_id: String,
+        result: Box<BackgroundWorkflowRunResult>,
+    },
 
     /// Retry the last turn using the routed profile fallback policy.
     RetryLastUserTurnWithProfileFallback {
