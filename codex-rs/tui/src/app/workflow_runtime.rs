@@ -167,6 +167,15 @@ struct WorkflowThreadSession {
     cwd: PathBuf,
 }
 
+#[derive(Clone, Copy)]
+struct WorkflowStepExecutionContext<'a> {
+    workflow_name: &'a str,
+    trigger_id: &'a str,
+    job: &'a LoadedWorkflowJob,
+    phase_context: WorkflowPhaseContext<'a>,
+    cancellation: Option<&'a CancellationToken>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct WorkflowTurnState {
     status: TurnStatus,
@@ -845,18 +854,15 @@ async fn run_workflow_job(
                 }
                 return Err(WorkflowRunError::Cancelled);
             }
-            let result = execute_workflow_step(
-                client,
-                &mut thread,
+            let context = WorkflowStepExecutionContext {
                 workflow_name,
                 trigger_id,
                 job,
-                step,
-                &step_outputs,
                 phase_context,
                 cancellation,
-            )
-            .await;
+            };
+            let result =
+                execute_workflow_step(client, &mut thread, context, step, &step_outputs).await;
             match result {
                 Ok(Some(output)) => {
                     if matches!(step, WorkflowStep::Prompt { .. }) {
@@ -908,17 +914,13 @@ async fn run_workflow_job(
 async fn execute_workflow_step(
     client: &dyn WorkflowRuntimeClient,
     thread: &mut Option<WorkflowThreadSession>,
-    workflow_name: &str,
-    trigger_id: &str,
-    job: &LoadedWorkflowJob,
+    context: WorkflowStepExecutionContext<'_>,
     step: &WorkflowStep,
     step_outputs: &[String],
-    phase_context: WorkflowPhaseContext<'_>,
-    cancellation: Option<&CancellationToken>,
 ) -> Result<Option<String>, WorkflowRunError> {
     match step {
         WorkflowStep::Run { run, .. } => {
-            run_workflow_command(run, &job.workflow_path, cancellation).await
+            run_workflow_command(run, &context.job.workflow_path, context.cancellation).await
         }
         WorkflowStep::Prompt { prompt, .. } => {
             let thread = match thread {
@@ -933,14 +935,14 @@ async fn execute_workflow_step(
                 }
             };
             let prompt = build_workflow_prompt_input(
-                workflow_name,
-                trigger_id,
-                &job.name,
+                context.workflow_name,
+                context.trigger_id,
+                &context.job.name,
                 prompt,
-                phase_context,
+                context.phase_context,
                 step_outputs,
             );
-            run_workflow_prompt(client, &thread, prompt, cancellation).await
+            run_workflow_prompt(client, &thread, prompt, context.cancellation).await
         }
     }
 }
