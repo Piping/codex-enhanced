@@ -268,6 +268,11 @@ pub(crate) enum AppEvent {
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 
+    /// Replay stored workflow-only transcript cells for a specific thread after its turn replay.
+    ReplayWorkflowHistory {
+        thread_id: ThreadId,
+    },
+
     /// Final result for one background workflow execution.
     BackgroundWorkflowRunCompleted {
         run_id: String,

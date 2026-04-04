@@ -162,6 +162,7 @@ mod app_server_requests;
 mod loaded_threads;
 mod pending_interactive_replay;
 mod workflow_definition;
+mod workflow_history;
 pub(crate) mod workflow_runtime;
 mod workflow_scheduler;
 
@@ -170,6 +171,7 @@ use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
 use self::loaded_threads::find_loaded_subagent_threads_for_primary;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
+use self::workflow_history::WorkflowHistoryState;
 use self::workflow_scheduler::WorkflowSchedulerState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
@@ -1042,6 +1044,7 @@ pub(crate) struct App {
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
     workflow_scheduler: WorkflowSchedulerState,
+    workflow_history: WorkflowHistoryState,
 }
 
 #[derive(Default)]
@@ -3188,6 +3191,7 @@ impl App {
         self.chat_widget.handle_thread_session(session);
         self.chat_widget
             .replay_thread_turns(turns, ReplayKind::ResumeInitialMessages);
+        self.queue_workflow_history_replay_for_thread(thread_id);
         let pending = std::mem::take(&mut self.pending_primary_events);
         for pending_event in pending {
             match pending_event {
@@ -3983,6 +3987,9 @@ impl App {
         for event in snapshot.events {
             self.handle_thread_event_replay(event);
         }
+        if let Some(thread_id) = self.active_thread_id {
+            self.queue_workflow_history_replay_for_thread(thread_id);
+        }
         self.chat_widget
             .set_queue_autosend_suppressed(/*suppressed*/ false);
         self.chat_widget
@@ -4263,6 +4270,7 @@ impl App {
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             workflow_scheduler: WorkflowSchedulerState::default(),
+            workflow_history: WorkflowHistoryState::default(),
         };
         if let Some(started) = initial_started_thread {
             app.enqueue_primary_thread_session(started.session, started.turns)
@@ -4681,6 +4689,19 @@ impl App {
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
                 self.insert_visible_history_cell(tui, cell);
+            }
+            AppEvent::ReplayWorkflowHistory { thread_id } => {
+                if self.active_thread_id == Some(thread_id) {
+                    let lines = self.replay_workflow_history_cells_for_thread(
+                        thread_id,
+                        tui.terminal.last_known_screen_size.width,
+                    );
+                    if self.overlay.is_some() {
+                        self.deferred_history_lines.extend(lines);
+                    } else if !lines.is_empty() {
+                        tui.insert_history_lines(lines);
+                    }
+                }
             }
             AppEvent::BackgroundWorkflowRunCompleted { run_id, result } => {
                 let cells = self
@@ -9577,6 +9598,7 @@ guardian_approval = true
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             workflow_scheduler: WorkflowSchedulerState::default(),
+            workflow_history: WorkflowHistoryState::default(),
         }
     }
 
@@ -9632,6 +9654,7 @@ guardian_approval = true
                 pending_primary_events: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),
                 workflow_scheduler: WorkflowSchedulerState::default(),
+                workflow_history: WorkflowHistoryState::default(),
             },
             rx,
             op_rx,
@@ -11010,6 +11033,130 @@ model = "gpt-5.2"
     }
 
     #[tokio::test]
+    async fn replay_thread_snapshot_queues_workflow_history_after_turn_replay() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
+        let stored_cell: Arc<dyn HistoryCell> = Arc::new(history_cell::new_info_event(
+            "Workflow reply".to_string(),
+            Some("director/review_backlog".to_string()),
+        ));
+        let _ = app.record_workflow_history_cell(thread_id, stored_cell);
+
+        app.replay_thread_snapshot(
+            ThreadEventSnapshot {
+                session: Some(test_thread_session(
+                    thread_id,
+                    PathBuf::from("/home/user/project"),
+                )),
+                turns: vec![test_turn(
+                    "turn-1",
+                    TurnStatus::Completed,
+                    vec![ThreadItem::UserMessage {
+                        id: "user-1".to_string(),
+                        content: vec![AppServerUserInput::Text {
+                            text: "first prompt".to_string(),
+                            text_elements: Vec::new(),
+                        }],
+                    }],
+                )],
+                events: Vec::new(),
+                input_state: None,
+            },
+            /*resume_restored_queue*/ false,
+        );
+
+        let mut replay_order = Vec::new();
+        while let Ok(event) = app_event_rx.try_recv() {
+            match event {
+                AppEvent::InsertHistoryCell(cell) => {
+                    let cell: Arc<dyn HistoryCell> = cell.into();
+                    let transcript = lines_to_single_string(&cell.transcript_lines(/*width*/ 80));
+                    if transcript.contains("first prompt") {
+                        replay_order.push("turn");
+                    }
+                    app.transcript_cells.push(cell);
+                }
+                AppEvent::ReplayWorkflowHistory {
+                    thread_id: replay_thread_id,
+                } => {
+                    assert_eq!(replay_thread_id, thread_id);
+                    replay_order.push("workflow");
+                    let lines = app.replay_workflow_history_cells_for_thread(
+                        replay_thread_id,
+                        /*width*/ 80,
+                    );
+                    assert!(lines_to_single_string(&lines).contains("Workflow reply"));
+                }
+                _ => {}
+            }
+        }
+
+        assert_eq!(replay_order, vec!["turn", "workflow"]);
+        let transcript: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .map(|cell| lines_to_single_string(&cell.transcript_lines(/*width*/ 80)))
+            .collect();
+        assert!(transcript.iter().any(|cell| cell.contains("first prompt")));
+        assert!(
+            transcript
+                .last()
+                .is_some_and(|cell| cell.contains("Workflow reply"))
+        );
+    }
+
+    #[tokio::test]
+    async fn enqueue_primary_thread_session_queues_workflow_history_after_turn_replay() -> Result<()>
+    {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let stored_cell: Arc<dyn HistoryCell> = Arc::new(history_cell::new_info_event(
+            "Workflow reply".to_string(),
+            Some("director/review_backlog".to_string()),
+        ));
+        let _ = app.record_workflow_history_cell(thread_id, stored_cell);
+
+        app.enqueue_primary_thread_session(
+            test_thread_session(thread_id, PathBuf::from("/tmp/project")),
+            vec![test_turn(
+                "turn-1",
+                TurnStatus::Completed,
+                vec![ThreadItem::UserMessage {
+                    id: "user-1".to_string(),
+                    content: vec![AppServerUserInput::Text {
+                        text: "earlier prompt".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                }],
+            )],
+        )
+        .await?;
+
+        let mut replay_order = Vec::new();
+        while let Ok(event) = app_event_rx.try_recv() {
+            match event {
+                AppEvent::InsertHistoryCell(cell) => {
+                    let transcript = lines_to_single_string(&cell.transcript_lines(/*width*/ 80));
+                    if transcript.contains("earlier prompt") {
+                        replay_order.push("turn");
+                    }
+                }
+                AppEvent::ReplayWorkflowHistory {
+                    thread_id: replay_thread_id,
+                } => {
+                    assert_eq!(replay_thread_id, thread_id);
+                    replay_order.push("workflow");
+                }
+                _ => {}
+            }
+        }
+
+        assert_eq!(replay_order, vec!["turn", "workflow"]);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let receiver_thread_id =
@@ -11371,6 +11518,84 @@ model = "gpt-5.2"
             vec!["director · fast".to_string()]
         );
         assert!(app.queued_trigger_labels().is_empty());
+    }
+
+    #[tokio::test]
+    async fn workflow_follow_up_completion_submits_to_primary_thread() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start thread");
+        let thread_id = started.session.thread_id;
+        app.primary_thread_id = Some(thread_id);
+        app.primary_session_configured = Some(started.session);
+        app.active_thread_id = Some(thread_id);
+
+        let run_id = app
+            .workflow_scheduler
+            .next_background_run_id("director", "review_backlog");
+        let target = workflow_runtime::BackgroundWorkflowRunTarget::Job {
+            workflow_name: "director".to_string(),
+            job_name: "review_backlog".to_string(),
+        };
+        app.workflow_scheduler.register_background_workflow_run(
+            run_id.clone(),
+            target.clone(),
+            CancellationToken::new(),
+            tokio::spawn(async {}),
+        );
+
+        let cells = app
+            .finish_background_workflow_run(
+                &app_server,
+                run_id,
+                workflow_runtime::BackgroundWorkflowRunResult {
+                    target,
+                    outcome: workflow_runtime::BackgroundWorkflowRunOutcome::Completed(vec![
+                        workflow_runtime::WorkflowJobRunResult {
+                            delivery: workflow_runtime::WorkflowOutputDelivery::UserFollowup,
+                            workflow_name: "director".to_string(),
+                            trigger_id: "job:review_backlog".to_string(),
+                            job_name: "review_backlog".to_string(),
+                            message: Some("workflow follow-up".to_string()),
+                        },
+                    ]),
+                },
+            )
+            .await;
+
+        let rendered_cells: Vec<String> = cells
+            .iter()
+            .map(|cell| lines_to_single_string(&cell.transcript_lines(/*width*/ 80)))
+            .collect();
+        assert_eq!(rendered_cells.len(), 2);
+        assert!(rendered_cells[0].contains("Workflow job completed"));
+        assert!(rendered_cells[1].contains("Workflow reply"));
+
+        match app_event_rx
+            .try_recv()
+            .expect("expected queued workflow follow-up")
+        {
+            AppEvent::SubmitThreadOp {
+                thread_id: submit_thread_id,
+                op: Op::UserTurn { items, .. },
+            } => {
+                assert_eq!(submit_thread_id, thread_id);
+                assert_eq!(
+                    items,
+                    vec![UserInput::Text {
+                        text: "workflow follow-up".to_string(),
+                        text_elements: Vec::new(),
+                    }]
+                );
+            }
+            other => panic!("expected workflow follow-up submission, got {other:?}"),
+        }
     }
 
     #[tokio::test]
