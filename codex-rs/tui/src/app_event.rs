@@ -532,6 +532,10 @@ pub(crate) enum AppEvent {
     /// finalization.
     ConsolidateProposedPlan(String),
 
+    /// Replay stored workflow-only transcript cells for a specific thread after its turn replay.
+    ReplayWorkflowHistory {
+        thread_id: ThreadId,
+    },
     /// Final result for one background workflow execution.
     BackgroundWorkflowRunCompleted {
         run_id: String,
