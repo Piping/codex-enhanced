@@ -152,6 +152,8 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinHandle;
+#[cfg(test)]
+use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
 use uuid::Uuid;
 mod agent_navigation;
@@ -159,6 +161,8 @@ mod app_server_adapter;
 mod app_server_requests;
 mod loaded_threads;
 mod pending_interactive_replay;
+mod workflow_definition;
+pub(crate) mod workflow_runtime;
 mod workflow_scheduler;
 
 use self::agent_navigation::AgentNavigationDirection;
@@ -1906,6 +1910,30 @@ impl App {
         );
     }
 
+    fn insert_visible_history_cell(&mut self, tui: &mut tui::Tui, cell: Arc<dyn HistoryCell>) {
+        if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+            t.insert_cell(cell.clone());
+            tui.frame_requester().schedule_frame();
+        }
+        self.transcript_cells.push(cell.clone());
+        let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+        if display.is_empty() {
+            return;
+        }
+        if !cell.is_stream_continuation() {
+            if self.has_emitted_history_lines {
+                display.insert(0, Line::from(""));
+            } else {
+                self.has_emitted_history_lines = true;
+            }
+        }
+        if self.overlay.is_some() {
+            self.deferred_history_lines.extend(display);
+        } else {
+            tui.insert_history_lines(display);
+        }
+    }
+
     #[cfg(test)]
     fn start_test_background_workflow_run(
         &mut self,
@@ -1916,14 +1944,24 @@ impl App {
         let run_id = self
             .workflow_scheduler
             .next_background_run_id(&workflow_name, &target_name);
-        let label = format!("{workflow_name} · {target_name}");
         let handle = tokio::spawn(async {
             std::future::pending::<()>().await;
         });
+        let target = if is_trigger {
+            workflow_runtime::BackgroundWorkflowRunTarget::Trigger {
+                workflow_name,
+                trigger_id: target_name,
+            }
+        } else {
+            workflow_runtime::BackgroundWorkflowRunTarget::Job {
+                workflow_name,
+                job_name: target_name,
+            }
+        };
         self.workflow_scheduler.register_background_workflow_run(
             run_id.clone(),
-            label,
-            is_trigger,
+            target,
+            CancellationToken::new(),
             handle,
         );
         self.sync_background_workflow_status();
@@ -4642,28 +4680,14 @@ impl App {
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
-                if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_cell(cell.clone());
-                    tui.frame_requester().schedule_frame();
-                }
-                self.transcript_cells.push(cell.clone());
-                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
-                if !display.is_empty() {
-                    // Only insert a separating blank line for new cells that are not
-                    // part of an ongoing stream. Streaming continuations should not
-                    // accrue extra blank lines between chunks.
-                    if !cell.is_stream_continuation() {
-                        if self.has_emitted_history_lines {
-                            display.insert(0, Line::from(""));
-                        } else {
-                            self.has_emitted_history_lines = true;
-                        }
-                    }
-                    if self.overlay.is_some() {
-                        self.deferred_history_lines.extend(display);
-                    } else {
-                        tui.insert_history_lines(display);
-                    }
+                self.insert_visible_history_cell(tui, cell);
+            }
+            AppEvent::BackgroundWorkflowRunCompleted { run_id, result } => {
+                let cells = self
+                    .finish_background_workflow_run(app_server, run_id, *result)
+                    .await;
+                for cell in cells {
+                    self.insert_visible_history_cell(tui, cell);
                 }
             }
             AppEvent::RetryLastUserTurnWithProfileFallback {
