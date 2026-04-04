@@ -330,6 +330,29 @@ fn managed_filesystem_sandbox_is_restricted(permission_profile: &PermissionProfi
     )
 }
 
+fn should_respawn_with_yolo(config: &Config) -> bool {
+    config.permissions.approval_policy.value() == AskForApproval::Never
+        && *config.permissions.sandbox_policy.get() == SandboxPolicy::DangerFullAccess
+}
+
+#[cfg(unix)]
+fn spawn_respawn_signal_listener(app_event_tx: AppEventSender) -> std::io::Result<()> {
+    use tokio::signal::unix::SignalKind;
+
+    let mut signal = tokio::signal::unix::signal(SignalKind::user_defined1())?;
+    tokio::spawn(async move {
+        if signal.recv().await.is_some() {
+            app_event_tx.send(AppEvent::Exit(ExitMode::RespawnImmediate));
+        }
+    });
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn spawn_respawn_signal_listener(_app_event_tx: AppEventSender) -> std::io::Result<()> {
+    Ok(())
+}
+
 /// Baseline cadence for periodic stream commit animation ticks.
 ///
 /// Smooth-mode streaming drains one line per tick, so this interval controls
@@ -342,6 +365,7 @@ pub struct AppExitInfo {
     pub thread_id: Option<ThreadId>,
     pub thread_name: Option<String>,
     pub update_action: Option<UpdateAction>,
+    pub respawn_with_yolo: bool,
     pub exit_reason: ExitReason,
 }
 
@@ -352,6 +376,7 @@ impl AppExitInfo {
             thread_id: None,
             thread_name: None,
             update_action: None,
+            respawn_with_yolo: false,
             exit_reason: ExitReason::Fatal(message.into()),
         }
     }
@@ -366,6 +391,7 @@ pub(crate) enum AppRunControl {
 #[derive(Debug, Clone)]
 pub enum ExitReason {
     UserRequested,
+    RespawnRequested,
     Fatal(String),
 }
 
@@ -433,6 +459,454 @@ struct SessionSummary {
 struct InitialHistoryReplayBuffer {
     retained_lines: VecDeque<Line<'static>>,
     render_from_transcript_tail: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ThreadEventSnapshot {
+    session: Option<ThreadSessionState>,
+    turns: Vec<Turn>,
+    events: Vec<ThreadBufferedEvent>,
+    input_state: Option<ThreadInputState>,
+}
+
+#[derive(Debug, Clone)]
+enum ThreadBufferedEvent {
+    Notification(ServerNotification),
+    Request(ServerRequest),
+    HistoryEntryResponse(GetHistoryEntryResponseEvent),
+    FeedbackSubmission(FeedbackThreadEvent),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FeedbackThreadEvent {
+    category: FeedbackCategory,
+    include_logs: bool,
+    feedback_audience: FeedbackAudience,
+    result: Result<String, String>,
+}
+
+#[derive(Debug)]
+struct ThreadEventStore {
+    session: Option<ThreadSessionState>,
+    turns: Vec<Turn>,
+    buffer: VecDeque<ThreadBufferedEvent>,
+    pending_interactive_replay: PendingInteractiveReplayState,
+    active_turn_id: Option<String>,
+    input_state: Option<ThreadInputState>,
+    capacity: usize,
+    active: bool,
+}
+
+impl ThreadEventStore {
+    fn event_survives_session_refresh(event: &ThreadBufferedEvent) -> bool {
+        matches!(
+            event,
+            ThreadBufferedEvent::Request(_)
+                | ThreadBufferedEvent::Notification(ServerNotification::HookStarted(_))
+                | ThreadBufferedEvent::Notification(ServerNotification::HookCompleted(_))
+                | ThreadBufferedEvent::FeedbackSubmission(_)
+        )
+    }
+
+    fn new(capacity: usize) -> Self {
+        Self {
+            session: None,
+            turns: Vec::new(),
+            buffer: VecDeque::new(),
+            pending_interactive_replay: PendingInteractiveReplayState::default(),
+            active_turn_id: None,
+            input_state: None,
+            capacity,
+            active: false,
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn new_with_session(capacity: usize, session: ThreadSessionState, turns: Vec<Turn>) -> Self {
+        let mut store = Self::new(capacity);
+        store.session = Some(session);
+        store.set_turns(turns);
+        store
+    }
+
+    fn set_session(&mut self, session: ThreadSessionState, turns: Vec<Turn>) {
+        self.session = Some(session);
+        self.set_turns(turns);
+    }
+
+    fn rebase_buffer_after_session_refresh(&mut self) {
+        self.buffer.retain(Self::event_survives_session_refresh);
+    }
+
+    fn set_turns(&mut self, turns: Vec<Turn>) {
+        self.active_turn_id = turns
+            .iter()
+            .rev()
+            .find(|turn| matches!(turn.status, TurnStatus::InProgress))
+            .map(|turn| turn.id.clone());
+        self.turns = turns;
+    }
+
+    fn push_notification(&mut self, notification: ServerNotification) {
+        self.pending_interactive_replay
+            .note_server_notification(&notification);
+        match &notification {
+            ServerNotification::TurnStarted(turn) => {
+                self.active_turn_id = Some(turn.turn.id.clone());
+            }
+            ServerNotification::TurnCompleted(turn) => {
+                if self.active_turn_id.as_deref() == Some(turn.turn.id.as_str()) {
+                    self.active_turn_id = None;
+                }
+            }
+            ServerNotification::ThreadClosed(_) => {
+                self.active_turn_id = None;
+            }
+            _ => {}
+        }
+        self.buffer
+            .push_back(ThreadBufferedEvent::Notification(notification));
+        if self.buffer.len() > self.capacity
+            && let Some(removed) = self.buffer.pop_front()
+            && let ThreadBufferedEvent::Request(request) = &removed
+        {
+            self.pending_interactive_replay
+                .note_evicted_server_request(request);
+        }
+    }
+
+    fn push_request(&mut self, request: ServerRequest) {
+        self.pending_interactive_replay
+            .note_server_request(&request);
+        self.buffer.push_back(ThreadBufferedEvent::Request(request));
+        if self.buffer.len() > self.capacity
+            && let Some(removed) = self.buffer.pop_front()
+            && let ThreadBufferedEvent::Request(request) = &removed
+        {
+            self.pending_interactive_replay
+                .note_evicted_server_request(request);
+        }
+    }
+
+    fn apply_thread_rollback(&mut self, response: &ThreadRollbackResponse) {
+        self.turns = response.thread.turns.clone();
+        self.buffer.clear();
+        self.pending_interactive_replay = PendingInteractiveReplayState::default();
+        self.active_turn_id = None;
+    }
+
+    fn snapshot(&self) -> ThreadEventSnapshot {
+        ThreadEventSnapshot {
+            session: self.session.clone(),
+            turns: self.turns.clone(),
+            // Thread switches replay buffered events into a rebuilt ChatWidget. Only replay
+            // interactive prompts that are still pending, or answered approvals/input will reappear.
+            events: self
+                .buffer
+                .iter()
+                .filter(|event| match event {
+                    ThreadBufferedEvent::Request(request) => self
+                        .pending_interactive_replay
+                        .should_replay_snapshot_request(request),
+                    ThreadBufferedEvent::Notification(_)
+                    | ThreadBufferedEvent::HistoryEntryResponse(_)
+                    | ThreadBufferedEvent::FeedbackSubmission(_) => true,
+                })
+                .cloned()
+                .collect(),
+            input_state: self.input_state.clone(),
+        }
+    }
+
+    fn note_outbound_op<T>(&mut self, op: T)
+    where
+        T: Into<AppCommand>,
+    {
+        self.pending_interactive_replay.note_outbound_op(op);
+    }
+
+    fn op_can_change_pending_replay_state<T>(op: T) -> bool
+    where
+        T: Into<AppCommand>,
+    {
+        PendingInteractiveReplayState::op_can_change_state(op)
+    }
+
+    fn has_pending_thread_approvals(&self) -> bool {
+        self.pending_interactive_replay
+            .has_pending_thread_approvals()
+    }
+
+    fn active_turn_id(&self) -> Option<&str> {
+        self.active_turn_id.as_deref()
+    }
+
+    fn clear_active_turn_id(&mut self) {
+        self.active_turn_id = None;
+    }
+}
+
+#[derive(Debug)]
+struct ThreadEventChannel {
+    sender: mpsc::Sender<ThreadBufferedEvent>,
+    receiver: Option<mpsc::Receiver<ThreadBufferedEvent>>,
+    store: Arc<Mutex<ThreadEventStore>>,
+}
+
+impl ThreadEventChannel {
+    fn new(capacity: usize) -> Self {
+        let (sender, receiver) = mpsc::channel(capacity);
+        Self {
+            sender,
+            receiver: Some(receiver),
+            store: Arc::new(Mutex::new(ThreadEventStore::new(capacity))),
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn new_with_session(capacity: usize, session: ThreadSessionState, turns: Vec<Turn>) -> Self {
+        let (sender, receiver) = mpsc::channel(capacity);
+        Self {
+            sender,
+            receiver: Some(receiver),
+            store: Arc::new(Mutex::new(ThreadEventStore::new_with_session(
+                capacity, session, turns,
+            ))),
+        }
+    }
+}
+
+fn should_show_model_migration_prompt(
+    current_model: &str,
+    target_model: &str,
+    seen_migrations: &BTreeMap<String, String>,
+    available_models: &[ModelPreset],
+) -> bool {
+    if target_model == current_model {
+        return false;
+    }
+
+    if let Some(seen_target) = seen_migrations.get(current_model)
+        && seen_target == target_model
+    {
+        return false;
+    }
+
+    if !available_models
+        .iter()
+        .any(|preset| preset.model == target_model && preset.show_in_picker)
+    {
+        return false;
+    }
+
+    if available_models
+        .iter()
+        .any(|preset| preset.model == current_model && preset.upgrade.is_some())
+    {
+        return true;
+    }
+
+    if available_models
+        .iter()
+        .any(|preset| preset.upgrade.as_ref().map(|u| u.id.as_str()) == Some(target_model))
+    {
+        return true;
+    }
+
+    false
+}
+
+fn migration_prompt_hidden(config: &Config, migration_config_key: &str) -> bool {
+    match migration_config_key {
+        HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG => config
+            .notices
+            .hide_gpt_5_1_codex_max_migration_prompt
+            .unwrap_or(false),
+        HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG => {
+            config.notices.hide_gpt5_1_migration_prompt.unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+fn target_preset_for_upgrade<'a>(
+    available_models: &'a [ModelPreset],
+    target_model: &str,
+) -> Option<&'a ModelPreset> {
+    available_models
+        .iter()
+        .find(|preset| preset.model == target_model && preset.show_in_picker)
+}
+
+const MODEL_AVAILABILITY_NUX_MAX_SHOW_COUNT: u32 = 4;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StartupTooltipOverride {
+    model_slug: String,
+    message: String,
+}
+
+fn select_model_availability_nux(
+    available_models: &[ModelPreset],
+    nux_config: &ModelAvailabilityNuxConfig,
+) -> Option<StartupTooltipOverride> {
+    available_models.iter().find_map(|preset| {
+        let ModelAvailabilityNux { message } = preset.availability_nux.as_ref()?;
+        let shown_count = nux_config
+            .shown_count
+            .get(&preset.model)
+            .copied()
+            .unwrap_or_default();
+        (shown_count < MODEL_AVAILABILITY_NUX_MAX_SHOW_COUNT).then(|| StartupTooltipOverride {
+            model_slug: preset.model.clone(),
+            message: message.clone(),
+        })
+    })
+}
+
+async fn prepare_startup_tooltip_override(
+    config: &mut Config,
+    available_models: &[ModelPreset],
+    is_first_run: bool,
+) -> Option<String> {
+    if is_first_run || !config.show_tooltips {
+        return None;
+    }
+
+    let tooltip_override =
+        select_model_availability_nux(available_models, &config.model_availability_nux)?;
+
+    let shown_count = config
+        .model_availability_nux
+        .shown_count
+        .get(&tooltip_override.model_slug)
+        .copied()
+        .unwrap_or_default();
+    let next_count = shown_count.saturating_add(1);
+    let mut updated_shown_count = config.model_availability_nux.shown_count.clone();
+    updated_shown_count.insert(tooltip_override.model_slug.clone(), next_count);
+
+    if let Err(err) = ConfigEditsBuilder::new(&config.codex_home)
+        .set_model_availability_nux_count(&updated_shown_count)
+        .apply()
+        .await
+    {
+        tracing::error!(
+            error = %err,
+            model = %tooltip_override.model_slug,
+            "failed to persist model availability nux count"
+        );
+        return Some(tooltip_override.message);
+    }
+
+    config.model_availability_nux.shown_count = updated_shown_count;
+    Some(tooltip_override.message)
+}
+
+async fn handle_model_migration_prompt_if_needed(
+    tui: &mut tui::Tui,
+    config: &mut Config,
+    model: &str,
+    app_event_tx: &AppEventSender,
+    available_models: &[ModelPreset],
+) -> Option<AppExitInfo> {
+    let upgrade = available_models
+        .iter()
+        .find(|preset| preset.model == model)
+        .and_then(|preset| preset.upgrade.as_ref());
+
+    if let Some(ModelUpgrade {
+        id: target_model,
+        reasoning_effort_mapping,
+        migration_config_key,
+        model_link,
+        upgrade_copy,
+        migration_markdown,
+    }) = upgrade
+    {
+        if migration_prompt_hidden(config, migration_config_key.as_str()) {
+            return None;
+        }
+
+        let target_model = target_model.to_string();
+        if !should_show_model_migration_prompt(
+            model,
+            &target_model,
+            &config.notices.model_migrations,
+            available_models,
+        ) {
+            return None;
+        }
+
+        let current_preset = available_models.iter().find(|preset| preset.model == model);
+        let target_preset = target_preset_for_upgrade(available_models, &target_model);
+        let target_preset = target_preset?;
+        let target_display_name = target_preset.display_name.clone();
+        let heading_label = if target_display_name == model {
+            target_model.clone()
+        } else {
+            target_display_name.clone()
+        };
+        let target_description =
+            (!target_preset.description.is_empty()).then(|| target_preset.description.clone());
+        let can_opt_out = current_preset.is_some();
+        let prompt_copy = migration_copy_for_models(
+            model,
+            &target_model,
+            model_link.clone(),
+            upgrade_copy.clone(),
+            migration_markdown.clone(),
+            heading_label,
+            target_description,
+            can_opt_out,
+        );
+        match run_model_migration_prompt(tui, prompt_copy).await {
+            ModelMigrationOutcome::Accepted => {
+                app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
+                    from_model: model.to_string(),
+                    to_model: target_model.clone(),
+                });
+
+                let mapped_effort = if let Some(reasoning_effort_mapping) = reasoning_effort_mapping
+                    && let Some(reasoning_effort) = config.model_reasoning_effort
+                {
+                    reasoning_effort_mapping
+                        .get(&reasoning_effort)
+                        .cloned()
+                        .or(config.model_reasoning_effort)
+                } else {
+                    config.model_reasoning_effort
+                };
+
+                config.model = Some(target_model.clone());
+                config.model_reasoning_effort = mapped_effort;
+                app_event_tx.send(AppEvent::UpdateModel(target_model.clone()));
+                app_event_tx.send(AppEvent::UpdateReasoningEffort(mapped_effort));
+                app_event_tx.send(AppEvent::PersistModelSelection {
+                    model: target_model.clone(),
+                    effort: mapped_effort,
+                });
+            }
+            ModelMigrationOutcome::Rejected => {
+                app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
+                    from_model: model.to_string(),
+                    to_model: target_model.clone(),
+                });
+            }
+            ModelMigrationOutcome::Exit => {
+                return Some(AppExitInfo {
+                    token_usage: TokenUsage::default(),
+                    thread_id: None,
+                    thread_name: None,
+                    update_action: None,
+                    respawn_with_yolo: false,
+                    exit_reason: ExitReason::UserRequested,
+                });
+            }
+        }
+    }
+
+    None
 }
 
 pub(crate) struct App {
@@ -3558,6 +4032,7 @@ impl App {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
+        spawn_respawn_signal_listener(app_event_tx.clone())?;
         emit_project_config_warnings(&app_event_tx, &config);
         emit_system_bwrap_warning(&app_event_tx, &config);
         tui.set_notification_settings(
@@ -4012,6 +4487,7 @@ See the Codex keymap documentation for supported actions and examples."
             thread_id: resumable_thread.as_ref().map(|thread| thread.thread_id),
             thread_name: resumable_thread.and_then(|thread| thread.thread_name),
             update_action: app.pending_update_action,
+            respawn_with_yolo: should_respawn_with_yolo(&app.config),
             exit_reason,
         })
     }
@@ -5750,6 +6226,10 @@ See the Codex keymap documentation for supported actions and examples."
             ExitMode::Immediate => {
                 self.pending_shutdown_exit_thread_id = None;
                 AppRunControl::Exit(ExitReason::UserRequested)
+            }
+            ExitMode::RespawnImmediate => {
+                self.pending_shutdown_exit_thread_id = None;
+                AppRunControl::Exit(ExitReason::RespawnRequested)
             }
         }
     }
@@ -11379,6 +11859,25 @@ model = "gpt-5.2"
             op_rx.try_recv().is_err(),
             "shutdown should not submit Op::Shutdown"
         );
+    }
+
+    #[tokio::test]
+    async fn respawn_immediate_exit_returns_respawn_requested() {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+
+        let control = app
+            .handle_exit_mode(&mut app_server, ExitMode::RespawnImmediate)
+            .await;
+
+        assert_eq!(app.pending_shutdown_exit_thread_id, None);
+        assert!(matches!(
+            control,
+            AppRunControl::Exit(ExitReason::RespawnRequested)
+        ));
     }
 
     #[tokio::test]

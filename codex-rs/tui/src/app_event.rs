@@ -950,6 +950,8 @@ pub(crate) enum ExitMode {
     /// This skips `Op::Shutdown`, so any in-flight work may be dropped and
     /// cleanup that normally runs before `ShutdownComplete` can be missed.
     Immediate,
+    /// Exit the UI loop immediately and request the outer CLI to respawn this session.
+    RespawnImmediate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
