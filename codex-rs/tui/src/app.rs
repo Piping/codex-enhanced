@@ -287,6 +287,30 @@ fn guardian_approvals_mode() -> GuardianApprovalsMode {
         sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
     }
 }
+
+fn should_respawn_with_yolo(config: &Config) -> bool {
+    config.permissions.approval_policy.value() == AskForApproval::Never
+        && *config.permissions.sandbox_policy.get() == SandboxPolicy::DangerFullAccess
+}
+
+#[cfg(unix)]
+fn spawn_respawn_signal_listener(app_event_tx: AppEventSender) -> std::io::Result<()> {
+    use tokio::signal::unix::SignalKind;
+
+    let mut signal = tokio::signal::unix::signal(SignalKind::user_defined1())?;
+    tokio::spawn(async move {
+        if signal.recv().await.is_some() {
+            app_event_tx.send(AppEvent::Exit(ExitMode::RespawnImmediate));
+        }
+    });
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn spawn_respawn_signal_listener(_app_event_tx: AppEventSender) -> std::io::Result<()> {
+    Ok(())
+}
+
 /// Baseline cadence for periodic stream commit animation ticks.
 ///
 /// Smooth-mode streaming drains one line per tick, so this interval controls
@@ -299,6 +323,7 @@ pub struct AppExitInfo {
     pub thread_id: Option<ThreadId>,
     pub thread_name: Option<String>,
     pub update_action: Option<UpdateAction>,
+    pub respawn_with_yolo: bool,
     pub exit_reason: ExitReason,
 }
 
@@ -309,6 +334,7 @@ impl AppExitInfo {
             thread_id: None,
             thread_name: None,
             update_action: None,
+            respawn_with_yolo: false,
             exit_reason: ExitReason::Fatal(message.into()),
         }
     }
@@ -323,6 +349,7 @@ pub(crate) enum AppRunControl {
 #[derive(Debug, Clone)]
 pub enum ExitReason {
     UserRequested,
+    RespawnRequested,
     Fatal(String),
 }
 
@@ -972,6 +999,7 @@ async fn handle_model_migration_prompt_if_needed(
                     thread_id: None,
                     thread_name: None,
                     update_action: None,
+                    respawn_with_yolo: false,
                     exit_reason: ExitReason::UserRequested,
                 });
             }
@@ -4098,6 +4126,7 @@ impl App {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
+        spawn_respawn_signal_listener(app_event_tx.clone())?;
         emit_project_config_warnings(&app_event_tx, &config);
         emit_system_bwrap_warning(&app_event_tx, &config);
         tui.set_notification_settings(
@@ -4491,6 +4520,7 @@ impl App {
             thread_id: resumable_thread.as_ref().map(|thread| thread.thread_id),
             thread_name: resumable_thread.and_then(|thread| thread.thread_name),
             update_action: app.pending_update_action,
+            respawn_with_yolo: should_respawn_with_yolo(&app.config),
             exit_reason,
         })
     }
@@ -6214,6 +6244,10 @@ impl App {
             ExitMode::Immediate => {
                 self.pending_shutdown_exit_thread_id = None;
                 AppRunControl::Exit(ExitReason::UserRequested)
+            }
+            ExitMode::RespawnImmediate => {
+                self.pending_shutdown_exit_thread_id = None;
+                AppRunControl::Exit(ExitReason::RespawnRequested)
             }
         }
     }
@@ -11843,6 +11877,25 @@ model = "gpt-5.2"
             op_rx.try_recv().is_err(),
             "shutdown should not submit Op::Shutdown"
         );
+    }
+
+    #[tokio::test]
+    async fn respawn_immediate_exit_returns_respawn_requested() {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+
+        let control = app
+            .handle_exit_mode(&mut app_server, ExitMode::RespawnImmediate)
+            .await;
+
+        assert_eq!(app.pending_shutdown_exit_thread_id, None);
+        assert!(matches!(
+            control,
+            AppRunControl::Exit(ExitReason::RespawnRequested)
+        ));
     }
 
     #[tokio::test]
