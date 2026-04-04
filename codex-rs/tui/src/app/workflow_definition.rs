@@ -321,10 +321,11 @@ pub(crate) fn ordered_jobs_for_roots(
         .collect::<BTreeMap<_, _>>();
     let mut dependents = BTreeMap::<String, Vec<String>>::new();
     for job_name in &reachable {
-        let job = registry
-            .jobs
-            .get(job_name)
-            .expect("reachable job should exist");
+        let Some(job) = registry.jobs.get(job_name) else {
+            return Err(WorkflowDefinitionError::Invalid(format!(
+                "reachable workflow job `{job_name}` is missing from registry"
+            )));
+        };
         for dependency in &job.config.needs {
             if !reachable.contains(dependency) {
                 continue;
@@ -368,13 +369,13 @@ fn pop_next_job(ready: &mut VecDeque<String>, registry: &LoadedWorkflowRegistry)
     let best_index = ready
         .iter()
         .enumerate()
-        .min_by_key(|(_, job_name)| {
+        .filter_map(|(index, job_name)| {
             registry
                 .jobs
-                .get(*job_name)
-                .expect("ready job should exist")
-                .definition_index
+                .get(job_name)
+                .map(|job| (index, job.definition_index))
         })
+        .min_by_key(|(_, definition_index)| *definition_index)
         .map(|(index, _)| index)?;
     ready.remove(best_index)
 }
