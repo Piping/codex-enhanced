@@ -1,0 +1,49 @@
+---
+source: tui/src/app/thread_menu.rs
+expression: "render_selection_popup(&view, 92, 20)"
+---
+TestBackend { buffer: Buffer {
+    area: Rect { x: 0, y: 0, width: 92, height: 20 },
+    content: [
+        "                                                                                            ",
+        "  Thread                                                                                    ",
+        "  Fork, rewind, or jump within the current conversation.                                    ",
+        "                                                                                            ",
+        "› 1. Fork Current Session    Fork the current thread into a new session and continue        ",
+        "                             there.                                                         ",
+        "  2. Jump To Message         Search committed transcript entries and open the transcript    ",
+        "                             overlay.                                                       ",
+        "  3. Undo Last User Message  Restore the last sent input and roll back one turn.            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "  Press enter to confirm or esc to go back                                                  ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 8, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 56, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 4, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 84, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 5, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 35, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 29, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 88, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 29, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 37, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 29, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 80, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 19, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+    ]
+}, scrollback: Buffer {
+    area: Rect { x: 0, y: 0, width: 92, height: 0 }
+}, cursor: false, pos: (0, 0) }
