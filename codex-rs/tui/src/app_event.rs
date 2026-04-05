@@ -27,6 +27,8 @@ use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
+use codex_app_server_protocol::Turn as AppServerTurn;
+use codex_clawbot::ProviderEvent as ClawbotProviderEvent;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
@@ -541,6 +543,9 @@ pub(crate) enum AppEvent {
     BeginThreadSwitchHistoryReplayBuffer,
 
     InsertHistoryCell(Box<dyn HistoryCell>),
+    ClawbotProviderEvent {
+        event: ClawbotProviderEvent,
+    },
 
     /// Finish buffering initial resume replay after all replay events have been queued.
     EndInitialHistoryReplayBuffer,
@@ -616,6 +621,10 @@ pub(crate) enum AppEvent {
     RetryLastUserTurnWithProfileFallback {
         action: ProfileFallbackAction,
         error_message: String,
+    },
+    ClawbotTurnCompleted {
+        thread_id: ThreadId,
+        turn: AppServerTurn,
     },
 
     /// Apply rollback semantics to local transcript cells.
