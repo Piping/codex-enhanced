@@ -5,8 +5,11 @@ use std::time::UNIX_EPOCH;
 use anyhow::Context;
 use anyhow::Result;
 
+use crate::config::FeishuConfig;
 use crate::model::CachedUnreadMessage;
 use crate::model::ClawbotSnapshot;
+use crate::model::ForwardingDirection;
+use crate::model::ForwardingState;
 use crate::model::InboundMessageReceipt;
 use crate::model::ProviderSession;
 use crate::model::ProviderSessionRef;
@@ -48,6 +51,16 @@ impl ClawbotRuntime {
             .feishu
             .clone()
             .map(FeishuProviderRuntime::new)
+    }
+
+    pub fn update_feishu_config(
+        &mut self,
+        feishu: Option<FeishuConfig>,
+    ) -> Result<&ClawbotSnapshot> {
+        self.store.save_config(&crate::config::ClawbotConfig {
+            feishu: feishu.filter(|config| !config.is_empty()),
+        })?;
+        self.reload()
     }
 
     pub fn persist_session(&mut self, session: ProviderSession) -> Result<&ClawbotSnapshot> {
@@ -154,6 +167,53 @@ impl ClawbotRuntime {
             .load_binding_for_thread(thread_id)?
             .as_ref()
             .map(SessionBinding::session_ref))
+    }
+
+    pub fn disconnect_thread(&mut self, thread_id: &str) -> Result<Option<ProviderSessionRef>> {
+        let Some(binding) = self.load_binding_for_thread(thread_id)? else {
+            return Ok(None);
+        };
+        let session = binding.session_ref();
+        let mut bindings = self.store.load_bindings()?;
+        bindings.retain(|candidate| candidate.thread_id != thread_id);
+        self.store.save_bindings(&bindings)?;
+
+        let mut sessions = self.store.load_sessions()?;
+        if let Some(existing) = sessions
+            .iter_mut()
+            .find(|candidate| candidate.session_ref() == session)
+        {
+            existing.bound_thread_id = None;
+            existing.status = SessionStatus::Discovered;
+        }
+        self.store.save_sessions(&sessions)?;
+        self.reload()?;
+        Ok(Some(session))
+    }
+
+    pub fn set_forwarding_state_for_thread(
+        &mut self,
+        thread_id: &str,
+        direction: ForwardingDirection,
+        state: ForwardingState,
+    ) -> Result<Option<SessionBinding>> {
+        let mut bindings = self.store.load_bindings()?;
+        let Some(binding) = bindings
+            .iter_mut()
+            .find(|candidate| candidate.thread_id == thread_id)
+        else {
+            return Ok(None);
+        };
+        let next_enabled = matches!(state, ForwardingState::Enabled);
+        match direction {
+            ForwardingDirection::Inbound => binding.inbound_forwarding_enabled = next_enabled,
+            ForwardingDirection::Outbound => binding.outbound_forwarding_enabled = next_enabled,
+        }
+        binding.updated_at = unix_timestamp_now()?;
+        let updated = binding.clone();
+        self.store.save_bindings(&bindings)?;
+        self.reload()?;
+        Ok(Some(updated))
     }
 
     pub fn take_next_unread_message(
@@ -272,12 +332,16 @@ mod tests {
     use tempfile::tempdir;
 
     use super::ClawbotRuntime;
+    use crate::config::FeishuConfig;
     use crate::events::ProviderInboundMessage;
     use crate::model::ConnectionStatus;
+    use crate::model::ForwardingDirection;
+    use crate::model::ForwardingState;
     use crate::model::ProviderKind;
     use crate::model::ProviderRuntimeState;
     use crate::model::ProviderSession;
     use crate::model::ProviderSessionRef;
+    use crate::model::SessionBinding;
     use crate::model::SessionStatus;
     use crate::provider::ProviderEvent;
 
@@ -374,5 +438,122 @@ mod tests {
         assert_eq!(runtime.snapshot().unread_message_count, 1);
         assert_eq!(runtime.snapshot().sessions.len(), 1);
         assert_eq!(runtime.snapshot().sessions[0].unread_count, 1);
+    }
+
+    #[test]
+    fn update_feishu_config_clears_empty_values() {
+        let tempdir = tempdir().expect("tempdir");
+        let mut runtime = ClawbotRuntime::load(tempdir.path().to_path_buf()).expect("runtime");
+
+        runtime
+            .update_feishu_config(Some(FeishuConfig {
+                app_id: "app".to_string(),
+                app_secret: "secret".to_string(),
+                verification_token: Some("token".to_string()),
+                encrypt_key: None,
+                bot_open_id: None,
+                bot_user_id: None,
+            }))
+            .expect("save config");
+        assert_eq!(
+            runtime.snapshot().config.feishu,
+            Some(FeishuConfig {
+                app_id: "app".to_string(),
+                app_secret: "secret".to_string(),
+                verification_token: Some("token".to_string()),
+                encrypt_key: None,
+                bot_open_id: None,
+                bot_user_id: None,
+            })
+        );
+
+        runtime
+            .update_feishu_config(Some(FeishuConfig::default()))
+            .expect("clear config");
+        assert_eq!(runtime.snapshot().config.feishu, None);
+    }
+
+    #[test]
+    fn disconnect_thread_clears_binding_and_session_state() {
+        let tempdir = tempdir().expect("tempdir");
+        let mut runtime = ClawbotRuntime::load(tempdir.path().to_path_buf()).expect("runtime");
+        let session = ProviderSessionRef::new(ProviderKind::Feishu, "chat_3");
+
+        runtime
+            .persist_session(ProviderSession {
+                provider: ProviderKind::Feishu,
+                session_id: "chat_3".to_string(),
+                display_name: Some("Bob".to_string()),
+                unread_count: 0,
+                last_message_at: None,
+                status: SessionStatus::Discovered,
+                bound_thread_id: None,
+            })
+            .expect("session");
+        runtime
+            .connect_session_to_thread(&session, "thread_1".to_string())
+            .expect("bind session");
+
+        assert_eq!(
+            runtime.disconnect_thread("thread_1").expect("disconnect"),
+            Some(session.clone())
+        );
+        assert_eq!(
+            runtime
+                .bound_session_for_thread("thread_1")
+                .expect("bound session"),
+            None
+        );
+        assert_eq!(
+            runtime.snapshot().sessions,
+            vec![ProviderSession {
+                provider: ProviderKind::Feishu,
+                session_id: "chat_3".to_string(),
+                display_name: Some("Bob".to_string()),
+                unread_count: 0,
+                last_message_at: None,
+                status: SessionStatus::Discovered,
+                bound_thread_id: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn set_forwarding_state_for_thread_updates_binding_flags() {
+        let tempdir = tempdir().expect("tempdir");
+        let mut runtime = ClawbotRuntime::load(tempdir.path().to_path_buf()).expect("runtime");
+        let session = ProviderSessionRef::new(ProviderKind::Feishu, "chat_4");
+
+        runtime
+            .connect_session_to_thread(&session, "thread_2".to_string())
+            .expect("bind session");
+
+        runtime
+            .set_forwarding_state_for_thread(
+                "thread_2",
+                ForwardingDirection::Inbound,
+                ForwardingState::Disabled,
+            )
+            .expect("disable inbound");
+        runtime
+            .set_forwarding_state_for_thread(
+                "thread_2",
+                ForwardingDirection::Outbound,
+                ForwardingState::Disabled,
+            )
+            .expect("disable outbound");
+
+        assert_eq!(
+            runtime.snapshot().bindings[0].clone(),
+            SessionBinding {
+                provider: ProviderKind::Feishu,
+                session_id: "chat_4".to_string(),
+                thread_id: "thread_2".to_string(),
+                inbound_forwarding_enabled: false,
+                outbound_forwarding_enabled: false,
+                created_at: runtime.snapshot().bindings[0].created_at,
+                updated_at: runtime.snapshot().bindings[0].updated_at,
+            }
+        );
     }
 }

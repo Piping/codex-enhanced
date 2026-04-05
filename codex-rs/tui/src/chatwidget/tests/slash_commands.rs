@@ -639,6 +639,16 @@ async fn slash_memories_opens_memory_menu() {
 }
 
 #[tokio::test]
+async fn slash_clawbot_opens_management_popup() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Clawbot);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenClawbotManagement));
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
 async fn slash_memory_update_reports_stubbed_feature() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

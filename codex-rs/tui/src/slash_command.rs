@@ -61,6 +61,7 @@ pub enum SlashCommand {
     Personality,
     Realtime,
     Settings,
+    Clawbot,
     TestApproval,
     #[strum(serialize = "subagents")]
     MultiAgents,
@@ -106,6 +107,7 @@ impl SlashCommand {
             SlashCommand::Personality => "choose a communication style for Codex",
             SlashCommand::Realtime => "toggle realtime voice mode (experimental)",
             SlashCommand::Settings => "configure UI visibility and realtime devices",
+            SlashCommand::Clawbot => "manage workspace-local Feishu bridge and bindings",
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
@@ -195,6 +197,7 @@ impl SlashCommand {
             SlashCommand::TestApproval => true,
             SlashCommand::Realtime => true,
             SlashCommand::Settings => true,
+            SlashCommand::Clawbot => true,
             SlashCommand::Collab => true,
             SlashCommand::Agent | SlashCommand::MultiAgents => true,
             SlashCommand::Statusline => false,

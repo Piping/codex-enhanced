@@ -46,12 +46,7 @@ impl App {
             self.abort_clawbot_provider_runtime();
             self.clawbot_workspace_root = Some(workspace_root.clone());
             self.clawbot_pending_turns.clear();
-            let runtime = ClawbotRuntime::load(workspace_root.clone())?;
-            if let Some(feishu) = runtime.snapshot().config.feishu.clone()
-                && feishu.has_api_credentials()
-            {
-                self.start_clawbot_provider_runtime(workspace_root.as_path(), feishu);
-            }
+            self.refresh_clawbot_provider_runtime()?;
         }
 
         let runtime = ClawbotRuntime::load(workspace_root)?;
@@ -96,6 +91,20 @@ impl App {
         if let Some(handle) = self.clawbot_provider_task.take() {
             handle.abort();
         }
+    }
+
+    pub(super) fn refresh_clawbot_provider_runtime(&mut self) -> Result<()> {
+        let workspace_root = self.config.cwd.to_path_buf();
+        self.clawbot_workspace_root = Some(workspace_root.clone());
+        let runtime = ClawbotRuntime::load(workspace_root.clone())?;
+        if let Some(feishu) = runtime.snapshot().config.feishu.clone()
+            && feishu.has_api_credentials()
+        {
+            self.start_clawbot_provider_runtime(workspace_root.as_path(), feishu);
+        } else {
+            self.abort_clawbot_provider_runtime();
+        }
+        Ok(())
     }
 
     pub(super) async fn handle_clawbot_provider_event(
@@ -148,7 +157,7 @@ impl App {
         Ok(())
     }
 
-    async fn dispatch_next_clawbot_message(
+    pub(super) async fn dispatch_next_clawbot_message(
         &mut self,
         app_server: &mut AppServerSession,
         session: &ProviderSessionRef,
