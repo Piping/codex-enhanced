@@ -26,7 +26,7 @@ schema and Responses API tool primitives that no longer need to live in
 - MCP resource, `list_dir`, and `test_sync_tool` spec builders
 - local host tool spec builders for shell/exec/request-permissions/view-image
 - collaboration and agent-job `ToolSpec` builders for spawn/send/wait/close,
-  `request_user_input`, and CSV fanout/reporting
+  `question`, `request_user_input`, and CSV fanout/reporting
 - discoverable-tool models, client filtering, and `ToolSpec` builders for
   `tool_search` and `tool_suggest`
 - `parse_tool_input_schema()`
