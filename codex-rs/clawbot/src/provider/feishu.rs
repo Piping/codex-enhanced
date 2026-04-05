@@ -6,13 +6,20 @@ use std::time::UNIX_EPOCH;
 use anyhow::Result;
 use anyhow::anyhow;
 use open_lark::openlark_client;
+use open_lark::openlark_communication::common::api_utils::serialize_params;
+use open_lark::openlark_communication::endpoints::IM_V1_MESSAGES;
 use open_lark::openlark_communication::im::im::v1::message::create::CreateMessageBody;
 use open_lark::openlark_communication::im::im::v1::message::create::CreateMessageRequest;
 use open_lark::openlark_communication::im::im::v1::message::models::ReceiveIdType;
+use open_lark::openlark_communication::im::im::v1::message::reaction::models::CreateMessageReactionBody;
+use open_lark::openlark_communication::im::im::v1::message::reaction::models::ReactionType;
+use open_lark::openlark_core::api::ApiRequest;
 use serde::Deserialize;
+use serde_json::Value;
 use tokio::sync::mpsc;
 
 use super::ProviderEvent;
+use super::ProviderOutboundReaction;
 use super::ProviderOutboundTextMessage;
 use crate::config::FeishuConfig;
 use crate::events::ProviderInboundMessage;
@@ -70,6 +77,43 @@ impl FeishuProviderRuntime {
             .await
             .map_err(|error| anyhow!("failed to send Feishu text message: {error}"))?;
         Ok(())
+    }
+
+    pub async fn add_reaction(&self, reaction: ProviderOutboundReaction) -> Result<()> {
+        if reaction.target.provider != ProviderKind::Feishu {
+            return Err(anyhow!(
+                "cannot send {} reaction via Feishu runtime",
+                reaction.target.provider.title()
+            ));
+        }
+
+        let request: ApiRequest<Value> = ApiRequest::post(format!(
+            "{IM_V1_MESSAGES}/{}/reactions",
+            reaction.target.message_id
+        ))
+        .body(serialize_params(
+            &CreateMessageReactionBody {
+                reaction_type: ReactionType {
+                    emoji_type: reaction.emoji_type,
+                },
+            },
+            "添加消息表情回复",
+        )?);
+        let response = open_lark::openlark_core::http::Transport::<Value>::request(
+            request,
+            &self.messaging_config()?,
+            Some(Default::default()),
+        )
+        .await
+        .map_err(|error| anyhow!("failed to add Feishu message reaction: {error}"))?;
+        if response.is_success() {
+            Ok(())
+        } else {
+            Err(anyhow!(
+                "failed to add Feishu message reaction: {}",
+                response.msg()
+            ))
+        }
     }
 
     pub fn normalize_private_chat_message(

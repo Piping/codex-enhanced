@@ -19,6 +19,7 @@ use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::Turn as AppServerTurn;
 use codex_chatgpt::connectors::AppInfo;
+use codex_clawbot::ClawbotTurnMode;
 use codex_clawbot::ProviderEvent as ClawbotProviderEvent;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
@@ -395,6 +396,10 @@ pub(crate) enum AppEvent {
 
     SaveClawbotManualBindSessionId {
         session_id: String,
+    },
+
+    ClawbotSetTurnMode {
+        mode: ClawbotTurnMode,
     },
 
     ClawbotDisconnectCurrentThread,
