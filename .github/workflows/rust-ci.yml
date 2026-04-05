@@ -147,19 +147,14 @@ jobs:
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
-      - name: Run argument comment lint on codex-rs via Bazel
-        if: ${{ runner.os == 'Linux' }}
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
-          CODEX_BAZEL_FORCE_LOCAL: ${{ github.repository != 'openai/codex' && '1' || '0' }}
+      - name: Run argument comment lint on codex-rs via source wrapper
+        if: ${{ runner.os == 'Linux' && github.repository != 'openai/codex' }}
         shell: bash
         run: |
-          bazel_targets="$(./tools/argument-comment-lint/list-bazel-targets.sh)"
-
           heartbeat() {
             while true; do
               sleep 60
-              echo "argument comment lint still running via Bazel ($(date -u '+%Y-%m-%dT%H:%M:%SZ'))"
+              echo "argument comment lint still running via source wrapper ($(date -u '+%Y-%m-%dT%H:%M:%SZ'))"
             done
           }
 
@@ -170,24 +165,40 @@ jobs:
           }
           trap cleanup EXIT
 
+          rustup toolchain install nightly-2025-09-18 \
+            --profile minimal \
+            --component llvm-tools-preview \
+            --component rustc-dev \
+            --component rust-src \
+            --no-self-update
+          cargo install --locked cargo-dylint dylint-link
+
           set +e
           timeout --foreground --signal=TERM --kill-after=30s 110m \
-            ./.github/scripts/run-bazel-ci.sh \
-              -- \
-              build \
-              --config=argument-comment-lint \
-              --keep_going \
-              --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
-              -- \
-              ${bazel_targets}
+            ./tools/argument-comment-lint/run.py
           status=$?
           set -e
 
           if [[ $status -eq 124 ]]; then
-            echo "argument comment lint Bazel step exceeded 110 minutes; failing explicitly before the 120-minute job timeout so shared CI follow-up can diagnose it."
+            echo "argument comment lint source-wrapper step exceeded 110 minutes; failing explicitly before the 120-minute job timeout so shared CI follow-up can diagnose it."
           fi
 
           exit "$status"
+      - name: Run argument comment lint on codex-rs via Bazel
+        if: ${{ runner.os == 'Linux' && github.repository == 'openai/codex' }}
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        shell: bash
+        run: |
+          bazel_targets="$(./tools/argument-comment-lint/list-bazel-targets.sh)"
+          ./.github/scripts/run-bazel-ci.sh \
+            -- \
+            build \
+            --config=argument-comment-lint \
+            --keep_going \
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
+            -- \
+            ${bazel_targets}
       - name: Run argument comment lint on codex-rs via Bazel
         if: ${{ runner.os == 'macOS' }}
         env:
