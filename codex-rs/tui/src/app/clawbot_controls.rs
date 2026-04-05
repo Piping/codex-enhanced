@@ -244,7 +244,7 @@ impl App {
         Ok(())
     }
 
-    pub(crate) async fn save_clawbot_manual_bind_session_id(
+    pub(crate) async fn bind_clawbot_session_to_current_thread(
         &mut self,
         app_server: &mut AppServerSession,
         session_id: String,
@@ -529,7 +529,13 @@ impl App {
                 ..Default::default()
             });
         } else {
-            items.extend(feishu_sessions.iter().map(clawbot_session_item));
+            items.extend(feishu_sessions.iter().map(|session| {
+                clawbot_session_item(
+                    session,
+                    active_thread_id.as_deref(),
+                    current_binding.map(|binding| binding.session_id.as_str()),
+                )
+            }));
         }
 
         items.extend([
@@ -668,20 +674,55 @@ fn connection_description(state: &ProviderRuntimeState) -> String {
     }
 }
 
-fn clawbot_session_item(session: &ProviderSession) -> SelectionItem {
-    let state = if session.bound_thread_id.is_some() {
-        "bound"
+fn clawbot_session_item(
+    session: &ProviderSession,
+    active_thread_id: Option<&str>,
+    current_binding_session_id: Option<&str>,
+) -> SelectionItem {
+    let is_current = current_binding_session_id.is_some_and(|session_id| {
+        session_id == session.session_id && session.provider == ProviderKind::Feishu
+    });
+    let description = if session.bound_thread_id.is_some() {
+        format!("bound · {} unread", session.unread_count)
     } else {
-        "unbound"
+        format!("unbound · {} unread", session.unread_count)
     };
+    let selected_description = match active_thread_id {
+        Some(thread_id) if is_current => {
+            format!(
+                "Thread {thread_id} is already bound to Feishu session {}.",
+                session.session_id
+            )
+        }
+        Some(thread_id) => match session.bound_thread_id.as_deref() {
+            Some(bound_thread_id) if bound_thread_id != thread_id => {
+                format!(
+                    "Bind current thread {thread_id} to Feishu session {} and move it from thread {bound_thread_id}.",
+                    session.session_id
+                )
+            }
+            _ => format!(
+                "Bind current thread {thread_id} directly to Feishu session {}.",
+                session.session_id
+            ),
+        },
+        None => format!(
+            "Open a Codex thread before binding Feishu session {}.",
+            session.session_id
+        ),
+    };
+    let session_id = session.session_id.clone();
     SelectionItem {
         name: session_title(session),
-        description: Some(format!("{state} · {} unread", session.unread_count)),
-        selected_description: Some(
-            "Discovered session state is read-only here. Use Bind Current Thread to connect a session id."
-                .to_string(),
-        ),
-        is_disabled: true,
+        description: Some(description),
+        selected_description: Some(selected_description),
+        is_disabled: active_thread_id.is_none() || is_current,
+        actions: vec![Box::new(move |tx| {
+            tx.send(AppEvent::SaveClawbotManualBindSessionId {
+                session_id: session_id.clone(),
+            });
+        })],
+        dismiss_on_select: false,
         ..Default::default()
     }
 }
