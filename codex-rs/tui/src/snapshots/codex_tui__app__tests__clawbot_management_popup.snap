@@ -1,0 +1,19 @@
+---
+source: tui/src/app.rs
+assertion_line: 12451
+expression: popup
+---
+  Clawbot
+  Manage workspace-local Feishu credentials and the current thread binding.
+
+› 1. Feishu App ID              Persist this workspace-local Feishu setting under .codex/clawbot/
+                                config.toml.
+  2. Feishu App Secret          Configured: *************4567
+  3. Feishu Verification Token  Configured: ********oken
+  4. Feishu Encrypt Key         Not set
+  5. Feishu Bot Open ID         Configured: ou_bot_open_id
+  6. Feishu Bot User ID         Not set
+  7. Retry Feishu Connection    Unconfigured
+  8. Bind Current Thread        Thread 019d5cc1-df25-7d53-9c3e-00d8a2608ac8 -> chat_snapshot
+
+  Press enter to confirm or esc to go back
