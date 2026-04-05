@@ -3604,7 +3604,10 @@ impl ChatWidget {
                         .iter()
                         .map(|path| path.display().to_string())
                         .collect::<Vec<_>>();
-                    history_cell::new_guardian_denied_patch_request(files)
+                    history_cell::new_guardian_denied_patch_request(
+                        files,
+                        self.display_preferences.clone(),
+                    )
                 }
                 GuardianAssessmentAction::McpToolCall {
                     server, tool_name, ..
@@ -3744,6 +3747,7 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_patch_event(
             event.changes,
             &self.config.cwd,
+            self.display_preferences.clone(),
         ));
     }
 
@@ -4825,6 +4829,7 @@ impl ChatWidget {
             ev.call_id,
             ev.invocation,
             self.config.animations,
+            self.display_preferences.clone(),
         )));
         self.bump_active_cell_revision();
         self.request_redraw();
@@ -4852,6 +4857,7 @@ impl ChatWidget {
                     call_id,
                     invocation,
                     self.config.animations,
+                    self.display_preferences.clone(),
                 );
                 let extra_cell = cell.complete(duration, result);
                 self.active_cell = Some(Box::new(cell));

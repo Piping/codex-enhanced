@@ -45,6 +45,8 @@ use codex_config::types::ShellEnvironmentPolicy;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::TuiNotificationSettings;
+use codex_config::types::Tui;
+use codex_config::types::TuiDisplayPreferences;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_exec_server::ExecutorFileSystem;
@@ -338,6 +340,9 @@ pub struct Config {
 
     /// Persisted startup availability NUX state for model tooltips.
     pub model_availability_nux: ModelAvailabilityNuxConfig,
+
+    /// Transcript visibility preferences that affect only local TUI rendering.
+    pub tui_display_preferences: TuiDisplayPreferences,
 
     /// Start the TUI in the specified collaboration mode (plan/default).
 
@@ -2209,6 +2214,11 @@ impl Config {
                 .tui
                 .as_ref()
                 .map(|t| t.model_availability_nux.clone())
+                .unwrap_or_default(),
+            tui_display_preferences: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.display_preferences.clone())
                 .unwrap_or_default(),
             tui_alternate_screen: cfg
                 .tui

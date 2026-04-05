@@ -1,21 +1,30 @@
 ---
 source: tui/src/display_preferences_menu.rs
-assertion_line: 123
 expression: render_lines(&view)
 ---
                                                 
   UI                                            
   These settings only affect local TUI renderi  
                                                 
-› 1. Show Startup Tooltips  Currently hidden.   
-                            Restore first-run   
-                            and local startup   
+› 1. Hide Startup Tooltips  Currently visible.  
+                            Hide first-run and  
+                            local startup       
                             tooltip hints in    
                             this TUI.           
   2. Show Raw Thinking      Currently hidden.   
                             Reveal raw          
                             reasoning text in   
                             this TUI only.      
+  3. Hide Tool Results      Currently visible.  
+                            Collapse MCP/       
+                            custom tool result  
+                            bodies in           
+                            transcript cells.   
+  4. Hide Patch Diffs       Currently visible.  
+                            Collapse patch/     
+                            edit diff           
+                            summaries in        
+                            transcript cells.   
                                                 
   Model context and persisted rollout history   
   are unchanged.                                

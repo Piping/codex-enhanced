@@ -9,12 +9,27 @@ use codex_core::config::edit::ConfigEdit;
 pub(crate) enum DisplayPreferenceKey {
     StartupTooltips,
     RawThinking,
+    ToolResults,
+    PatchDiffs,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub(crate) struct DisplayPreferences {
     show_startup_tooltips: Arc<AtomicBool>,
     show_raw_thinking: Arc<AtomicBool>,
+    show_tool_results: Arc<AtomicBool>,
+    show_patch_diffs: Arc<AtomicBool>,
+}
+
+impl Default for DisplayPreferences {
+    fn default() -> Self {
+        Self {
+            show_startup_tooltips: Arc::new(AtomicBool::new(true)),
+            show_raw_thinking: Arc::new(AtomicBool::new(false)),
+            show_tool_results: Arc::new(AtomicBool::new(true)),
+            show_patch_diffs: Arc::new(AtomicBool::new(true)),
+        }
+    }
 }
 
 impl DisplayPreferences {
@@ -28,6 +43,8 @@ impl DisplayPreferences {
         match key {
             DisplayPreferenceKey::StartupTooltips => self.show_startup_tooltips(),
             DisplayPreferenceKey::RawThinking => self.show_raw_thinking(),
+            DisplayPreferenceKey::ToolResults => self.show_tool_results(),
+            DisplayPreferenceKey::PatchDiffs => self.show_patch_diffs(),
         }
     }
 
@@ -38,6 +55,12 @@ impl DisplayPreferences {
             }
             DisplayPreferenceKey::RawThinking => {
                 self.show_raw_thinking.store(enabled, Ordering::Relaxed);
+            }
+            DisplayPreferenceKey::ToolResults => {
+                self.show_tool_results.store(enabled, Ordering::Relaxed);
+            }
+            DisplayPreferenceKey::PatchDiffs => {
+                self.show_patch_diffs.store(enabled, Ordering::Relaxed);
             }
         }
     }
@@ -50,11 +73,27 @@ impl DisplayPreferences {
         self.show_raw_thinking.load(Ordering::Relaxed)
     }
 
+    pub(crate) fn show_tool_results(&self) -> bool {
+        self.show_tool_results.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn show_patch_diffs(&self) -> bool {
+        self.show_patch_diffs.load(Ordering::Relaxed)
+    }
+
     pub(crate) fn sync_from_config(&self, config: &Config) {
         self.show_startup_tooltips
             .store(config.show_tooltips, Ordering::Relaxed);
         self.show_raw_thinking
             .store(config.show_raw_agent_reasoning, Ordering::Relaxed);
+        self.show_tool_results.store(
+            config.tui_display_preferences.show_tool_results,
+            Ordering::Relaxed,
+        );
+        self.show_patch_diffs.store(
+            config.tui_display_preferences.show_patch_diffs,
+            Ordering::Relaxed,
+        );
     }
 }
 
@@ -68,6 +107,22 @@ pub(crate) fn display_preference_edit(key: DisplayPreferenceKey, enabled: bool) 
             segments: vec!["show_raw_agent_reasoning".to_string()],
             value: enabled.into(),
         },
+        DisplayPreferenceKey::ToolResults => ConfigEdit::SetPath {
+            segments: vec![
+                "tui".to_string(),
+                "display_preferences".to_string(),
+                "show_tool_results".to_string(),
+            ],
+            value: enabled.into(),
+        },
+        DisplayPreferenceKey::PatchDiffs => ConfigEdit::SetPath {
+            segments: vec![
+                "tui".to_string(),
+                "display_preferences".to_string(),
+                "show_patch_diffs".to_string(),
+            ],
+            value: enabled.into(),
+        },
     }
 }
 
@@ -79,6 +134,12 @@ pub(crate) fn set_display_preference_in_config(
     match key {
         DisplayPreferenceKey::StartupTooltips => config.show_tooltips = enabled,
         DisplayPreferenceKey::RawThinking => config.show_raw_agent_reasoning = enabled,
+        DisplayPreferenceKey::ToolResults => {
+            config.tui_display_preferences.show_tool_results = enabled;
+        }
+        DisplayPreferenceKey::PatchDiffs => {
+            config.tui_display_preferences.show_patch_diffs = enabled;
+        }
     }
 }
 
@@ -106,6 +167,27 @@ mod tests {
         assert!(config.show_tooltips);
     }
 
+    #[tokio::test]
+    async fn transcript_visibility_preferences_follow_config_and_setters() {
+        let mut config = ConfigBuilder::default().build().await.expect("config");
+        config.tui_display_preferences.show_tool_results = false;
+        config.tui_display_preferences.show_patch_diffs = false;
+
+        let preferences = DisplayPreferences::from_config(&config);
+        assert!(!preferences.show_tool_results());
+        assert!(!preferences.show_patch_diffs());
+
+        preferences.set_enabled(DisplayPreferenceKey::ToolResults, true);
+        preferences.set_enabled(DisplayPreferenceKey::PatchDiffs, true);
+        assert!(preferences.show_tool_results());
+        assert!(preferences.show_patch_diffs());
+
+        set_display_preference_in_config(&mut config, DisplayPreferenceKey::ToolResults, true);
+        set_display_preference_in_config(&mut config, DisplayPreferenceKey::PatchDiffs, true);
+        assert!(config.tui_display_preferences.show_tool_results);
+        assert!(config.tui_display_preferences.show_patch_diffs);
+    }
+
     #[test]
     fn startup_tooltips_edit_targets_tui_show_tooltips() {
         match display_preference_edit(DisplayPreferenceKey::StartupTooltips, false) {
@@ -113,6 +195,39 @@ mod tests {
                 assert_eq!(
                     segments,
                     vec!["tui".to_string(), "show_tooltips".to_string()]
+                );
+                assert_eq!(value.to_string(), "false");
+            }
+            other => panic!("unexpected config edit: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn transcript_visibility_edits_target_tui_display_preferences() {
+        match display_preference_edit(DisplayPreferenceKey::ToolResults, false) {
+            ConfigEdit::SetPath { segments, value } => {
+                assert_eq!(
+                    segments,
+                    vec![
+                        "tui".to_string(),
+                        "display_preferences".to_string(),
+                        "show_tool_results".to_string(),
+                    ]
+                );
+                assert_eq!(value.to_string(), "false");
+            }
+            other => panic!("unexpected config edit: {other:?}"),
+        }
+
+        match display_preference_edit(DisplayPreferenceKey::PatchDiffs, false) {
+            ConfigEdit::SetPath { segments, value } => {
+                assert_eq!(
+                    segments,
+                    vec![
+                        "tui".to_string(),
+                        "display_preferences".to_string(),
+                        "show_patch_diffs".to_string(),
+                    ]
                 );
                 assert_eq!(value.to_string(), "false");
             }
