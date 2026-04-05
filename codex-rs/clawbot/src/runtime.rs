@@ -75,10 +75,18 @@ impl ClawbotRuntime {
         let provider = self
             .feishu_provider()
             .context("Feishu credentials are not configured")?;
-        for event in provider.scan_sessions().await? {
-            self.apply_provider_event(event)?;
-        }
-        self.reload()
+        let discovered_sessions = provider
+            .scan_sessions()
+            .await?
+            .into_iter()
+            .filter_map(|event| match event {
+                ProviderEvent::SessionUpserted(session) => Some(session),
+                ProviderEvent::RuntimeStateUpdated(_)
+                | ProviderEvent::SessionRemoved(_)
+                | ProviderEvent::InboundMessage(_) => None,
+            })
+            .collect::<Vec<_>>();
+        self.reconcile_feishu_sessions(discovered_sessions)
     }
 
     pub fn clear_unbound_feishu_sessions(&mut self) -> Result<&ClawbotSnapshot> {
@@ -365,6 +373,50 @@ impl ClawbotRuntime {
             .into_iter()
             .filter(|message| message.session_ref() == *session)
             .count())
+    }
+
+    fn reconcile_feishu_sessions(
+        &mut self,
+        discovered_sessions: Vec<ProviderSession>,
+    ) -> Result<&ClawbotSnapshot> {
+        let discovered_refs = discovered_sessions
+            .iter()
+            .map(ProviderSession::session_ref)
+            .collect::<HashSet<_>>();
+        let bindings = self
+            .store
+            .load_bindings()?
+            .into_iter()
+            .filter(|binding| {
+                binding.provider != ProviderKind::Feishu
+                    || discovered_refs.contains(&binding.session_ref())
+            })
+            .collect::<Vec<_>>();
+        let sessions = self
+            .store
+            .load_sessions()?
+            .into_iter()
+            .filter(|session| {
+                session.provider != ProviderKind::Feishu
+                    || discovered_refs.contains(&session.session_ref())
+            })
+            .collect::<Vec<_>>();
+        let unread_messages = self
+            .store
+            .load_unread_messages()?
+            .into_iter()
+            .filter(|message| {
+                message.provider != ProviderKind::Feishu
+                    || discovered_refs.contains(&message.session_ref())
+            })
+            .collect::<Vec<_>>();
+        self.store.save_bindings(&bindings)?;
+        self.store.save_sessions(&sessions)?;
+        self.store.save_unread_messages(&unread_messages)?;
+        for session in discovered_sessions {
+            self.apply_provider_event(ProviderEvent::SessionUpserted(session))?;
+        }
+        self.reload()
     }
 }
 
@@ -690,6 +742,58 @@ mod tests {
                 text: "bound".to_string(),
                 received_at: 1,
             }]
+        );
+    }
+
+    #[test]
+    fn reconcile_feishu_sessions_prunes_missing_bound_sessions_and_unread_cache() {
+        let tempdir = tempdir().expect("tempdir");
+        let mut runtime = ClawbotRuntime::load(tempdir.path().to_path_buf()).expect("runtime");
+        let stale_session = ProviderSessionRef::new(ProviderKind::Feishu, "chat_stale");
+        let live_session = ProviderSessionRef::new(ProviderKind::Feishu, "chat_live");
+
+        runtime
+            .connect_session_to_thread(&stale_session, "thread_stale".to_string())
+            .expect("bind stale session");
+        runtime
+            .apply_provider_event(ProviderEvent::InboundMessage(ProviderInboundMessage {
+                session: stale_session,
+                message_id: "msg_stale".to_string(),
+                text: "stale".to_string(),
+                received_at: 1,
+            }))
+            .expect("stale unread");
+        runtime
+            .reconcile_feishu_sessions(vec![ProviderSession {
+                provider: ProviderKind::Feishu,
+                session_id: "chat_live".to_string(),
+                display_name: Some("Live".to_string()),
+                unread_count: 0,
+                last_message_at: None,
+                status: SessionStatus::Discovered,
+                bound_thread_id: None,
+            }])
+            .expect("reconcile discovered sessions");
+
+        assert_eq!(runtime.snapshot().bindings, Vec::<SessionBinding>::new());
+        assert_eq!(
+            runtime.snapshot().sessions,
+            vec![ProviderSession {
+                provider: ProviderKind::Feishu,
+                session_id: live_session.session_id,
+                display_name: Some("Live".to_string()),
+                unread_count: 0,
+                last_message_at: None,
+                status: SessionStatus::Discovered,
+                bound_thread_id: None,
+            }]
+        );
+        assert_eq!(
+            runtime
+                .store()
+                .load_unread_messages()
+                .expect("unread messages"),
+            Vec::<CachedUnreadMessage>::new()
         );
     }
 }
