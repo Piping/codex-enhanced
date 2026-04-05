@@ -161,6 +161,7 @@ mod app_server_adapter;
 mod app_server_requests;
 mod loaded_threads;
 mod pending_interactive_replay;
+mod workflow_controls;
 mod workflow_definition;
 mod workflow_history;
 pub(crate) mod workflow_runtime;
@@ -1941,6 +1942,7 @@ impl App {
             self.background_workflow_labels(),
             self.queued_trigger_labels(),
         );
+        self.refresh_workflow_controls_if_active();
     }
 
     fn insert_visible_history_cell(&mut self, tui: &mut tui::Tui, cell: Arc<dyn HistoryCell>) {
@@ -4790,6 +4792,44 @@ impl App {
                 )
                 .await;
             }
+            AppEvent::OpenWorkflowControls => {
+                self.open_workflow_controls_popup();
+            }
+            AppEvent::StartManualWorkflowTrigger {
+                workflow_name,
+                trigger_id,
+            } => {
+                let cell = self.start_manual_workflow_trigger_from_ui(
+                    app_server,
+                    workflow_name,
+                    trigger_id,
+                );
+                self.insert_visible_history_cell(tui, cell);
+            }
+            AppEvent::StartManualWorkflowJob {
+                workflow_name,
+                job_name,
+            } => {
+                let cell =
+                    self.start_manual_workflow_job_from_ui(app_server, workflow_name, job_name);
+                self.insert_visible_history_cell(tui, cell);
+            }
+            AppEvent::ShowWorkflowBackgroundTasks => {
+                self.chat_widget.add_ps_output();
+            }
+            AppEvent::RetryLastUserTurnWithProfileFallback {
+                action,
+                error_message,
+            } => {
+                self.retry_last_user_turn_with_profile_fallback(
+                    tui,
+                    app_server,
+                    action,
+                    error_message,
+                )
+                .await;
+            }
+            }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
                     tui.frame_requester().schedule_frame();
@@ -6800,6 +6840,7 @@ mod tests {
     use assert_matches::assert_matches;
     use codex_app_server_client::AppServerEvent;
 
+    use crate::render::renderable::Renderable;
     use codex_app_server_protocol::AdditionalFileSystemPermissions;
     use codex_app_server_protocol::AdditionalNetworkPermissions;
     use codex_app_server_protocol::AdditionalPermissionProfile;
@@ -6872,6 +6913,8 @@ mod tests {
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
     use ratatui::prelude::Line;
     use std::path::Path;
     use std::path::PathBuf;
@@ -9794,6 +9837,41 @@ jobs:
         Ok(())
     }
 
+    fn write_test_manual_workflow(workspace_cwd: &Path) -> Result<()> {
+        let workflows_dir = workspace_cwd.join(".codex/workflows");
+        std::fs::create_dir_all(&workflows_dir)?;
+        std::fs::write(
+            workflows_dir.join("manual.yaml"),
+            r#"name: director
+
+triggers:
+  - type: manual
+    id: review_backlog
+    jobs: [summarize]
+  - type: manual
+    id: triage
+    jobs: [notify]
+  - type: after_turn
+    id: followup
+    jobs: [notify]
+
+jobs:
+  summarize:
+    context: embed
+    steps:
+      - prompt: |
+          summarize the backlog
+  notify:
+    context: embed
+    response: user
+    steps:
+      - prompt: |
+          send workflow update
+"#,
+        )?;
+        Ok(())
+    }
+
     fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {
         ThreadSessionState {
             thread_id,
@@ -11843,6 +11921,64 @@ model = "gpt-5.2"
             }
             other => panic!("expected workflow follow-up submission, got {other:?}"),
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn workflow_ui_popup_snapshot() -> Result<()> {
+        let mut app = make_test_app().await;
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+        write_test_manual_workflow(app.config.cwd.as_path())?;
+
+        let slow_run = app
+            .start_test_manual_workflow_trigger_run(
+                "director".to_string(),
+                "review_backlog".to_string(),
+            )
+            .expect("running manual trigger");
+        let queued_run = app
+            .start_test_manual_workflow_trigger_run("director".to_string(), "triage".to_string());
+        assert!(queued_run.is_none());
+
+        app.open_workflow_controls_popup();
+
+        let popup = render_bottom_popup(&app.chat_widget, /*width*/ 100);
+        assert_snapshot!("workflow_controls_popup", popup);
+
+        app.finish_test_background_workflow_run(slow_run).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn workflow_ui_manual_trigger_action_updates_scheduler_status() -> Result<()> {
+        let mut app = make_test_app().await;
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+        write_test_manual_workflow(app.config.cwd.as_path())?;
+
+        let started_app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let cell = app.start_manual_workflow_trigger_from_ui(
+            &started_app_server,
+            "director".to_string(),
+            "review_backlog".to_string(),
+        );
+        let rendered = cell
+            .display_lines(/*width*/ 100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Workflow trigger started"));
+        assert_eq!(
+            app.background_workflow_labels(),
+            vec!["director · review_backlog".to_string()]
+        );
+
+        let stopped = app.workflow_scheduler.stop_active_workflow_runs().await;
+        assert_eq!(stopped, 1);
+        app.sync_background_workflow_status();
         Ok(())
     }
 

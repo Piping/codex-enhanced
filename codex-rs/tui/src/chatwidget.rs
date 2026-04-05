@@ -5350,6 +5350,9 @@ impl ChatWidget {
             SlashCommand::Plugins => {
                 self.add_plugins_output();
             }
+            SlashCommand::Workflow => {
+                self.app_event_tx.send(AppEvent::OpenWorkflowControls);
+            }
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {
                     self.add_info_message(
