@@ -31,6 +31,7 @@ use crate::app::workflow_runtime::BackgroundWorkflowRunResult;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
+use crate::display_preferences::DisplayPreferenceKey;
 use crate::history_cell::HistoryCell;
 use crate::profile_router::ProfileFallbackAction;
 
@@ -107,6 +108,9 @@ pub(crate) enum AppEvent {
 
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
+
+    /// Open the local TUI display preferences panel.
+    OpenDisplayPreferencesPanel,
 
     /// Fork the current session into a new thread.
     ForkCurrentSession,
@@ -463,6 +467,9 @@ pub(crate) enum AppEvent {
     UpdateFeatureFlags {
         updates: Vec<(Feature, bool)>,
     },
+
+    /// Toggle one local TUI display preference and persist the updated config.
+    ToggleDisplayPreference(DisplayPreferenceKey),
 
     /// Update whether the full access warning prompt has been acknowledged.
     UpdateFullAccessWarningAcknowledged(bool),

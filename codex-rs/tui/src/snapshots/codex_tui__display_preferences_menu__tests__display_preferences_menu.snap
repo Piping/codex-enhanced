@@ -1,0 +1,15 @@
+---
+source: tui/src/display_preferences_menu.rs
+expression: render_lines(&view)
+---
+                                                
+  UI                                            
+  These settings only affect local TUI renderi  
+                                                
+› 1. Show Raw Thinking  Currently hidden.       
+                        Reveal raw reasoning    
+                        text in this TUI only.  
+                                                
+  Model context and persisted rollout history   
+  are unchanged.                                
+  Press enter to confirm or esc to go back
