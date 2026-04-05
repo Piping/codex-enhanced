@@ -1735,6 +1735,18 @@
           "description": "Enable animations (welcome screen, shimmer effects, spinners). Defaults to `true`.",
           "type": "boolean"
         },
+        "display_preferences": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiDisplayPreferences"
+            }
+          ],
+          "default": {
+            "show_patch_diffs": true,
+            "show_tool_results": true
+          },
+          "description": "Transcript visibility preferences that affect only local TUI rendering."
+        },
         "model_availability_nux": {
           "allOf": [
             {
@@ -1787,6 +1799,22 @@
           "default": null,
           "description": "Syntax highlighting theme name (kebab-case).\n\nWhen set, overrides automatic light/dark theme detection. Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.",
           "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "TuiDisplayPreferences": {
+      "additionalProperties": false,
+      "properties": {
+        "show_patch_diffs": {
+          "default": true,
+          "description": "Show patch/edit diff summaries in transcript cells. Defaults to `true`.",
+          "type": "boolean"
+        },
+        "show_tool_results": {
+          "default": true,
+          "description": "Show MCP/custom tool result bodies in transcript cells. Defaults to `true`.",
+          "type": "boolean"
         }
       },
       "type": "object"

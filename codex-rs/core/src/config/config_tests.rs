@@ -18,6 +18,7 @@ use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
 use codex_config::types::ToolSuggestDiscoverableType;
+use codex_config::types::TuiDisplayPreferences;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
 use codex_model_provider_info::WireApi;
@@ -293,6 +294,7 @@ fn config_toml_deserializes_model_availability_nux() {
                     ("gpt-foo".to_string(), 2),
                 ]),
             },
+            display_preferences: TuiDisplayPreferences::default(),
         }
     );
 }
@@ -309,6 +311,31 @@ fn runtime_config_defaults_model_availability_nux() {
     assert_eq!(
         cfg.model_availability_nux,
         ModelAvailabilityNuxConfig::default()
+    );
+    assert_eq!(
+        cfg.tui_display_preferences,
+        TuiDisplayPreferences::default()
+    );
+}
+
+#[test]
+fn config_toml_deserializes_tui_display_preferences() {
+    let toml = r#"
+[tui.display_preferences]
+show_tool_results = false
+show_patch_diffs = false
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for TUI display prefs");
+
+    assert_eq!(
+        cfg.tui
+            .expect("tui config should deserialize")
+            .display_preferences,
+        TuiDisplayPreferences {
+            show_tool_results: false,
+            show_patch_diffs: false,
+        }
     );
 }
 
@@ -985,6 +1012,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             terminal_title: None,
             theme: None,
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
+            display_preferences: TuiDisplayPreferences::default(),
         }
     );
 }
@@ -4519,6 +4547,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             animations: true,
             show_tooltips: true,
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
+            tui_display_preferences: TuiDisplayPreferences::default(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tool_suggest: ToolSuggestConfig::default(),
@@ -4664,6 +4693,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
+        tui_display_preferences: TuiDisplayPreferences::default(),
         analytics_enabled: Some(true),
         feedback_enabled: true,
         tool_suggest: ToolSuggestConfig::default(),
@@ -4807,6 +4837,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
+        tui_display_preferences: TuiDisplayPreferences::default(),
         analytics_enabled: Some(false),
         feedback_enabled: true,
         tool_suggest: ToolSuggestConfig::default(),
@@ -4936,6 +4967,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
+        tui_display_preferences: TuiDisplayPreferences::default(),
         analytics_enabled: Some(true),
         feedback_enabled: true,
         tool_suggest: ToolSuggestConfig::default(),
