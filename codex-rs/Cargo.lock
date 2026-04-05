@@ -448,7 +448,7 @@ dependencies = [
  "objc2-foundation",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -800,7 +800,7 @@ dependencies = [
  "sha1",
  "sync_wrapper",
  "tokio",
- "tokio-tungstenite",
+ "tokio-tungstenite 0.28.0",
  "tower",
  "tower-layer",
  "tower-service",
@@ -1385,10 +1385,10 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-test",
- "tokio-tungstenite",
+ "tokio-tungstenite 0.28.0",
  "tokio-util",
  "tracing",
- "tungstenite",
+ "tungstenite 0.27.0",
  "url",
  "wiremock",
 ]
@@ -1452,7 +1452,7 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
- "tokio-tungstenite",
+ "tokio-tungstenite 0.28.0",
  "tokio-util",
  "toml 0.9.11+spec-1.1.0",
  "tracing",
@@ -1477,7 +1477,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tokio-tungstenite",
+ "tokio-tungstenite 0.28.0",
  "toml 0.9.11+spec-1.1.0",
  "tracing",
  "url",
@@ -1527,7 +1527,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "tungstenite",
+ "tungstenite 0.27.0",
  "url",
  "uuid",
 ]
@@ -1617,6 +1617,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-clawbot"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "openlark",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml 0.9.11+spec-1.1.0",
+]
+
+[[package]]
 name = "codex-cli"
 version = "0.0.0"
 dependencies = [
@@ -1684,7 +1698,7 @@ dependencies = [
  "rand 0.9.2",
  "reqwest",
  "rustls",
- "rustls-native-certs",
+ "rustls-native-certs 0.8.3",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -1935,7 +1949,7 @@ dependencies = [
  "test-log",
  "thiserror 2.0.18",
  "tokio",
- "tokio-tungstenite",
+ "tokio-tungstenite 0.28.0",
  "tokio-util",
  "toml 0.9.11+spec-1.1.0",
  "toml_edit 0.24.0+spec-1.1.0",
@@ -2059,7 +2073,7 @@ dependencies = [
  "test-case",
  "thiserror 2.0.18",
  "tokio",
- "tokio-tungstenite",
+ "tokio-tungstenite 0.28.0",
  "tracing",
 ]
 
@@ -2469,7 +2483,7 @@ dependencies = [
  "strum_macros 0.28.0",
  "thiserror 2.0.18",
  "tokio",
- "tokio-tungstenite",
+ "tokio-tungstenite 0.28.0",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -2781,6 +2795,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-arg0",
  "codex-chatgpt",
+ "codex-clawbot",
  "codex-cli",
  "codex-cloud-requirements",
  "codex-config",
@@ -3320,7 +3335,7 @@ dependencies = [
  "shlex",
  "tempfile",
  "tokio",
- "tokio-tungstenite",
+ "tokio-tungstenite 0.28.0",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -3959,7 +3974,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4204,7 +4219,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5071,7 +5086,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "rustls",
- "rustls-native-certs",
+ "rustls-native-certs 0.8.3",
  "rustls-pki-types",
  "tokio",
  "tokio-rustls",
@@ -5125,7 +5140,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -5631,7 +5646,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5851,6 +5866,17 @@ name = "language-tags"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4345964bb142484797b161f473a503a434de77149dd8c7427788c6e13379388"
+
+[[package]]
+name = "lark-websocket-protobuf"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79d4b1f8c37d37efd353c1b116df0f98ff21c8bcb216f67ab026dd2fd2b9ab81"
+dependencies = [
+ "bytes",
+ "prost 0.13.5",
+ "prost-build",
+]
 
 [[package]]
 name = "lazy_static"
@@ -6409,7 +6435,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6585,7 +6611,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64 0.21.7",
+ "base64 0.22.1",
  "chrono",
  "getrandom 0.2.17",
  "http 1.4.0",
@@ -6856,6 +6882,401 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
+name = "openlark"
+version = "0.15.0-rc.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe508c03b5517af1605c03235638f9be5736d89c2c921c73b5e0c24c97014541"
+dependencies = [
+ "chrono",
+ "openlark-ai",
+ "openlark-analytics",
+ "openlark-application",
+ "openlark-auth",
+ "openlark-cardkit",
+ "openlark-client",
+ "openlark-communication",
+ "openlark-core",
+ "openlark-docs",
+ "openlark-helpdesk",
+ "openlark-hr",
+ "openlark-mail",
+ "openlark-meeting",
+ "openlark-platform",
+ "openlark-protocol",
+ "openlark-security",
+ "openlark-user",
+ "openlark-webhook",
+ "openlark-workflow",
+ "serde",
+ "serde_json",
+ "serde_repr",
+]
+
+[[package]]
+name = "openlark-ai"
+version = "0.15.0-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "437bc45fefa2eaef48b51104cde5ecd46e19972a41da26951d6fd24e16851a0b"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "openlark-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "openlark-analytics"
+version = "0.15.0-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4f6b4997b64c556a11fbc8765d69854a517a58faa6b0a74b6230423382c1fd3"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "futures",
+ "log",
+ "once_cell",
+ "openlark-core",
+ "rand 0.8.5",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_repr",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "openlark-application"
+version = "0.15.0-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e13fc6037b46ca9409ae2b2514612a023d09b171b7c425463ec6434edd959028"
+dependencies = [
+ "openlark-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "openlark-auth"
+version = "0.15.0-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8311905dc8fc2a5042fdfe5a836f03cf6ca3046f102dada2222be30f194de357"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "hex",
+ "openlark-core",
+ "rand 0.8.5",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+ "urlencoding",
+ "uuid",
+]
+
+[[package]]
+name = "openlark-cardkit"
+version = "0.15.0-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c62aeb9d280b283e1293392c6ec5c5e22d2bea52663b34a5cb041560c4738465"
+dependencies = [
+ "openlark-core",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "openlark-client"
+version = "0.15.0-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08ccb83d3ce877c8c1a505f415ff755e5029f5f291ebcf203570a866e089d461"
+dependencies = [
+ "chrono",
+ "futures-util",
+ "lark-websocket-protobuf",
+ "log",
+ "openlark-auth",
+ "openlark-communication",
+ "openlark-core",
+ "prost 0.13.5",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.23.1",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "openlark-communication"
+version = "0.15.0-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4dc90d7df526fca7490734bd5b6a6f107dbfb2f9eb1f6ad7a9aa55fd6eef42f"
+dependencies = [
+ "openlark-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "openlark-core"
+version = "0.15.0-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e135b64cab6d8a7c9db3ee78d2ee97ddf8761a99b0a964020313777a2fe70ca6"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "futures-util",
+ "hmac",
+ "http 1.4.0",
+ "num_cpus",
+ "quick_cache",
+ "rand 0.8.5",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "sha2",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "urlencoding",
+ "uuid",
+]
+
+[[package]]
+name = "openlark-docs"
+version = "0.15.0-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34bb68d37e3cec00d4e9b9499c40a6add97f23d715a1ce736a1a008573a15401"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "futures",
+ "futures-util",
+ "log",
+ "once_cell",
+ "openlark-core",
+ "rand 0.8.5",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_repr",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+ "urlencoding",
+ "uuid",
+]
+
+[[package]]
+name = "openlark-helpdesk"
+version = "0.15.0-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b2c2a905897a1d546aff303a07d65dd4dde7e29eb7461259f1391cfea027077"
+dependencies = [
+ "openlark-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "openlark-hr"
+version = "0.15.0-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ab434c649a8f1d27265a284d9745b860a5ae81d2d5de4ef020d190efe466473"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "log",
+ "openlark-core",
+ "rand 0.8.5",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "openlark-mail"
+version = "0.15.0-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c884205245b3c89106e929cd546451eaf9cc105e06329e3cbec754dc77d74016"
+dependencies = [
+ "openlark-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "openlark-meeting"
+version = "0.15.0-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b51fa17f59697a3bb1861e62e6474338fdf3fb7dd6cbfcba848fd4094946aa0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "openlark-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "openlark-platform"
+version = "0.15.0-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ecf4038d68ca80830c188b947128e45681a38d998a363e72032786c8eaf76f8"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "futures",
+ "log",
+ "once_cell",
+ "openlark-core",
+ "rand 0.8.5",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_repr",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+ "urlencoding",
+ "uuid",
+]
+
+[[package]]
+name = "openlark-protocol"
+version = "0.15.0-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e51d6c682fe4e39ac528f2aaa53f3a36e212bcbbc537c7b3b7244f2bfe123acc"
+dependencies = [
+ "bytes",
+ "prost 0.13.5",
+ "prost-build",
+]
+
+[[package]]
+name = "openlark-security"
+version = "0.15.0-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "029be662cd74764e034e9b07189350491b36750d37b7c7458352bf7aef9392b1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "hmac",
+ "log",
+ "openlark-core",
+ "rand 0.8.5",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_repr",
+ "sha2",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+ "urlencoding",
+ "uuid",
+]
+
+[[package]]
+name = "openlark-user"
+version = "0.15.0-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6192b2beb505c1efa81d854de57f0cf53cfcf92caad4b5cc6b253a6bdf7b7a"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "futures",
+ "log",
+ "once_cell",
+ "openlark-core",
+ "rand 0.8.5",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_repr",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "openlark-webhook"
+version = "0.15.0-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6ec41748444100f1c516c438c5186de09632ce9256aaad5c1e19948046212a0"
+dependencies = [
+ "openlark-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "openlark-workflow"
+version = "0.15.0-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f54035a3c78a58f0fd2201f46459c27e78b0f0bbf2dc61934f44c620f8fcd874"
+dependencies = [
+ "openlark-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "openssl"
 version = "0.10.75"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6965,7 +7386,7 @@ dependencies = [
  "opentelemetry-http",
  "opentelemetry-proto",
  "opentelemetry_sdk",
- "prost",
+ "prost 0.14.3",
  "reqwest",
  "serde_json",
  "thiserror 2.0.18",
@@ -6984,7 +7405,7 @@ dependencies = [
  "const-hex",
  "opentelemetry",
  "opentelemetry_sdk",
- "prost",
+ "prost 0.14.3",
  "serde",
  "serde_json",
  "tonic",
@@ -7053,7 +7474,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.45.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7506,12 +7927,79 @@ dependencies = [
 
 [[package]]
 name = "prost"
+version = "0.12.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "deb1435c188b76130da55f17a466d252ff7b1418b2ad3e037d127b94e3411f29"
+dependencies = [
+ "bytes",
+ "prost-derive 0.12.6",
+]
+
+[[package]]
+name = "prost"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2796faa41db3ec313a31f7624d9286acf277b52de526150b7e69f3debf891ee5"
+dependencies = [
+ "bytes",
+ "prost-derive 0.13.5",
+]
+
+[[package]]
+name = "prost"
 version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2ea70524a2f82d518bce41317d0fae74151505651af45faf1ffbd6fd33f0568"
 dependencies = [
  "bytes",
- "prost-derive",
+ "prost-derive 0.14.3",
+]
+
+[[package]]
+name = "prost-build"
+version = "0.12.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22505a5c94da8e3b7c2996394d1c933236c4d743e81a410bcca4e6989fc066a4"
+dependencies = [
+ "bytes",
+ "heck",
+ "itertools 0.10.5",
+ "log",
+ "multimap",
+ "once_cell",
+ "petgraph 0.6.5",
+ "prettyplease",
+ "prost 0.12.6",
+ "prost-types",
+ "regex",
+ "syn 2.0.114",
+ "tempfile",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.12.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81bddcdb20abf9501610992b6759a4c888aef7d1a7247ef75e2404275ac24af1"
+dependencies = [
+ "anyhow",
+ "itertools 0.10.5",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
+dependencies = [
+ "anyhow",
+ "itertools 0.14.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
 ]
 
 [[package]]
@@ -7525,6 +8013,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
+]
+
+[[package]]
+name = "prost-types"
+version = "0.12.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9091c90b0a32608e984ff2fa4091273cbdd755d54935c51d520887f4a1dbd5b0"
+dependencies = [
+ "prost 0.12.6",
 ]
 
 [[package]]
@@ -7587,6 +8084,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "quick_cache"
+version = "0.6.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a70b1b8b47e31d0498ecbc3c5470bb931399a8bfed1fd79d1717a61ce7f96e3"
+dependencies = [
+ "ahash",
+ "equivalent",
+ "hashbrown 0.16.1",
+ "parking_lot",
+]
+
+[[package]]
 name = "quinn"
 version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7599,7 +8108,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.1",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -7636,9 +8145,9 @@ dependencies = [
  "cfg_aliases 0.2.1",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7936,7 +8445,7 @@ dependencies = [
  "rama-utils",
  "rcgen",
  "rustls",
- "rustls-native-certs",
+ "rustls-native-certs 0.8.3",
  "rustls-pki-types",
  "tokio",
  "tokio-rustls",
@@ -8241,12 +8750,13 @@ dependencies = [
  "js-sys",
  "log",
  "mime",
+ "mime_guess",
  "native-tls",
  "percent-encoding",
  "pin-project-lite",
  "quinn",
  "rustls",
- "rustls-native-certs",
+ "rustls-native-certs 0.8.3",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -8474,7 +8984,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8495,6 +9005,19 @@ dependencies = [
 
 [[package]]
 name = "rustls-native-certs"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5bfb394eeed242e909609f56089eecfe5fda225042e8b171791b9c95f5931e5"
+dependencies = [
+ "openssl-probe 0.1.6",
+ "rustls-pemfile",
+ "rustls-pki-types",
+ "schannel",
+ "security-framework 2.11.1",
+]
+
+[[package]]
+name = "rustls-native-certs"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "612460d5f7bea540c490b2b6395d8e34a953e52b491accd6c86c8164c5932a63"
@@ -8503,6 +9026,15 @@ dependencies = [
  "rustls-pki-types",
  "schannel",
  "security-framework 3.5.1",
+]
+
+[[package]]
+name = "rustls-pemfile"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
+dependencies = [
+ "rustls-pki-types",
 ]
 
 [[package]]
@@ -9908,7 +10440,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.3",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10296,17 +10828,33 @@ dependencies = [
 
 [[package]]
 name = "tokio-tungstenite"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6989540ced10490aaf14e6bad2e3d33728a2813310a0c71d1574304c49631cd"
+dependencies = [
+ "futures-util",
+ "log",
+ "rustls",
+ "rustls-native-certs 0.7.3",
+ "rustls-pki-types",
+ "tokio",
+ "tokio-rustls",
+ "tungstenite 0.23.0",
+]
+
+[[package]]
+name = "tokio-tungstenite"
 version = "0.28.0"
 source = "git+https://github.com/openai-oss-forks/tokio-tungstenite?rev=132f5b39c862e3a970f731d709608b3e6276d5f6#132f5b39c862e3a970f731d709608b3e6276d5f6"
 dependencies = [
  "futures-util",
  "log",
  "rustls",
- "rustls-native-certs",
+ "rustls-native-certs 0.8.3",
  "rustls-pki-types",
  "tokio",
  "tokio-rustls",
- "tungstenite",
+ "tungstenite 0.27.0",
 ]
 
 [[package]]
@@ -10414,7 +10962,7 @@ dependencies = [
  "hyper-util",
  "percent-encoding",
  "pin-project",
- "rustls-native-certs",
+ "rustls-native-certs 0.8.3",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
@@ -10432,7 +10980,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6c55a2d6a14174563de34409c9f92ff981d006f56da9c6ecd40d9d4a31500b0"
 dependencies = [
  "bytes",
- "prost",
+ "prost 0.14.3",
  "tonic",
 ]
 
@@ -10688,6 +11236,26 @@ dependencies = [
  "quote",
  "syn 2.0.114",
  "termcolor",
+]
+
+[[package]]
+name = "tungstenite"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e2e2ce1e47ed2994fd43b04c8f618008d4cabdd5ee34027cf14f9d918edd9c8"
+dependencies = [
+ "byteorder",
+ "bytes",
+ "data-encoding",
+ "http 1.4.0",
+ "httparse",
+ "log",
+ "rand 0.8.5",
+ "rustls",
+ "rustls-pki-types",
+ "sha1",
+ "thiserror 1.0.69",
+ "utf-8",
 ]
 
 [[package]]
@@ -11354,7 +11922,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
