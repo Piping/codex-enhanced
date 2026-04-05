@@ -193,6 +193,12 @@ impl App {
 
         match server_notification_thread_target(&notification) {
             ServerNotificationThreadTarget::Thread(thread_id) => {
+                let clawbot_turn = match &notification {
+                    ServerNotification::TurnCompleted(notification) => {
+                        Some(notification.turn.clone())
+                    }
+                    _ => None,
+                };
                 if self.handle_btw_notification(thread_id, &notification) {
                     return;
                 }
@@ -227,6 +233,10 @@ impl App {
                 {
                     self.workflow_thread_notification_channels
                         .remove(&thread_id);
+                }
+                if let Some(turn) = clawbot_turn {
+                    self.app_event_tx
+                        .send(AppEvent::ClawbotTurnCompleted { thread_id, turn });
                 }
                 return;
             }

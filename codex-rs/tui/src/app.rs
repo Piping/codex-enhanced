@@ -109,6 +109,8 @@ use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
+#[cfg(test)]
+use codex_clawbot::ProviderOutboundTextMessage;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_exec_server::EnvironmentManager;
@@ -176,6 +178,7 @@ mod agent_navigation;
 mod app_server_adapter;
 pub(crate) mod app_server_requests;
 mod btw;
+mod clawbot;
 mod jump_navigation;
 mod key_chord;
 mod loaded_threads;
@@ -192,6 +195,7 @@ use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
 use self::btw::BtwSessionState;
+use self::clawbot::PendingClawbotTurn;
 use self::key_chord::KeyChordAction;
 use self::key_chord::KeyChordResolution;
 use self::key_chord::KeyChordState;
@@ -1137,6 +1141,11 @@ pub(crate) struct App {
     workflow_history: WorkflowHistoryState,
     btw_session: Option<BtwSessionState>,
     btw_closing_thread_ids: HashSet<ThreadId>,
+    clawbot_workspace_root: Option<PathBuf>,
+    clawbot_provider_task: Option<JoinHandle<()>>,
+    clawbot_pending_turns: HashMap<ThreadId, VecDeque<PendingClawbotTurn>>,
+    #[cfg(test)]
+    clawbot_outbound_messages: Vec<ProviderOutboundTextMessage>,
 }
 
 #[derive(Default)]
@@ -3892,6 +3901,7 @@ impl App {
         self.enqueue_primary_thread_session(started.session, started.turns)
             .await?;
         self.backfill_loaded_subagent_threads(app_server).await;
+        self.sync_clawbot_workspace(app_server).await;
         Ok(())
     }
 
@@ -4401,6 +4411,11 @@ impl App {
             workflow_history: WorkflowHistoryState::default(),
             btw_session: None,
             btw_closing_thread_ids: HashSet::new(),
+            clawbot_workspace_root: None,
+            clawbot_provider_task: None,
+            clawbot_pending_turns: HashMap::new(),
+            #[cfg(test)]
+            clawbot_outbound_messages: Vec::new(),
         };
         if let Some(started) = initial_started_thread {
             app.enqueue_primary_thread_session(started.session, started.turns)
@@ -4416,6 +4431,7 @@ impl App {
                 .await,
             "failed to load skills on startup",
         );
+        app.sync_clawbot_workspace(&mut app_server).await;
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -4541,6 +4557,7 @@ impl App {
                 }
             }
         };
+        app.abort_clawbot_provider_runtime();
         if let Err(err) = app_server.shutdown().await {
             tracing::warn!(error = %err, "failed to shut down embedded app server");
         }
@@ -5046,6 +5063,23 @@ impl App {
             }
             AppEvent::ShowWorkflowBackgroundTasks => {
                 self.chat_widget.add_ps_output();
+            }
+            AppEvent::ClawbotProviderEvent { event } => {
+                if let Err(err) = self.handle_clawbot_provider_event(app_server, event).await {
+                    tracing::warn!(error = %err, "failed to handle clawbot provider event");
+                    self.chat_widget
+                        .add_error_message(format!("Clawbot provider event failed: {err}"));
+                }
+            }
+            AppEvent::ClawbotTurnCompleted { thread_id, turn } => {
+                if let Err(err) = self
+                    .handle_clawbot_turn_completed(app_server, thread_id, turn)
+                    .await
+                {
+                    tracing::warn!(error = %err, "failed to handle clawbot turn completion");
+                    self.chat_widget
+                        .add_error_message(format!("Clawbot turn forwarding failed: {err}"));
+                }
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
@@ -7229,6 +7263,13 @@ mod tests {
     use codex_app_server_protocol::TurnStartedNotification;
     use codex_app_server_protocol::TurnStatus;
     use codex_app_server_protocol::UserInput as AppServerUserInput;
+    use codex_clawbot::ClawbotRuntime;
+    use codex_clawbot::ProviderEvent as ClawbotProviderEvent;
+    use codex_clawbot::ProviderKind as ClawbotProviderKind;
+    use codex_clawbot::ProviderOutboundTextMessage;
+    use codex_clawbot::ProviderSession;
+    use codex_clawbot::ProviderSessionRef;
+    use codex_clawbot::SessionStatus as ClawbotSessionStatus;
     use codex_config::types::ModelAvailabilityNuxConfig;
     use codex_otel::SessionTelemetry;
     use codex_protocol::ThreadId;
@@ -10345,6 +10386,11 @@ guardian_approval = true
             workflow_history: WorkflowHistoryState::default(),
             btw_session: None,
             btw_closing_thread_ids: HashSet::new(),
+            clawbot_workspace_root: None,
+            clawbot_provider_task: None,
+            clawbot_pending_turns: HashMap::new(),
+            #[cfg(test)]
+            clawbot_outbound_messages: Vec::new(),
         }
     }
 
@@ -10410,6 +10456,11 @@ guardian_approval = true
                 workflow_history: WorkflowHistoryState::default(),
                 btw_session: None,
                 btw_closing_thread_ids: HashSet::new(),
+                clawbot_workspace_root: None,
+                clawbot_provider_task: None,
+                clawbot_pending_turns: HashMap::new(),
+                #[cfg(test)]
+                clawbot_outbound_messages: Vec::new(),
             },
             rx,
             op_rx,
@@ -10494,7 +10545,36 @@ jobs:
         )?;
         Ok(())
     }
-
+    async fn bind_test_clawbot_session(
+        app: &mut App,
+        app_server: &mut AppServerSession,
+        session_id: &str,
+    ) -> Result<(ThreadId, ProviderSessionRef)> {
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start thread");
+        let thread_id = started.session.thread_id;
+        let session = ProviderSessionRef::new(ClawbotProviderKind::Feishu, session_id);
+        let mut runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+        runtime
+            .persist_session(ProviderSession {
+                provider: ClawbotProviderKind::Feishu,
+                session_id: session_id.to_string(),
+                display_name: Some("Alice".to_string()),
+                unread_count: 0,
+                last_message_at: None,
+                status: ClawbotSessionStatus::Discovered,
+                bound_thread_id: None,
+            })
+            .expect("persist session");
+        runtime
+            .connect_session_to_thread(&session, thread_id.to_string())
+            .expect("connect session");
+        app.sync_clawbot_workspace(app_server).await;
+        Ok((thread_id, session))
+    }
     fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {
         ThreadSessionState {
             thread_id,
@@ -12488,6 +12568,135 @@ model = "gpt-5.2"
             op_rx.try_recv().is_err(),
             "shutdown should not submit Op::Shutdown"
         );
+    }
+
+    async fn clawbot_inbound_message_resumes_bound_thread_and_starts_turn() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+
+        let (thread_id, session) =
+            bind_test_clawbot_session(&mut app, &mut app_server, "chat_resume").await?;
+
+        app.handle_clawbot_provider_event(
+            &mut app_server,
+            ClawbotProviderEvent::InboundMessage(codex_clawbot::ProviderInboundMessage {
+                session: session.clone(),
+                message_id: "msg_1".to_string(),
+                text: "hello from feishu".to_string(),
+                received_at: 1,
+            }),
+        )
+        .await
+        .expect("handle clawbot inbound message");
+
+        assert!(app.thread_event_channels.contains_key(&thread_id));
+        assert_eq!(
+            app.clawbot_pending_turns
+                .get(&thread_id)
+                .map(std::collections::VecDeque::len),
+            Some(1)
+        );
+        assert!(app.active_turn_id_for_thread(thread_id).await.is_some());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn clawbot_turn_completed_forwards_reply_and_drains_next_message() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+
+        let (thread_id, session) =
+            bind_test_clawbot_session(&mut app, &mut app_server, "chat_reply").await?;
+
+        app.handle_clawbot_provider_event(
+            &mut app_server,
+            ClawbotProviderEvent::InboundMessage(codex_clawbot::ProviderInboundMessage {
+                session: session.clone(),
+                message_id: "msg_1".to_string(),
+                text: "first".to_string(),
+                received_at: 1,
+            }),
+        )
+        .await
+        .expect("handle first clawbot inbound");
+        app.handle_clawbot_provider_event(
+            &mut app_server,
+            ClawbotProviderEvent::InboundMessage(codex_clawbot::ProviderInboundMessage {
+                session: session.clone(),
+                message_id: "msg_2".to_string(),
+                text: "second".to_string(),
+                received_at: 2,
+            }),
+        )
+        .await
+        .expect("handle second clawbot inbound");
+
+        let first_turn_id = app
+            .clawbot_pending_turns
+            .get(&thread_id)
+            .and_then(|queue| queue.front())
+            .map(|pending| pending.turn_id.clone())
+            .expect("first pending turn");
+        let queued_runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+        assert_eq!(queued_runtime.snapshot().unread_message_count, 1);
+
+        app.enqueue_thread_notification(
+            thread_id,
+            turn_completed_notification_with_agent_message(
+                thread_id,
+                &first_turn_id,
+                TurnStatus::Completed,
+                "forwarded reply",
+            ),
+        )
+        .await?;
+        app.handle_clawbot_turn_completed(
+            &mut app_server,
+            thread_id,
+            test_turn(
+                &first_turn_id,
+                TurnStatus::Completed,
+                vec![ThreadItem::AgentMessage {
+                    id: "agent-1".to_string(),
+                    text: "forwarded reply".to_string(),
+                    phase: None,
+                    memory_citation: None,
+                }],
+            ),
+        )
+        .await
+        .expect("handle clawbot turn completion");
+
+        assert_eq!(
+            app.clawbot_outbound_messages,
+            vec![ProviderOutboundTextMessage {
+                session: session.clone(),
+                text: "forwarded reply".to_string(),
+            }]
+        );
+        assert_eq!(
+            app.clawbot_pending_turns
+                .get(&thread_id)
+                .map(std::collections::VecDeque::len),
+            Some(1)
+        );
+        let drained_runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+        assert_eq!(drained_runtime.snapshot().unread_message_count, 0);
+
+        Ok(())
     }
 
     #[tokio::test]

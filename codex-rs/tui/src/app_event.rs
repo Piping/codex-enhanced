@@ -18,6 +18,8 @@ use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::Turn as AppServerTurn;
+use codex_clawbot::ProviderEvent as ClawbotProviderEvent;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
@@ -331,6 +333,9 @@ pub(crate) enum AppEvent {
     },
 
     InsertHistoryCell(Box<dyn HistoryCell>),
+    ClawbotProviderEvent {
+        event: ClawbotProviderEvent,
+    },
 
     /// Replay stored workflow-only transcript cells for a specific thread after its turn replay.
     ReplayWorkflowHistory {
@@ -384,6 +389,10 @@ pub(crate) enum AppEvent {
     RetryLastUserTurnWithProfileFallback {
         action: ProfileFallbackAction,
         error_message: String,
+    },
+    ClawbotTurnCompleted {
+        thread_id: ThreadId,
+        turn: AppServerTurn,
     },
 
     /// Apply rollback semantics to local transcript cells.
