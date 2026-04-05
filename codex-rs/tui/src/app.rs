@@ -5145,6 +5145,19 @@ See the Codex keymap documentation for supported actions and examples."
                         .add_error_message(format!("Failed to update Clawbot forwarding: {err}"));
                 }
             }
+            AppEvent::ScanClawbotFeishuSessions => {
+                if let Err(err) = self.scan_clawbot_feishu_sessions().await {
+                    self.chat_widget
+                        .add_error_message(format!("Failed to scan Feishu sessions: {err}"));
+                }
+            }
+            AppEvent::ClearClawbotFeishuSessions => {
+                if let Err(err) = self.clear_clawbot_feishu_sessions() {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to clear unbound Feishu sessions: {err}"
+                    ));
+                }
+            }
             AppEvent::RetryClawbotFeishuConnection => {
                 if let Err(err) = self.retry_clawbot_feishu_connection() {
                     self.chat_widget.add_error_message(format!(
@@ -13493,6 +13506,30 @@ model = "gpt-5.2"
                 bot_open_id: Some("ou_bot_open_id".to_string()),
                 bot_user_id: None,
             }))
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+        runtime
+            .persist_session(ProviderSession {
+                provider: ClawbotProviderKind::Feishu,
+                session_id: "chat_discovered".to_string(),
+                display_name: Some("Bob".to_string()),
+                unread_count: 0,
+                last_message_at: None,
+                status: ClawbotSessionStatus::Discovered,
+                bound_thread_id: None,
+            })
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+        runtime
+            .apply_provider_event(ClawbotProviderEvent::InboundMessage(
+                codex_clawbot::ProviderInboundMessage {
+                    session: ProviderSessionRef::new(
+                        ClawbotProviderKind::Feishu,
+                        "chat_discovered",
+                    ),
+                    message_id: "msg_discovered".to_string(),
+                    text: "hello".to_string(),
+                    received_at: 10,
+                },
+            ))
             .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
 
         app.open_clawbot_management_popup();
