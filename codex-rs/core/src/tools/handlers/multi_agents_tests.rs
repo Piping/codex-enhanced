@@ -50,6 +50,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::user_input::UserInput;
+use core_test_support::PathExt;
 use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
@@ -528,6 +529,104 @@ async fn spawn_agent_returns_agent_id_without_task_name() {
 }
 
 #[tokio::test]
+async fn spawn_agent_applies_requested_cwd() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        agent_id: String,
+    }
+
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let child_workspace = temp_dir.path().join("worker-a");
+    std::fs::create_dir(&child_workspace).expect("create child workspace");
+    turn.cwd = temp_dir.path().abs();
+
+    let output = SpawnAgentHandler
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "cwd": "worker-a"
+            })),
+        ))
+        .await
+        .expect("spawn_agent should succeed");
+    let (content, _) = expect_text_output(output);
+    let result: SpawnAgentResult =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+
+    let snapshot = manager
+        .get_thread(parse_agent_id(&result.agent_id))
+        .await
+        .expect("spawned agent thread should exist")
+        .config_snapshot()
+        .await;
+    assert_eq!(snapshot.cwd, child_workspace);
+}
+
+#[tokio::test]
+async fn spawn_agent_rejects_missing_requested_cwd() {
+    let (session, mut turn) = make_session_and_context().await;
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    turn.cwd = temp_dir.path().abs();
+
+    let invocation = invocation(
+        Arc::new(session),
+        Arc::new(turn),
+        "spawn_agent",
+        function_payload(json!({
+            "message": "inspect this repo",
+            "cwd": "missing"
+        })),
+    );
+    let Err(err) = SpawnAgentHandler.handle(invocation).await else {
+        panic!("missing cwd should be rejected");
+    };
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(format!(
+            "spawn_agent cwd {} does not exist",
+            temp_dir.path().join("missing").display()
+        ))
+    );
+}
+
+#[test]
+fn resolve_requested_agent_cwd_rejects_empty_path() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+
+    let err = resolve_requested_agent_cwd(temp_dir.path(), Some("   "))
+        .expect_err("empty cwd should be rejected");
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel("spawn_agent cwd cannot be empty".to_string())
+    );
+}
+
+#[test]
+fn resolve_requested_agent_cwd_rejects_non_directory() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let file_path = temp_dir.path().join("worker.txt");
+    std::fs::write(&file_path, "hello").expect("write file");
+
+    let err = resolve_requested_agent_cwd(temp_dir.path(), Some("worker.txt"))
+        .expect_err("non-directory cwd should be rejected");
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(format!(
+            "spawn_agent cwd {} is not a directory",
+            file_path.display()
+        ))
+    );
+}
+
+#[tokio::test]
 async fn multi_agent_v2_spawn_requires_task_name() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
@@ -716,6 +815,70 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
                         && !communication.trigger_turn
             )
     }));
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_applies_requested_cwd() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        task_name: String,
+    }
+
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let child_workspace = temp_dir.path().join("worker-b");
+    std::fs::create_dir(&child_workspace).expect("create child workspace");
+    turn.cwd = temp_dir.path().abs();
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    turn.config = Arc::new(config);
+
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    let output = SpawnAgentHandlerV2
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "worker",
+                "cwd": "worker-b"
+            })),
+        ))
+        .await
+        .expect("spawn_agent should succeed");
+    let (content, _) = expect_text_output(output);
+    let result: SpawnAgentResult =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+
+    let child_thread_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(
+            session.conversation_id,
+            &turn.session_source,
+            &result.task_name,
+        )
+        .await
+        .expect("spawned task name should resolve");
+    let snapshot = manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("spawned agent thread should exist")
+        .config_snapshot()
+        .await;
+    assert_eq!(snapshot.cwd, child_workspace);
 }
 
 #[tokio::test]
