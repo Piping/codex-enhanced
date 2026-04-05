@@ -186,6 +186,7 @@ pub(super) async fn make_chatwidget_manual(
         .service_tier
         .as_deref()
         .and_then(ServiceTier::from_request_value);
+    let display_preferences = crate::display_preferences::DisplayPreferences::from_config(&cfg);
     let mut widget = ChatWidget {
         app_event_tx,
         codex_op_target: super::CodexOpTarget::Direct(op_tx),
@@ -260,8 +261,11 @@ pub(super) async fn make_chatwidget_manual(
         plugins_cache: PluginsCacheState::default(),
         plugins_fetch_state: PluginListFetchState::default(),
         interrupts: InterruptManager::new(),
+        display_preferences,
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
+        raw_reasoning_buffer: String::new(),
+        full_raw_reasoning_buffer: String::new(),
         current_status: StatusIndicatorState::working(),
         active_hook_cell: None,
         retry_status_header: None,

@@ -117,6 +117,8 @@ mod cwd_prompt;
 mod debug_config;
 mod diff_model;
 mod diff_render;
+mod display_preferences;
+mod display_preferences_menu;
 mod exec_cell;
 mod exec_command;
 mod external_agent_config_migration;

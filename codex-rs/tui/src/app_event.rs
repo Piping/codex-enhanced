@@ -39,6 +39,7 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::chatwidget::UserMessage;
+use crate::display_preferences::DisplayPreferenceKey;
 use crate::history_cell::HistoryCell;
 use crate::profile_router::ProfileFallbackAction;
 use codex_app_server_protocol::AskForApproval;
@@ -189,6 +190,9 @@ pub(crate) enum AppEvent {
 
     /// Resume a thread by UUID or thread name inside the running TUI session.
     ResumeSessionByIdOrName(String),
+
+    /// Open the local TUI display preferences panel.
+    OpenDisplayPreferencesPanel,
 
     /// Fork the current session into a new thread.
     ForkCurrentSession,
@@ -746,6 +750,9 @@ pub(crate) enum AppEvent {
 
     /// Clear all persisted local memory artifacts via the app-server.
     ResetMemories,
+
+    /// Toggle one local TUI display preference and persist the updated config.
+    ToggleDisplayPreference(DisplayPreferenceKey),
 
     /// Update whether the full access warning prompt has been acknowledged.
     UpdateFullAccessWarningAcknowledged(bool),

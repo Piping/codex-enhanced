@@ -19,7 +19,6 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) goal_command_enabled: bool,
     pub(crate) personality_command_enabled: bool,
     pub(crate) realtime_conversation_enabled: bool,
-    pub(crate) audio_device_selection_enabled: bool,
     pub(crate) allow_elevate_sandbox: bool,
     pub(crate) side_conversation_active: bool,
 }
@@ -39,7 +38,6 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.goal_command_enabled || *cmd != SlashCommand::Goal)
         .filter(|(_, cmd)| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
         .filter(|(_, cmd)| flags.realtime_conversation_enabled || *cmd != SlashCommand::Realtime)
-        .filter(|(_, cmd)| flags.audio_device_selection_enabled || *cmd != SlashCommand::Settings)
         .filter(|(_, cmd)| !flags.side_conversation_active || cmd.available_in_side_conversation())
         .collect()
 }
@@ -80,7 +78,6 @@ mod tests {
             goal_command_enabled: true,
             personality_command_enabled: true,
             realtime_conversation_enabled: true,
-            audio_device_selection_enabled: true,
             allow_elevate_sandbox: true,
             side_conversation_active: false,
         }
@@ -138,18 +135,21 @@ mod tests {
     }
 
     #[test]
-    fn settings_command_is_hidden_when_realtime_is_disabled() {
+    fn settings_command_stays_available_when_realtime_is_disabled() {
         let mut flags = all_enabled_flags();
         flags.realtime_conversation_enabled = false;
-        flags.audio_device_selection_enabled = false;
-        assert_eq!(find_builtin_command("settings", flags), None);
+        assert_eq!(
+            find_builtin_command("settings", flags),
+            Some(SlashCommand::Settings)
+        );
     }
 
     #[test]
-    fn settings_command_is_hidden_when_audio_device_selection_is_disabled() {
-        let mut flags = all_enabled_flags();
-        flags.audio_device_selection_enabled = false;
-        assert_eq!(find_builtin_command("settings", flags), None);
+    fn settings_command_stays_available_when_audio_device_selection_is_disabled() {
+        assert_eq!(
+            find_builtin_command("settings", all_enabled_flags()),
+            Some(SlashCommand::Settings)
+        );
     }
 
     #[test]
