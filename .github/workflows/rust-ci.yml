@@ -136,7 +136,7 @@ jobs:
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     needs: changed
-    if: ${{ needs.changed.outputs.argument_comment_lint == 'true' || needs.changed.outputs.workflows == 'true' }}
+    if: ${{ (needs.changed.outputs.argument_comment_lint == 'true' || needs.changed.outputs.workflows == 'true') && (github.repository == 'openai/codex' || matrix.name == 'Linux') }}
     strategy:
       fail-fast: false
       matrix:
