@@ -89,6 +89,12 @@ impl RealtimeAudioDeviceKind {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RuntimeProfileTarget {
+    Default,
+    Named(String),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) enum WindowsSandboxEnableMode {
@@ -194,6 +200,9 @@ pub(crate) enum AppEvent {
     /// Open the local TUI display preferences panel.
     OpenDisplayPreferencesPanel,
 
+    /// Open the routed profile management panel.
+    OpenProfileManagementPanel,
+
     /// Open thread-specific actions for the current conversation.
     OpenThreadPanel,
 
@@ -210,6 +219,11 @@ pub(crate) enum AppEvent {
 
     /// Restore the last user input and roll back one committed turn.
     UndoLastUserMessage,
+
+    /// Switch the current runtime to the selected config profile.
+    SwitchRuntimeProfile {
+        target: RuntimeProfileTarget,
+    },
 
     /// Request to exit the application.
     ///
