@@ -1,14 +1,21 @@
 ---
 source: tui/src/display_preferences_menu.rs
+assertion_line: 123
 expression: render_lines(&view)
 ---
                                                 
   UI                                            
   These settings only affect local TUI renderi  
                                                 
-› 1. Show Raw Thinking  Currently hidden.       
-                        Reveal raw reasoning    
-                        text in this TUI only.  
+› 1. Show Startup Tooltips  Currently hidden.   
+                            Restore first-run   
+                            and local startup   
+                            tooltip hints in    
+                            this TUI.           
+  2. Show Raw Thinking      Currently hidden.   
+                            Reveal raw          
+                            reasoning text in   
+                            this TUI only.      
                                                 
   Model context and persisted rollout history   
   are unchanged.                                
