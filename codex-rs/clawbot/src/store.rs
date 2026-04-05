@@ -6,6 +6,7 @@ use anyhow::Context;
 use anyhow::Result;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use toml::Value as TomlValue;
 
 use crate::config::ClawbotConfig;
 use crate::model::CLAWBOT_BINDINGS_RELATIVE_PATH;
@@ -107,6 +108,21 @@ impl ClawbotStore {
         let raw = fs::read_to_string(&config_path)
             .with_context(|| format!("failed to read {}", config_path.display()))?;
         toml::from_str(&raw).with_context(|| format!("failed to parse {}", config_path.display()))
+    }
+
+    pub fn save_config(&self, config: &ClawbotConfig) -> Result<()> {
+        let rendered = toml::to_string_pretty(config).context("failed to encode config")?;
+        let contents = if rendered.trim().is_empty() {
+            String::new()
+        } else {
+            let normalized = rendered
+                .parse::<TomlValue>()
+                .ok()
+                .and_then(|value| toml::to_string_pretty(&value).ok())
+                .unwrap_or(rendered);
+            format!("{normalized}\n")
+        };
+        self.write_string_file(&self.config_path(), &contents)
     }
 
     pub fn load_runtime_states(&self) -> Result<Vec<ProviderRuntimeState>> {
