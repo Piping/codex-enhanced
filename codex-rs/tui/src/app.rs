@@ -25,6 +25,11 @@ use crate::chatwidget::ReplayKind;
 use crate::chatwidget::ThreadInputState;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
+use crate::display_preferences::DisplayPreferences;
+use crate::display_preferences::display_preference_edit;
+use crate::display_preferences::set_display_preference_in_config;
+use crate::display_preferences_menu::DISPLAY_PREFERENCES_SELECTION_VIEW_ID;
+use crate::display_preferences_menu::display_preferences_panel_params;
 use crate::exec_command::split_command_string;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::external_editor;
@@ -1045,6 +1050,7 @@ pub(crate) struct App {
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
     key_chord: KeyChordState,
+    display_preferences: DisplayPreferences,
     /// When set, the next draw re-renders the transcript into terminal scrollback once.
     ///
     /// This is used after a confirmed thread rollback to ensure scrollback reflects the trimmed
@@ -1160,6 +1166,7 @@ impl App {
     ) -> crate::chatwidget::ChatWidgetInit {
         crate::chatwidget::ChatWidgetInit {
             config: cfg,
+            display_preferences: self.display_preferences.clone(),
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
             // Fork/resume bootstraps here don't carry any prefilled message content.
@@ -1199,6 +1206,7 @@ impl App {
         self.apply_runtime_policy_overrides(&mut config);
         self.active_profile = config.active_profile.clone();
         self.config = config;
+        self.display_preferences.sync_from_config(&self.config);
         self.chat_widget.sync_plugin_mentions_config(&self.config);
         Ok(())
     }
@@ -3418,6 +3426,22 @@ impl App {
         });
     }
 
+    fn open_display_preferences_panel(&mut self) {
+        let initial_selected_idx = self
+            .chat_widget
+            .selected_index_for_active_view(DISPLAY_PREFERENCES_SELECTION_VIEW_ID);
+        if !self.chat_widget.replace_selection_view_if_active(
+            DISPLAY_PREFERENCES_SELECTION_VIEW_ID,
+            display_preferences_panel_params(&self.display_preferences, initial_selected_idx),
+        ) {
+            self.chat_widget
+                .show_selection_view(display_preferences_panel_params(
+                    &self.display_preferences,
+                    initial_selected_idx,
+                ));
+        }
+    }
+
     fn is_terminal_thread_read_error(err: &color_eyre::Report) -> bool {
         err.chain()
             .any(|cause| cause.to_string().contains("thread not loaded:"))
@@ -4185,6 +4209,7 @@ impl App {
 
         let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
         let terminal_title_invalid_items_warned = Arc::new(AtomicBool::new(false));
+        let display_preferences = DisplayPreferences::from_config(&config);
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =
@@ -4197,6 +4222,7 @@ impl App {
                         .await;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
+                    display_preferences: display_preferences.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
@@ -4231,6 +4257,7 @@ impl App {
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
+                    display_preferences: display_preferences.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
@@ -4270,6 +4297,7 @@ impl App {
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
+                    display_preferences: display_preferences.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
@@ -4312,6 +4340,7 @@ impl App {
             app_event_tx,
             chat_widget,
             config,
+            display_preferences,
             active_profile,
             cli_kv_overrides,
             harness_overrides,
@@ -4704,6 +4733,9 @@ impl App {
 
                 // Leaving alt-screen may blank the inline viewport; force a redraw either way.
                 tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenDisplayPreferencesPanel => {
+                self.open_display_preferences_panel();
             }
             AppEvent::ForkCurrentSession => {
                 self.session_telemetry.counter(
@@ -5744,6 +5776,27 @@ impl App {
             }
             AppEvent::UpdateFeatureFlags { updates } => {
                 self.update_feature_flags(updates).await;
+            }
+            AppEvent::ToggleDisplayPreference(key) => {
+                let enabled = !self.display_preferences.is_enabled(key);
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(self.active_profile.as_deref())
+                    .with_edits([display_preference_edit(key, enabled)])
+                    .apply()
+                    .await
+                {
+                    tracing::error!(
+                        error = %err,
+                        ?key,
+                        "failed to persist display preference update"
+                    );
+                    self.chat_widget
+                        .add_error_message(format!("Failed to save UI preference: {err}"));
+                } else {
+                    self.display_preferences.set_enabled(key, enabled);
+                    set_display_preference_in_config(&mut self.config, key, enabled);
+                    self.open_display_preferences_panel();
+                }
             }
             AppEvent::SkipNextWorldWritableScan => {
                 self.windows_sandbox.skip_world_writable_scan_once = true;
@@ -7219,6 +7272,7 @@ mod tests {
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         app.chat_widget = ChatWidget::new_with_app_event(ChatWidgetInit {
             config,
+            display_preferences: app.display_preferences.clone(),
             frame_requester: crate::tui::FrameRequester::test_dummy(),
             app_event_tx: app.app_event_tx.clone(),
             initial_user_message: create_initial_user_message(
@@ -9734,6 +9788,7 @@ guardian_approval = true
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
+        let display_preferences = DisplayPreferences::from_config(&config);
         let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
@@ -9744,6 +9799,7 @@ guardian_approval = true
             app_event_tx,
             chat_widget,
             config,
+            display_preferences,
             active_profile: None,
             cli_kv_overrides: Vec::new(),
             harness_overrides: ConfigOverrides::default(),
@@ -9791,6 +9847,7 @@ guardian_approval = true
     ) {
         let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
+        let display_preferences = DisplayPreferences::from_config(&config);
         let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
@@ -9802,6 +9859,7 @@ guardian_approval = true
                 app_event_tx,
                 chat_widget,
                 config,
+                display_preferences,
                 active_profile: None,
                 cli_kv_overrides: Vec::new(),
                 harness_overrides: ConfigOverrides::default(),
@@ -11603,6 +11661,7 @@ model = "gpt-5.2"
 
         let replacement = ChatWidget::new_with_app_event(ChatWidgetInit {
             config: app.config.clone(),
+            display_preferences: app.display_preferences.clone(),
             frame_requester: crate::tui::FrameRequester::test_dummy(),
             app_event_tx: app.app_event_tx.clone(),
             initial_user_message: None,

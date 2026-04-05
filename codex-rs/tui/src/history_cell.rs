@@ -12,6 +12,7 @@
 
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
+use crate::display_preferences::DisplayPreferences;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::OutputLinesParams;
 use crate::exec_cell::TOOL_CALL_MAX_LINES;
@@ -443,6 +444,36 @@ impl HistoryCell for ReasoningSummaryCell {
 
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.lines(width)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ReasoningRawContentCell {
+    content: String,
+    cwd: PathBuf,
+    display_preferences: DisplayPreferences,
+}
+
+impl HistoryCell for ReasoningRawContentCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if !self.display_preferences.show_raw_thinking() {
+            return Vec::new();
+        }
+
+        let mut lines = vec![vec!["• ".dim(), "Raw Thinking".dim().italic()].into()];
+        let mut body = Vec::new();
+        append_markdown(
+            &self.content,
+            Some((width as usize).saturating_sub(4)),
+            Some(self.cwd.as_path()),
+            &mut body,
+        );
+        lines.extend(prefix_lines(body, "  ".into(), "  ".into()));
+        lines
+    }
+
+    fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.display_lines(width)
     }
 }
 
@@ -2675,6 +2706,18 @@ pub(crate) fn new_reasoning_summary_block(
     ))
 }
 
+pub(crate) fn new_reasoning_raw_block(
+    full_raw_reasoning_buffer: String,
+    cwd: &Path,
+    display_preferences: DisplayPreferences,
+) -> Box<dyn HistoryCell> {
+    Box::new(ReasoningRawContentCell {
+        content: full_raw_reasoning_buffer.trim().to_string(),
+        cwd: cwd.to_path_buf(),
+        display_preferences,
+    })
+}
+
 #[derive(Debug)]
 /// A visual divider between turns, optionally showing how long the assistant "worked for".
 ///
@@ -4759,6 +4802,38 @@ mod tests {
 
         let rendered_transcript = render_transcript(cell.as_ref());
         assert_eq!(rendered_transcript, vec!["• We should fix the bug next."]);
+    }
+
+    #[test]
+    fn reasoning_raw_block_is_hidden_when_display_preference_is_disabled() {
+        let cell = new_reasoning_raw_block(
+            "secret chain of thought".to_string(),
+            &test_cwd(),
+            DisplayPreferences::default(),
+        );
+
+        assert!(cell.display_lines(/*width*/ 80).is_empty());
+        assert!(cell.transcript_lines(/*width*/ 80).is_empty());
+    }
+
+    #[test]
+    fn reasoning_raw_block_is_visible_when_display_preference_is_enabled() {
+        let display_preferences = DisplayPreferences::default();
+        display_preferences.set_enabled(
+            crate::display_preferences::DisplayPreferenceKey::RawThinking,
+            true,
+        );
+        let cell = new_reasoning_raw_block(
+            "secret chain of thought".to_string(),
+            &test_cwd(),
+            display_preferences,
+        );
+
+        let rendered = render_transcript(cell.as_ref());
+        assert_eq!(
+            rendered,
+            vec!["• Raw Thinking", "  secret chain of thought"]
+        );
     }
 
     #[test]
