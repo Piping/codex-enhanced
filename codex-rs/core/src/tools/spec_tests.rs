@@ -458,6 +458,40 @@ async fn test_build_specs_gpt51_codex_default() {
 
 #[tokio::test]
 async fn test_build_specs_gpt5_codex_unified_exec_web_search() {
+#[test]
+fn experimental_read_and_grep_tools_register_handlers() {
+    let config = test_config();
+    let mut model_info = construct_model_info_offline("gpt-5-codex", &config);
+    model_info.experimental_supported_tools =
+        vec!["read_file".to_string(), "grep_files".to_string()];
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (tools, registry) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    )
+    .build();
+
+    assert!(tools.iter().any(|tool| tool.name() == "read_file"));
+    assert!(tools.iter().any(|tool| tool.name() == "grep_files"));
+    assert!(registry.has_handler("read_file", /*namespace*/ None));
+    assert!(registry.has_handler("grep_files", /*namespace*/ None));
+}
+
+#[tokio::test]
+async fn test_build_specs_gpt5_codex_unified_exec_web_search() {
     let mut features = Features::with_defaults();
     features.enable(Feature::UnifiedExec);
     assert_model_tools(
