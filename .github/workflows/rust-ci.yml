@@ -151,6 +151,7 @@ jobs:
         if: ${{ runner.os == 'Linux' }}
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+          CODEX_BAZEL_FORCE_LOCAL: ${{ github.repository != 'openai/codex' && '1' || '0' }}
         shell: bash
         run: |
           bazel_targets="$(./tools/argument-comment-lint/list-bazel-targets.sh)"
