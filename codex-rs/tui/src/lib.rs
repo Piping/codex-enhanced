@@ -116,6 +116,8 @@ pub use custom_terminal::Terminal;
 mod cwd_prompt;
 mod debug_config;
 mod diff_render;
+mod display_preferences;
+mod display_preferences_menu;
 mod exec_cell;
 mod exec_command;
 mod external_editor;

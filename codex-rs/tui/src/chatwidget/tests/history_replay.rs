@@ -590,7 +590,6 @@ async fn replayed_thread_closed_notification_does_not_exit_tui() {
 #[tokio::test]
 async fn replayed_reasoning_item_hides_raw_reasoning_when_disabled() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.config.show_raw_agent_reasoning = false;
     chat.handle_codex_event(Event {
         id: "configured".into(),
         msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -637,7 +636,10 @@ async fn replayed_reasoning_item_hides_raw_reasoning_when_disabled() {
 #[tokio::test]
 async fn replayed_reasoning_item_shows_raw_reasoning_when_enabled() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.config.show_raw_agent_reasoning = true;
+    chat.display_preferences.set_enabled(
+        crate::display_preferences::DisplayPreferenceKey::RawThinking,
+        true,
+    );
     chat.handle_codex_event(Event {
         id: "configured".into(),
         msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -671,12 +673,11 @@ async fn replayed_reasoning_item_shows_raw_reasoning_when_enabled() {
         ReplayKind::ThreadSnapshot,
     );
 
-    let rendered = match rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => {
-            lines_to_single_string(&cell.transcript_lines(/*width*/ 80))
-        }
-        other => panic!("expected InsertHistoryCell, got {other:?}"),
-    };
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>()
+        .join("\n\n");
     assert!(rendered.contains("Raw reasoning"));
 }
 

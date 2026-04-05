@@ -333,6 +333,7 @@ use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::collaboration_modes;
 use crate::diff_render::display_path_for;
+use crate::display_preferences::DisplayPreferences;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
 use crate::exec_cell::new_active_exec_command;
@@ -562,6 +563,7 @@ pub(crate) fn get_limits_duration(windows_minutes: i64) -> String {
 /// Common initialization parameters shared by all `ChatWidget` constructors.
 pub(crate) struct ChatWidgetInit {
     pub(crate) config: Config,
+    pub(crate) display_preferences: DisplayPreferences,
     pub(crate) frame_requester: FrameRequester,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) initial_user_message: Option<UserMessage>,
@@ -856,10 +858,15 @@ pub(crate) struct ChatWidget {
     plugin_install_auth_flow: Option<PluginInstallAuthFlowState>,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
+    display_preferences: DisplayPreferences,
     // Accumulates the current reasoning block text to extract a header
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
     full_reasoning_buffer: String,
+    // Accumulates the current raw reasoning block for TUI-only visibility toggles.
+    raw_reasoning_buffer: String,
+    // Accumulates the full raw reasoning content for transcript-only recording.
+    full_raw_reasoning_buffer: String,
     // The currently rendered footer state. We keep the already-formatted
     // details here so transient stream interruptions can restore the footer
     // exactly as it was shown.
@@ -2316,6 +2323,8 @@ impl ChatWidget {
     fn on_agent_reasoning_final(&mut self) {
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
+        self.full_raw_reasoning_buffer
+            .push_str(&self.raw_reasoning_buffer);
         if !self.full_reasoning_buffer.is_empty() {
             let cell = history_cell::new_reasoning_summary_block(
                 self.full_reasoning_buffer.clone(),
@@ -2323,8 +2332,18 @@ impl ChatWidget {
             );
             self.add_boxed_history(cell);
         }
+        if !self.full_raw_reasoning_buffer.is_empty() {
+            let cell = history_cell::new_reasoning_raw_block(
+                self.full_raw_reasoning_buffer.clone(),
+                &self.config.cwd,
+                self.display_preferences.clone(),
+            );
+            self.add_boxed_history(cell);
+        }
         self.reasoning_buffer.clear();
         self.full_reasoning_buffer.clear();
+        self.raw_reasoning_buffer.clear();
+        self.full_raw_reasoning_buffer.clear();
         self.request_redraw();
     }
 
@@ -2333,9 +2352,15 @@ impl ChatWidget {
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
         self.full_reasoning_buffer.push_str("\n\n");
         self.reasoning_buffer.clear();
+        self.full_raw_reasoning_buffer
+            .push_str(&self.raw_reasoning_buffer);
+        self.full_raw_reasoning_buffer.push_str("\n\n");
+        self.raw_reasoning_buffer.clear();
     }
 
-    // Raw reasoning uses the same flow as summarized reasoning
+    fn on_raw_reasoning_delta(&mut self, delta: String) {
+        self.raw_reasoning_buffer.push_str(&delta);
+    }
 
     fn on_task_started(&mut self) {
         self.agent_turn_running = true;
@@ -2366,6 +2391,8 @@ impl ChatWidget {
         self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
+        self.full_raw_reasoning_buffer.clear();
+        self.raw_reasoning_buffer.clear();
         self.request_redraw();
     }
 
@@ -4847,6 +4874,7 @@ impl ChatWidget {
     fn new_with_op_target(common: ChatWidgetInit, codex_op_target: CodexOpTarget) -> Self {
         let ChatWidgetInit {
             config,
+            display_preferences,
             frame_requester,
             app_event_tx,
             initial_user_message,
@@ -4962,8 +4990,11 @@ impl ChatWidget {
             plugin_install_apps_needing_auth: Vec::new(),
             plugin_install_auth_flow: None,
             interrupts: InterruptManager::new(),
+            display_preferences,
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
+            raw_reasoning_buffer: String::new(),
+            full_raw_reasoning_buffer: String::new(),
             current_status: StatusIndicatorState::working(),
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
             active_hook_cell: None,
@@ -5197,6 +5228,8 @@ impl ChatWidget {
                         // Reset any reasoning header only when we are actually submitting a turn.
                         self.reasoning_buffer.clear();
                         self.full_reasoning_buffer.clear();
+                        self.raw_reasoning_buffer.clear();
+                        self.full_raw_reasoning_buffer.clear();
                         self.set_status_header(String::from("Working"));
                         self.submit_user_message(user_message);
                     } else {
@@ -5274,6 +5307,24 @@ impl ChatWidget {
     pub(crate) fn show_selection_view(&mut self, params: SelectionViewParams) {
         self.bottom_pane.show_selection_view(params);
         self.request_redraw();
+    }
+
+    pub(crate) fn replace_selection_view_if_active(
+        &mut self,
+        view_id: &'static str,
+        params: SelectionViewParams,
+    ) -> bool {
+        let replaced = self
+            .bottom_pane
+            .replace_selection_view_if_active(view_id, params);
+        if replaced {
+            self.request_redraw();
+        }
+        replaced
+    }
+
+    pub(crate) fn selected_index_for_active_view(&self, view_id: &'static str) -> Option<usize> {
+        self.bottom_pane.selected_index_for_active_view(view_id)
     }
 
     pub(crate) fn no_modal_or_popup_active(&self) -> bool {
@@ -5429,10 +5480,7 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Settings => {
-                if !self.realtime_audio_device_selection_enabled() {
-                    return;
-                }
-                self.open_realtime_audio_popup();
+                self.open_settings_popup();
             }
             SlashCommand::Personality => {
                 self.open_personality_popup();
@@ -5692,6 +5740,137 @@ impl ChatWidget {
             )),
         }
         self.request_redraw();
+    }
+
+    fn dispatch_command_with_args(
+        &mut self,
+        cmd: SlashCommand,
+        args: String,
+        _text_elements: Vec<TextElement>,
+    ) {
+        if !cmd.supports_inline_args() {
+            self.dispatch_command(cmd);
+            return;
+        }
+        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+            let message = format!(
+                "'/{}' is disabled while a task is in progress.",
+                cmd.command()
+            );
+            self.add_to_history(history_cell::new_error_event(message));
+            self.request_redraw();
+            return;
+        }
+
+        let trimmed = args.trim();
+        match cmd {
+            SlashCommand::Fast => {
+                if trimmed.is_empty() {
+                    self.dispatch_command(cmd);
+                    return;
+                }
+                match trimmed.to_ascii_lowercase().as_str() {
+                    "on" => self.set_service_tier_selection(Some(ServiceTier::Fast)),
+                    "off" => self.set_service_tier_selection(/*service_tier*/ None),
+                    "status" => {
+                        let status = if matches!(self.config.service_tier, Some(ServiceTier::Fast))
+                        {
+                            "on"
+                        } else {
+                            "off"
+                        };
+                        self.add_info_message(
+                            format!("Fast mode is {status}."),
+                            /*hint*/ None,
+                        );
+                    }
+                    _ => {
+                        self.add_error_message("Usage: /fast [on|off|status]".to_string());
+                    }
+                }
+            }
+            SlashCommand::Rename if !trimmed.is_empty() => {
+                self.session_telemetry
+                    .counter("codex.thread.rename", /*inc*/ 1, &[]);
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
+                else {
+                    return;
+                };
+                let Some(name) = codex_core::util::normalize_thread_name(&prepared_args) else {
+                    self.add_error_message("Thread name cannot be empty.".to_string());
+                    return;
+                };
+                let cell = Self::rename_confirmation_cell(&name, self.thread_id);
+                self.add_boxed_history(Box::new(cell));
+                self.request_redraw();
+                self.app_event_tx.set_thread_name(name);
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::Plan if !trimmed.is_empty() => {
+                self.dispatch_command(cmd);
+                if self.active_mode_kind() != ModeKind::Plan {
+                    return;
+                }
+                let Some((prepared_args, prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ true)
+                else {
+                    return;
+                };
+                let local_images = self
+                    .bottom_pane
+                    .take_recent_submission_images_with_placeholders();
+                let remote_image_urls = self.take_remote_image_urls();
+                let user_message = UserMessage {
+                    text: prepared_args,
+                    local_images,
+                    remote_image_urls,
+                    text_elements: prepared_elements,
+                    mention_bindings: self.bottom_pane.take_recent_submission_mention_bindings(),
+                };
+                if self.is_session_configured() {
+                    self.reasoning_buffer.clear();
+                    self.full_reasoning_buffer.clear();
+                    self.raw_reasoning_buffer.clear();
+                    self.full_raw_reasoning_buffer.clear();
+                    self.set_status_header(String::from("Working"));
+                    self.submit_user_message(user_message);
+                } else {
+                    self.queue_user_message(user_message);
+                }
+            }
+            SlashCommand::Review if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
+                else {
+                    return;
+                };
+                self.submit_op(AppCommand::review(ReviewRequest {
+                    target: ReviewTarget::Custom {
+                        instructions: prepared_args,
+                    },
+                    user_facing_hint: None,
+                }));
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
+                else {
+                    return;
+                };
+                self.app_event_tx
+                    .send(AppEvent::BeginWindowsSandboxGrantReadRoot {
+                        path: prepared_args,
+                    });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            _ => self.dispatch_command(cmd),
+        }
     }
 
     #[cfg(test)]
@@ -6257,10 +6436,8 @@ impl ChatWidget {
                     for delta in summary {
                         self.on_agent_reasoning_delta(delta);
                     }
-                    if self.config.show_raw_agent_reasoning {
-                        for delta in content {
-                            self.on_agent_reasoning_delta(delta);
-                        }
+                    for delta in content {
+                        self.on_raw_reasoning_delta(delta);
                     }
                 }
                 self.on_agent_reasoning_final();
@@ -6583,9 +6760,7 @@ impl ChatWidget {
                 self.on_agent_reasoning_delta(notification.delta);
             }
             ServerNotification::ReasoningTextDelta(notification) => {
-                if self.config.show_raw_agent_reasoning {
-                    self.on_agent_reasoning_delta(notification.delta);
-                }
+                self.on_raw_reasoning_delta(notification.delta);
             }
             ServerNotification::ReasoningSummaryPartAdded(_) => self.on_reasoning_section_break(),
             ServerNotification::TerminalInteraction(notification) => {
@@ -7121,13 +7296,15 @@ impl ChatWidget {
                 self.on_agent_message_delta(delta)
             }
             EventMsg::PlanDelta(event) => self.on_plan_delta(event.delta),
-            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta })
-            | EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
+            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }) => {
+                self.on_agent_reasoning_delta(delta)
+            }
+            EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
                 delta,
-            }) => self.on_agent_reasoning_delta(delta),
+            }) => self.on_raw_reasoning_delta(delta),
             EventMsg::AgentReasoning(AgentReasoningEvent { .. }) => self.on_agent_reasoning_final(),
             EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
-                self.on_agent_reasoning_delta(text);
+                self.on_raw_reasoning_delta(text);
                 self.on_agent_reasoning_final();
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
@@ -8085,33 +8262,48 @@ impl ChatWidget {
         });
     }
 
-    pub(crate) fn open_realtime_audio_popup(&mut self) {
-        let items = [
-            RealtimeAudioDeviceKind::Microphone,
-            RealtimeAudioDeviceKind::Speaker,
-        ]
-        .into_iter()
-        .map(|kind| {
-            let description = Some(format!(
-                "Current: {}",
-                self.current_realtime_audio_selection_label(kind)
-            ));
-            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                tx.send(AppEvent::OpenRealtimeAudioDeviceSelection { kind });
-            })];
-            SelectionItem {
-                name: kind.title().to_string(),
-                description,
-                actions,
-                dismiss_on_select: true,
-                ..Default::default()
-            }
-        })
-        .collect();
+    pub(crate) fn open_settings_popup(&mut self) {
+        let mut items = vec![SelectionItem {
+            name: "UI".to_string(),
+            description: Some(
+                "Configure local TUI-only transcript visibility for raw reasoning.".to_string(),
+            ),
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenDisplayPreferencesPanel)
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+
+        if self.realtime_audio_device_selection_enabled() {
+            items.extend(
+                [
+                    RealtimeAudioDeviceKind::Microphone,
+                    RealtimeAudioDeviceKind::Speaker,
+                ]
+                .into_iter()
+                .map(|kind| {
+                    let description = Some(format!(
+                        "Current: {}",
+                        self.current_realtime_audio_selection_label(kind)
+                    ));
+                    let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                        tx.send(AppEvent::OpenRealtimeAudioDeviceSelection { kind });
+                    })];
+                    SelectionItem {
+                        name: kind.title().to_string(),
+                        description,
+                        actions,
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    }
+                }),
+            );
+        }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Settings".to_string()),
-            subtitle: Some("Configure settings for Codex.".to_string()),
+            subtitle: Some("Configure UI and realtime settings for Codex.".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()

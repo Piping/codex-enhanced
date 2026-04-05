@@ -63,6 +63,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
     let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let init = ChatWidgetInit {
         config: cfg.clone(),
+        display_preferences: crate::display_preferences::DisplayPreferences::from_config(&cfg),
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
         initial_user_message: None,
@@ -1621,7 +1622,7 @@ async fn personality_selection_popup_snapshot() {
 #[tokio::test]
 async fn realtime_audio_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
-    chat.open_realtime_audio_popup();
+    chat.open_settings_popup();
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("realtime_audio_selection_popup", popup);
@@ -1631,7 +1632,7 @@ async fn realtime_audio_selection_popup_snapshot() {
 #[tokio::test]
 async fn realtime_audio_selection_popup_narrow_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
-    chat.open_realtime_audio_popup();
+    chat.open_settings_popup();
 
     let popup = render_bottom_popup(&chat, /*width*/ 56);
     assert_chatwidget_snapshot!("realtime_audio_selection_popup_narrow", popup);

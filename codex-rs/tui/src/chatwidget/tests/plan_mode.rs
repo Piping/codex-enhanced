@@ -1211,6 +1211,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
     let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let init = ChatWidgetInit {
         config: cfg.clone(),
+        display_preferences: crate::display_preferences::DisplayPreferences::from_config(&cfg),
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
         initial_user_message: None,
