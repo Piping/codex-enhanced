@@ -16,6 +16,7 @@ use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
+use codex_app_server_protocol::ServerNotification;
 use codex_chatgpt::connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
@@ -279,6 +280,15 @@ pub(crate) enum AppEvent {
         result: Box<BackgroundWorkflowRunResult>,
     },
 
+    RegisterWorkflowThreadNotificationForwarder {
+        thread_id: ThreadId,
+        sender: tokio::sync::mpsc::UnboundedSender<ServerNotification>,
+        ready_tx: tokio::sync::oneshot::Sender<()>,
+    },
+
+    UnregisterWorkflowThreadNotificationForwarder {
+        thread_id: ThreadId,
+    },
     OpenWorkflowControls,
 
     StartManualWorkflowTrigger {
