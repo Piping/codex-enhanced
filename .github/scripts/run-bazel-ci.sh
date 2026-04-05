@@ -65,6 +65,11 @@ case "${RUNNER_OS:-}" in
     ;;
 esac
 
+force_local_ci_config=
+if [[ "${RUNNER_OS:-}" == "Linux" ]]; then
+  force_local_ci_config=ci-linux-local
+fi
+
 print_bazel_test_log_tails() {
   local console_log="$1"
   local testlogs_dir
@@ -217,6 +222,9 @@ if [[ "${CODEX_BAZEL_FORCE_LOCAL:-0}" == "1" ]]; then
     --remote_cache=
     --remote_executor=
   )
+  if [[ -n "${force_local_ci_config}" ]]; then
+    bazel_run_args+=("--config=${force_local_ci_config}")
+  fi
   if (( ${#post_config_bazel_args[@]} > 0 )); then
     bazel_run_args+=("${post_config_bazel_args[@]}")
   fi

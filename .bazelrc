@@ -136,6 +136,16 @@ common:ci-linux --config=remote
 common:ci-linux --strategy=remote
 common:ci-linux --platforms=//:rbe
 
+# Fork-only Linux jobs that must stay on Bazel but cannot rely on BuildBuddy
+# remote execution should use this explicit local variant instead of trying to
+# partially undo `ci-linux` at the callsite.
+common:ci-linux-local --config=ci-bazel
+common:ci-linux-local --build_metadata=TAG_os=linux
+common:ci-linux-local --extra_execution_platforms=
+common:ci-linux-local --platforms=//:local_linux
+common:ci-linux-local --spawn_strategy=local
+common:ci-linux-local --strategy=local
+
 # On mac, we can run all the build actions remotely but test actions locally.
 common:ci-macos --config=ci-bazel
 common:ci-macos --build_metadata=TAG_os=macos
