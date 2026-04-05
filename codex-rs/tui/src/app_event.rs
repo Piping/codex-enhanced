@@ -337,6 +337,21 @@ pub(crate) enum AppEvent {
     },
 
     ShowWorkflowBackgroundTasks,
+
+    StartBtwDiscussion {
+        prompt: String,
+    },
+
+    BtwCompleted {
+        thread_id: ThreadId,
+        result: Result<String, String>,
+    },
+
+    BtwInsertSummary,
+
+    BtwInsertFull,
+
+    BtwDiscard,
     /// Retry the last turn using the routed profile fallback policy.
     RetryLastUserTurnWithProfileFallback {
         action: ProfileFallbackAction,
