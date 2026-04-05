@@ -1321,9 +1321,9 @@ Order of messages:
 
 UI guidance for IDEs: surface an approval dialog as soon as the request arrives. The turn will proceed after the server receives a response to the approval request. The terminal `item/completed` notification will be sent with the appropriate status.
 
-### request_user_input
+### question / request_user_input
 
-When the client responds to `item/tool/requestUserInput`, the server emits `serverRequest/resolved` with `{ threadId, requestId }`. If the pending request is cleared by turn start, turn completion, or turn interruption before the client answers, the server emits the same notification for that cleanup.
+When the client responds to `item/tool/requestUserInput`, whether it originated from the `question` tool or the legacy `request_user_input` tool, the server emits `serverRequest/resolved` with `{ threadId, requestId }`. If the pending request is cleared by turn start, turn completion, or turn interruption before the client answers, the server emits the same notification for that cleanup.
 
 ### MCP server elicitations
 

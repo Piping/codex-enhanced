@@ -3,6 +3,7 @@ use crate::session::tests::make_session_and_context;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use crate::tools::handlers::request_user_input_spec::REQUEST_USER_INPUT_TOOL_NAME;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -23,6 +24,7 @@ async fn multi_agent_v2_request_user_input_rejects_subagent_threads() {
     });
 
     let result = RequestUserInputHandler {
+        tool_name: codex_tools::ToolName::plain(REQUEST_USER_INPUT_TOOL_NAME),
         available_modes: Vec::new(),
     }
     .handle(ToolInvocation {

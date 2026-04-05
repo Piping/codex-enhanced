@@ -61,7 +61,11 @@ use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHand
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
 use crate::tools::handlers::plan_spec::create_update_plan_tool;
 use crate::tools::handlers::request_plugin_install_spec::create_request_plugin_install_tool;
+use crate::tools::handlers::request_user_input_spec::QUESTION_TOOL_NAME;
+use crate::tools::handlers::request_user_input_spec::REQUEST_USER_INPUT_TOOL_NAME;
+use crate::tools::handlers::request_user_input_spec::create_question_tool;
 use crate::tools::handlers::request_user_input_spec::create_request_user_input_tool;
+use crate::tools::handlers::request_user_input_spec::question_tool_description;
 use crate::tools::handlers::request_user_input_spec::request_user_input_tool_description;
 use crate::tools::handlers::shell_spec::CommandToolOptions;
 use crate::tools::handlers::shell_spec::ShellToolOptions;
@@ -82,6 +86,7 @@ use crate::tools::hosted_spec::create_web_search_tool;
 use crate::tools::registry::ToolRegistryBuilder;
 use crate::tools::spec_plan_types::ToolRegistryBuildParams;
 use crate::tools::spec_plan_types::agent_type_description;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_tools::ResponsesApiNamespace;
@@ -277,6 +282,19 @@ pub fn build_tool_registry_builder(
     }
 
     builder.push_spec(
+        create_question_tool(question_tool_description(
+            config
+                .request_user_input_available_modes
+                .contains(&ModeKind::Default),
+        )),
+        /*supports_parallel_tool_calls*/ false,
+        config.code_mode_enabled,
+    );
+    builder.register_handler(Arc::new(RequestUserInputHandler {
+        tool_name: ToolName::plain(QUESTION_TOOL_NAME),
+        available_modes: config.request_user_input_available_modes.clone(),
+    }));
+    builder.push_spec(
         create_request_user_input_tool(request_user_input_tool_description(
             &config.request_user_input_available_modes,
         )),
@@ -284,6 +302,7 @@ pub fn build_tool_registry_builder(
         config.code_mode_enabled,
     );
     builder.register_handler(Arc::new(RequestUserInputHandler {
+        tool_name: ToolName::plain(REQUEST_USER_INPUT_TOOL_NAME),
         available_modes: config.request_user_input_available_modes.clone(),
     }));
 

@@ -27,10 +27,17 @@ fn default_mode_instructions_replace_mode_names_placeholder() {
     let expected_snippet = format!("Known mode names are {known_mode_names}.");
     assert!(default_instructions.contains(&expected_snippet));
 
-    assert!(default_instructions.contains(
-        "Use the `request_user_input` tool only when it is listed in the available tools"
-    ));
-    assert!(
-        default_instructions.contains("ask the user directly with a concise plain-text question")
-    );
+    let expected_availability_message =
+        request_user_input_availability_message(/*default_mode_request_user_input*/ true);
+    assert!(default_instructions.contains(&expected_availability_message));
+    assert!(default_instructions.contains("prefer using the `question` tool"));
+    assert!(default_instructions.contains("legacy `request_user_input` tool is still available"));
+}
+
+#[test]
+fn asking_questions_guidance_uses_plain_text_questions_when_feature_disabled() {
+    let guidance =
+        asking_questions_guidance_message(/*default_mode_request_user_input*/ false);
+    assert!(guidance.contains("ask the user directly with a concise plain-text question"));
+    assert!(guidance.contains("prefer using the `question` tool"));
 }
