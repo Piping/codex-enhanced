@@ -81,6 +81,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         }),
         create_write_stdin_tool(),
         create_update_plan_tool(),
+        question_tool_spec(/*default_mode_request_user_input*/ false),
         request_user_input_tool_spec(/*default_mode_request_user_input*/ false),
         create_apply_patch_freeform_tool(),
         ToolSpec::WebSearch {
@@ -491,11 +492,12 @@ fn test_build_specs_agent_job_worker_tools_enabled() {
             "report_agent_job_result",
         ],
     );
+    assert_lacks_tool_name(&tools, QUESTION_TOOL_NAME);
     assert_lacks_tool_name(&tools, "request_user_input");
 }
 
 #[test]
-fn request_user_input_description_reflects_default_mode_feature_flag() {
+fn interactive_question_tools_reflect_default_mode_feature_flag() {
     let model_info = model_info();
     let mut features = Features::with_defaults();
     let available_models = Vec::new();
@@ -513,6 +515,11 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
         /*mcp_tools*/ None,
         /*app_tools*/ None,
         &[],
+    );
+    let question_tool = find_tool(&tools, QUESTION_TOOL_NAME);
+    assert_eq!(
+        question_tool.spec,
+        question_tool_spec(/*default_mode_request_user_input*/ false)
     );
     let request_user_input_tool = find_tool(&tools, REQUEST_USER_INPUT_TOOL_NAME);
     assert_eq!(
@@ -535,6 +542,11 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
         /*mcp_tools*/ None,
         /*app_tools*/ None,
         &[],
+    );
+    let question_tool = find_tool(&tools, QUESTION_TOOL_NAME);
+    assert_eq!(
+        question_tool.spec,
+        question_tool_spec(/*default_mode_request_user_input*/ true)
     );
     let request_user_input_tool = find_tool(&tools, REQUEST_USER_INPUT_TOOL_NAME);
     assert_eq!(
@@ -1808,6 +1820,10 @@ fn assert_lacks_tool_name(tools: &[ConfiguredToolSpec], expected_absent: &str) {
         !names.contains(&expected_absent),
         "expected tool {expected_absent} to be absent; had: {names:?}"
     );
+}
+
+fn question_tool_spec(default_mode_request_user_input: bool) -> ToolSpec {
+    create_question_tool(question_tool_description(default_mode_request_user_input))
 }
 
 fn request_user_input_tool_spec(default_mode_request_user_input: bool) -> ToolSpec {

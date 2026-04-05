@@ -300,6 +300,7 @@ fn test_build_specs_gpt5_codex_default() {
         "shell_command",
         &[
             "update_plan",
+            "question",
             "request_user_input",
             "apply_patch",
             "web_search",
@@ -323,6 +324,7 @@ fn test_build_specs_gpt51_codex_default() {
         "shell_command",
         &[
             "update_plan",
+            "question",
             "request_user_input",
             "apply_patch",
             "web_search",
@@ -348,6 +350,7 @@ fn test_build_specs_gpt5_codex_unified_exec_web_search() {
             "exec_command",
             "write_stdin",
             "update_plan",
+            "question",
             "request_user_input",
             "apply_patch",
             "web_search",
@@ -373,6 +376,7 @@ fn test_build_specs_gpt51_codex_unified_exec_web_search() {
             "exec_command",
             "write_stdin",
             "update_plan",
+            "question",
             "request_user_input",
             "apply_patch",
             "web_search",
@@ -396,6 +400,7 @@ fn test_gpt_5_1_codex_max_defaults() {
         "shell_command",
         &[
             "update_plan",
+            "question",
             "request_user_input",
             "apply_patch",
             "web_search",
@@ -419,6 +424,7 @@ fn test_codex_5_1_mini_defaults() {
         "shell_command",
         &[
             "update_plan",
+            "question",
             "request_user_input",
             "apply_patch",
             "web_search",
@@ -442,6 +448,7 @@ fn test_gpt_5_defaults() {
         "shell",
         &[
             "update_plan",
+            "question",
             "request_user_input",
             "web_search",
             "view_image",
@@ -464,6 +471,7 @@ fn test_gpt_5_1_defaults() {
         "shell_command",
         &[
             "update_plan",
+            "question",
             "request_user_input",
             "apply_patch",
             "web_search",
@@ -489,6 +497,7 @@ fn test_gpt_5_1_codex_max_unified_exec_web_search() {
             "exec_command",
             "write_stdin",
             "update_plan",
+            "question",
             "request_user_input",
             "apply_patch",
             "web_search",
