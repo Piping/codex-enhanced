@@ -8,6 +8,7 @@ use codex_clawbot::ForwardingDirection;
 use codex_clawbot::ForwardingState;
 use codex_clawbot::ProviderKind;
 use codex_clawbot::ProviderRuntimeState;
+use codex_clawbot::ProviderSession;
 use codex_clawbot::ProviderSessionRef;
 
 use super::App;
@@ -334,13 +335,81 @@ impl App {
         Ok(())
     }
 
+    pub(crate) async fn scan_clawbot_feishu_sessions(&mut self) -> Result<()> {
+        let mut runtime = ClawbotRuntime::load(self.config.cwd.to_path_buf())?;
+        runtime.scan_feishu_sessions().await?;
+        let discovered = runtime
+            .snapshot()
+            .sessions
+            .iter()
+            .filter(|session| session.provider == ProviderKind::Feishu)
+            .count();
+        self.open_clawbot_management_popup();
+        self.chat_widget.add_info_message(
+            format!("Scanned Feishu sessions. {discovered} discovered."),
+            /*hint*/ None,
+        );
+        Ok(())
+    }
+
+    pub(crate) fn clear_clawbot_feishu_sessions(&mut self) -> Result<()> {
+        let mut runtime = ClawbotRuntime::load(self.config.cwd.to_path_buf())?;
+        let sessions_before = runtime
+            .snapshot()
+            .sessions
+            .iter()
+            .filter(|session| {
+                session.provider == ProviderKind::Feishu && session.bound_thread_id.is_none()
+            })
+            .count();
+        let unread_before = runtime
+            .store()
+            .load_unread_messages()?
+            .into_iter()
+            .filter(|message| message.provider == ProviderKind::Feishu)
+            .filter(|message| {
+                !runtime
+                    .snapshot()
+                    .bindings
+                    .iter()
+                    .any(|binding| binding.session_ref() == message.session_ref())
+            })
+            .count();
+        runtime.clear_unbound_feishu_sessions()?;
+        self.open_clawbot_management_popup();
+        self.chat_widget.add_info_message(
+            format!(
+                "Cleared {sessions_before} unbound Feishu sessions and {unread_before} cached unread messages."
+            ),
+            /*hint*/ None,
+        );
+        Ok(())
+    }
+
     fn clawbot_management_popup_params(
         &self,
         initial_selected_idx: Option<usize>,
     ) -> SelectionViewParams {
-        let snapshot = ClawbotRuntime::load(self.config.cwd.to_path_buf())
-            .map(|runtime| runtime.snapshot().clone())
-            .unwrap_or_default();
+        let (snapshot, clearable_unread_count) =
+            ClawbotRuntime::load(self.config.cwd.to_path_buf())
+                .map(|runtime| {
+                    let snapshot = runtime.snapshot().clone();
+                    let clearable_unread_count = runtime
+                        .store()
+                        .load_unread_messages()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|message| message.provider == ProviderKind::Feishu)
+                        .filter(|message| {
+                            !snapshot
+                                .bindings
+                                .iter()
+                                .any(|binding| binding.session_ref() == message.session_ref())
+                        })
+                        .count();
+                    (snapshot, clearable_unread_count)
+                })
+                .unwrap_or_default();
         let feishu_config = snapshot.config.feishu.as_ref();
         let provider_state = snapshot
             .runtime
@@ -360,6 +429,25 @@ impl App {
             ClawbotTurnMode::Interactive => ClawbotTurnMode::NonInteractive,
             ClawbotTurnMode::NonInteractive => ClawbotTurnMode::Interactive,
         };
+        let mut feishu_sessions = snapshot
+            .sessions
+            .iter()
+            .filter(|session| session.provider == ProviderKind::Feishu)
+            .cloned()
+            .collect::<Vec<_>>();
+        feishu_sessions.sort_by(|left, right| {
+            right
+                .bound_thread_id
+                .is_some()
+                .cmp(&left.bound_thread_id.is_some())
+                .then(session_title(left).cmp(&session_title(right)))
+                .then(left.session_id.cmp(&right.session_id))
+        });
+        let bound_session_count = feishu_sessions
+            .iter()
+            .filter(|session| session.bound_thread_id.is_some())
+            .count();
+        let unbound_session_count = feishu_sessions.len().saturating_sub(bound_session_count);
         let mut items = vec![
             SelectionItem {
                 name: "Turn Mode".to_string(),
@@ -380,6 +468,71 @@ impl App {
                 dismiss_on_select: false,
                 ..Default::default()
             },
+            SelectionItem {
+                name: "Feishu Sessions".to_string(),
+                description: Some(format!(
+                    "{} total · {} bound · {} unbound",
+                    feishu_sessions.len(),
+                    bound_session_count,
+                    unbound_session_count
+                )),
+                selected_description: Some(
+                    "Scan discovered Feishu chats, inspect bound/unbound state, and clear stale unbound cache."
+                        .to_string(),
+                ),
+                is_disabled: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Scan Feishu Sessions".to_string(),
+                description: Some(
+                    "Discover private Feishu chats using the persisted workspace credentials."
+                        .to_string(),
+                ),
+                selected_description: Some(
+                    "Refresh the discovered session list before binding or cleanup."
+                        .to_string(),
+                ),
+                is_disabled: !feishu_config.is_some_and(FeishuConfig::has_api_credentials),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::ScanClawbotFeishuSessions))],
+                dismiss_on_select: false,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Clear Unbound Sessions".to_string(),
+                description: Some(format!(
+                    "Remove {unbound_session_count} unbound sessions and {clearable_unread_count} cached unread messages."
+                )),
+                selected_description: Some(
+                    "Keep active bindings intact while dropping stale discovered-session cache."
+                        .to_string(),
+                ),
+                is_disabled: unbound_session_count == 0 && clearable_unread_count == 0,
+                actions: vec![Box::new(|tx| tx.send(AppEvent::ClearClawbotFeishuSessions))],
+                dismiss_on_select: false,
+                ..Default::default()
+            },
+        ];
+
+        if feishu_sessions.is_empty() {
+            items.push(SelectionItem {
+                name: "No Feishu sessions discovered".to_string(),
+                description: Some(
+                    "Run Scan Feishu Sessions to refresh the workspace-local discovered session list."
+                        .to_string(),
+                ),
+                selected_description: Some(
+                    "Discovered sessions appear here with their current bound or unbound state."
+                        .to_string(),
+                ),
+                is_disabled: true,
+                ..Default::default()
+            });
+        } else {
+            items.extend(feishu_sessions.iter().map(clawbot_session_item));
+        }
+
+        items.extend([
             clawbot_config_item(ClawbotFeishuConfigField::AppId, feishu_config),
             clawbot_config_item(ClawbotFeishuConfigField::AppSecret, feishu_config),
             clawbot_config_item(ClawbotFeishuConfigField::VerificationToken, feishu_config),
@@ -399,7 +552,7 @@ impl App {
                 dismiss_on_select: false,
                 ..Default::default()
             },
-        ];
+        ]);
 
         let bind_description = match (&active_thread_id, current_binding) {
             (Some(thread_id), Some(binding)) => {
@@ -469,7 +622,7 @@ impl App {
             view_id: Some(CLAWBOT_MANAGEMENT_VIEW_ID),
             title: Some("Clawbot".to_string()),
             subtitle: Some(
-                "Manage workspace-local Feishu credentials and the current thread binding."
+                "Manage workspace-local Feishu credentials, sessions, and the current thread binding."
                     .to_string(),
             ),
             footer_hint: Some(standard_popup_hint_line()),
@@ -513,6 +666,32 @@ fn connection_description(state: &ProviderRuntimeState) -> String {
         }
         _ => status.to_string(),
     }
+}
+
+fn clawbot_session_item(session: &ProviderSession) -> SelectionItem {
+    let state = if session.bound_thread_id.is_some() {
+        "bound"
+    } else {
+        "unbound"
+    };
+    SelectionItem {
+        name: session_title(session),
+        description: Some(format!("{state} · {} unread", session.unread_count)),
+        selected_description: Some(
+            "Discovered session state is read-only here. Use Bind Current Thread to connect a session id."
+                .to_string(),
+        ),
+        is_disabled: true,
+        ..Default::default()
+    }
+}
+
+fn session_title(session: &ProviderSession) -> String {
+    session
+        .display_name
+        .clone()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| session.session_id.clone())
 }
 
 fn clawbot_turn_mode_label(mode: ClawbotTurnMode) -> &'static str {

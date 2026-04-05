@@ -409,6 +409,10 @@ pub(crate) enum AppEvent {
         enabled: bool,
     },
 
+    ScanClawbotFeishuSessions,
+
+    ClearClawbotFeishuSessions,
+
     RetryClawbotFeishuConnection,
     /// Apply rollback semantics to local transcript cells.
     ///
