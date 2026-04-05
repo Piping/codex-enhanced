@@ -5612,6 +5612,9 @@ impl ChatWidget {
             SlashCommand::Fork => {
                 self.app_event_tx.send(AppEvent::ForkCurrentSession);
             }
+            SlashCommand::Thread => {
+                self.app_event_tx.send(AppEvent::OpenThreadPanel);
+            }
             SlashCommand::Init => {
                 let init_target = match self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME) {
                     Ok(path) => path,

@@ -203,6 +203,7 @@ mod config_persistence;
 mod event_dispatch;
 mod history_ui;
 mod input;
+mod jump_navigation;
 mod key_chord;
 mod loaded_threads;
 mod pending_interactive_replay;
@@ -214,6 +215,7 @@ mod side;
 mod startup_prompts;
 mod thread_events;
 mod thread_goal_actions;
+mod thread_menu;
 mod thread_routing;
 mod thread_session_state;
 mod workflow_controls;
@@ -5045,6 +5047,25 @@ See the Codex keymap documentation for supported actions and examples."
             AppEvent::OpenDisplayPreferencesPanel => {
                 self.open_display_preferences_panel();
             }
+            AppEvent::OpenThreadPanel => {
+                self.open_thread_panel();
+            }
+            AppEvent::OpenJumpToMessagePanel => {
+                self.open_jump_to_message_panel();
+            }
+            AppEvent::JumpToTranscriptCell { cell_index } => {
+                self.reset_backtrack_state();
+                self.backtrack.overlay_preview_active = false;
+                if !matches!(self.overlay, Some(Overlay::Transcript(_))) {
+                    self.open_transcript_overlay(tui);
+                }
+                if let Some(Overlay::Transcript(overlay)) = &mut self.overlay
+                    && cell_index < self.transcript_cells.len()
+                {
+                    overlay.set_highlight_cell(Some(cell_index));
+                    tui.frame_requester().schedule_frame();
+                }
+            }
             AppEvent::ForkCurrentSession => {
                 self.session_telemetry.counter(
                     "codex.thread.fork",
@@ -5106,6 +5127,9 @@ See the Codex keymap documentation for supported actions and examples."
                 }
 
                 tui.frame_requester().schedule_frame();
+            }
+            AppEvent::UndoLastUserMessage => {
+                self.undo_last_user_message();
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();

@@ -1,0 +1,47 @@
+---
+source: tui/src/app/thread_menu.rs
+expression: "render_selection_popup(&view, 92, 22)"
+---
+TestBackend { buffer: Buffer {
+    area: Rect { x: 0, y: 0, width: 92, height: 22 },
+    content: [
+        "                                                                                            ",
+        "  Jump To Message                                                                           ",
+        "  2 committed transcript entries are available.                                             ",
+        "                                                                                            ",
+        "  Type to search committed transcript                                                       ",
+        "› User Message 1       How do I keep the retry chain intact?                                ",
+        "  Assistant Message 2  Classify 503 as fallback-eligible before surfacing the final error.  ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "  Press enter to confirm or esc to go back                                                  ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 17, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 47, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 37, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 5, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 60, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 23, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 90, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 21, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+    ]
+}, scrollback: Buffer {
+    area: Rect { x: 0, y: 0, width: 92, height: 0 }
+}, cursor: false, pos: (0, 0) }

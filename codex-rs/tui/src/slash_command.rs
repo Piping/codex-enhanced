@@ -33,6 +33,7 @@ pub enum SlashCommand {
     New,
     Resume,
     Fork,
+    Thread,
     Init,
     Compact,
     Plan,
@@ -89,6 +90,8 @@ impl SlashCommand {
             SlashCommand::Resume => "resume a saved chat",
             SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Fork => "fork the current chat",
+            SlashCommand::Thread => "open thread actions for the current conversation",
+            // SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
             SlashCommand::Copy => "copy last response as markdown",
             SlashCommand::Raw => "toggle raw scrollback mode for copy-friendly terminal selection",
@@ -224,6 +227,7 @@ impl SlashCommand {
             | SlashCommand::Statusline
             | SlashCommand::AutoReview
             | SlashCommand::Workflow
+            | SlashCommand::Thread
             | SlashCommand::Feedback
             | SlashCommand::Ide
             | SlashCommand::Quit

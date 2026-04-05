@@ -194,8 +194,22 @@ pub(crate) enum AppEvent {
     /// Open the local TUI display preferences panel.
     OpenDisplayPreferencesPanel,
 
+    /// Open thread-specific actions for the current conversation.
+    OpenThreadPanel,
+
+    /// Open the committed transcript jump picker.
+    OpenJumpToMessagePanel,
+
+    /// Open the transcript overlay and jump to the selected committed cell.
+    JumpToTranscriptCell {
+        cell_index: usize,
+    },
+
     /// Fork the current session into a new thread.
     ForkCurrentSession,
+
+    /// Restore the last user input and roll back one committed turn.
+    UndoLastUserMessage,
 
     /// Request to exit the application.
     ///

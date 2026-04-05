@@ -1,0 +1,43 @@
+---
+source: tui/src/app/thread_menu.rs
+expression: "render_selection_popup(&view, 92, 18)"
+---
+TestBackend { buffer: Buffer {
+    area: Rect { x: 0, y: 0, width: 92, height: 18 },
+    content: [
+        "                                                                                            ",
+        "  Jump To Message                                                                           ",
+        "  No committed transcript entries are available yet.                                        ",
+        "                                                                                            ",
+        "  Type to search committed transcript                                                       ",
+        "› Nothing to jump to yet  Send a message or wait for a response before using Jump To        ",
+        "                          Message.                                                          ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "  Press enter to confirm or esc to go back                                                  ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 17, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 52, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 37, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 84, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 34, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 17, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+    ]
+}, scrollback: Buffer {
+    area: Rect { x: 0, y: 0, width: 92, height: 0 }
+}, cursor: false, pos: (0, 0) }
