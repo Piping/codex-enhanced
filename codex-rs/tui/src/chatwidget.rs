@@ -3716,7 +3716,10 @@ impl ChatWidget {
                         .iter()
                         .map(|path| path.display().to_string())
                         .collect::<Vec<_>>();
-                    history_cell::new_guardian_denied_patch_request(files)
+                    history_cell::new_guardian_denied_patch_request(
+                        files,
+                        self.display_preferences.clone(),
+                    )
                 }
                 GuardianAssessmentAction::McpToolCall {
                     server, tool_name, ..
@@ -3880,8 +3883,12 @@ impl ChatWidget {
         }
     }
 
-    fn on_patch_apply_begin(&mut self, changes: HashMap<PathBuf, FileChange>) {
-        self.add_to_history(history_cell::new_patch_event(changes, &self.config.cwd));
+    fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
+        self.add_to_history(history_cell::new_patch_event(
+            event.changes,
+            &self.config.cwd,
+            self.display_preferences.clone(),
+        ));
     }
 
     fn on_view_image_tool_call(&mut self, path: AbsolutePathBuf) {
@@ -4834,6 +4841,7 @@ impl ChatWidget {
                 arguments: Some(arguments),
             },
             self.config.animations,
+            self.display_preferences.clone(),
         )));
         self.bump_active_cell_revision();
         self.request_redraw();
@@ -4883,8 +4891,12 @@ impl ChatWidget {
             Some(cell) if cell.call_id() == id => cell.complete(duration, result),
             _ => {
                 self.flush_active_cell();
-                let mut cell =
-                    history_cell::new_active_mcp_tool_call(id, invocation, self.config.animations);
+                let mut cell = history_cell::new_active_mcp_tool_call(
+                    call_id,
+                    invocation,
+                    self.config.animations,
+                    self.display_preferences.clone(),
+                );
                 let extra_cell = cell.complete(duration, result);
                 self.active_cell = Some(Box::new(cell));
                 extra_cell

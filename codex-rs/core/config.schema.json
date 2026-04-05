@@ -2582,6 +2582,18 @@
           },
           "description": "Keybinding overrides for the TUI.\n\nThis supports rebinding selected actions globally and by context. Context bindings take precedence over `global` bindings."
         },
+        "display_preferences": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiDisplayPreferences"
+            }
+          ],
+          "default": {
+            "show_patch_diffs": true,
+            "show_tool_results": true
+          },
+          "description": "Transcript visibility preferences that affect only local TUI rendering."
+        },
         "model_availability_nux": {
           "allOf": [
             {
@@ -3644,6 +3656,22 @@
             }
           ],
           "description": "Repeat yank operator to yank the whole line (`yy`)."
+        }
+      },
+      "type": "object"
+    },
+    "TuiDisplayPreferences": {
+      "additionalProperties": false,
+      "properties": {
+        "show_patch_diffs": {
+          "default": true,
+          "description": "Show patch/edit diff summaries in transcript cells. Defaults to `true`.",
+          "type": "boolean"
+        },
+        "show_tool_results": {
+          "default": true,
+          "description": "Show MCP/custom tool result bodies in transcript cells. Defaults to `true`.",
+          "type": "boolean"
         }
       },
       "type": "object"

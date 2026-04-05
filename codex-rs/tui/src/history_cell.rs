@@ -1276,19 +1276,26 @@ impl ApprovalDecisionActor {
     }
 }
 
-pub fn new_guardian_denied_patch_request(files: Vec<String>) -> Box<dyn HistoryCell> {
+pub fn new_guardian_denied_patch_request(
+    files: Vec<String>,
+    display_preferences: DisplayPreferences,
+) -> Box<dyn HistoryCell> {
     let mut summary = vec![
         "Request ".into(),
         "denied".bold(),
         " for codex to apply ".into(),
     ];
-    if files.len() == 1 {
+    if display_preferences.show_patch_diffs() && files.len() == 1 {
         summary.push("a patch touching ".into());
         summary.push(Span::from(files[0].clone()).dim());
     } else {
+        let noun = if files.len() == 1 { "file" } else { "files" };
         summary.push("a patch touching ".into());
         summary.push(Span::from(files.len().to_string()).dim());
-        summary.push(" files".into());
+        summary.push(format!(" {noun}").into());
+        if !display_preferences.show_patch_diffs() {
+            summary.push(" (diff hidden)".dim());
+        }
     }
 
     Box::new(PrefixedWrappedHistoryCell::new(
@@ -1361,10 +1368,20 @@ pub(crate) fn new_review_status_line(message: String) -> PlainHistoryCell {
 pub(crate) struct PatchHistoryCell {
     changes: HashMap<PathBuf, FileChange>,
     cwd: PathBuf,
+    display_preferences: DisplayPreferences,
 }
 
 impl HistoryCell for PatchHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if !self.display_preferences.show_patch_diffs() {
+            let file_count = self.changes.len();
+            let noun = if file_count == 1 { "file" } else { "files" };
+            return vec![
+                format!("• Edited {file_count} {noun} (diff hidden)")
+                    .dim()
+                    .into(),
+            ];
+        }
         create_diff_summary(&self.changes, &self.cwd, width as usize)
     }
 
@@ -1380,9 +1397,13 @@ impl HistoryCell for PatchHistoryCell {
 #[derive(Debug)]
 struct CompletedMcpToolCallWithImageOutput {
     _image: DynamicImage,
+    display_preferences: DisplayPreferences,
 }
 impl HistoryCell for CompletedMcpToolCallWithImageOutput {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        if !self.display_preferences.show_tool_results() {
+            return Vec::new();
+        }
         vec!["tool result (image output)".into()]
     }
 
@@ -1894,6 +1915,7 @@ pub(crate) struct McpToolCallCell {
     duration: Option<Duration>,
     result: Option<Result<codex_protocol::mcp::CallToolResult, String>>,
     animations_enabled: bool,
+    display_preferences: DisplayPreferences,
 }
 
 #[derive(Debug, Clone)]
@@ -1908,6 +1930,7 @@ impl McpToolCallCell {
         call_id: String,
         invocation: McpInvocation,
         animations_enabled: bool,
+        display_preferences: DisplayPreferences,
     ) -> Self {
         Self {
             call_id,
@@ -1916,6 +1939,7 @@ impl McpToolCallCell {
             duration: None,
             result: None,
             animations_enabled,
+            display_preferences,
         }
     }
 
@@ -1928,8 +1952,11 @@ impl McpToolCallCell {
         duration: Duration,
         result: Result<codex_protocol::mcp::CallToolResult, String>,
     ) -> Option<Box<dyn HistoryCell>> {
-        let image_cell = try_new_completed_mcp_tool_call_with_image_output(&result)
-            .map(|cell| Box::new(cell) as Box<dyn HistoryCell>);
+        let image_cell = try_new_completed_mcp_tool_call_with_image_output(
+            &result,
+            self.display_preferences.clone(),
+        )
+        .map(|cell| Box::new(cell) as Box<dyn HistoryCell>);
         self.duration = Some(duration);
         self.result = Some(result);
         image_cell
@@ -2026,7 +2053,9 @@ impl HistoryCell for McpToolCallCell {
         // Reserve four columns for the tree prefix ("  └ "/"    ") and ensure the wrapper still has at least one cell to work with.
         let detail_wrap_width = (width as usize).saturating_sub(4).max(1);
 
-        if let Some(result) = &self.result {
+        if self.display_preferences.show_tool_results()
+            && let Some(result) = &self.result
+        {
             match result {
                 Ok(codex_protocol::mcp::CallToolResult { content, .. }) => {
                     if !content.is_empty() {
@@ -2113,8 +2142,9 @@ pub(crate) fn new_active_mcp_tool_call(
     call_id: String,
     invocation: McpInvocation,
     animations_enabled: bool,
+    display_preferences: DisplayPreferences,
 ) -> McpToolCallCell {
-    McpToolCallCell::new(call_id, invocation, animations_enabled)
+    McpToolCallCell::new(call_id, invocation, animations_enabled, display_preferences)
 }
 
 fn web_search_header(completed: bool) -> &'static str {
@@ -2272,6 +2302,7 @@ pub(crate) fn new_web_search_call(
 ///   even when the first block is not a valid image.
 fn try_new_completed_mcp_tool_call_with_image_output(
     result: &Result<codex_protocol::mcp::CallToolResult, String>,
+    display_preferences: DisplayPreferences,
 ) -> Option<CompletedMcpToolCallWithImageOutput> {
     let image = result
         .as_ref()
@@ -2280,7 +2311,10 @@ fn try_new_completed_mcp_tool_call_with_image_output(
         .iter()
         .find_map(decode_mcp_image)?;
 
-    Some(CompletedMcpToolCallWithImageOutput { _image: image })
+    Some(CompletedMcpToolCallWithImageOutput {
+        _image: image,
+        display_preferences,
+    })
 }
 
 /// Decodes an MCP `ImageContent` block into an in-memory image.
@@ -3250,10 +3284,12 @@ impl HistoryCell for PlanUpdateCell {
 pub(crate) fn new_patch_event(
     changes: HashMap<PathBuf, FileChange>,
     cwd: &Path,
+    display_preferences: DisplayPreferences,
 ) -> PatchHistoryCell {
     PatchHistoryCell {
         changes,
         cwd: cwd.to_path_buf(),
+        display_preferences,
     }
 }
 
@@ -4646,6 +4682,7 @@ mod tests {
             "call-1".into(),
             invocation,
             /*animations_enabled*/ true,
+            DisplayPreferences::default(),
         );
         let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
 
@@ -4692,6 +4729,7 @@ mod tests {
             "call-2".into(),
             invocation,
             /*animations_enabled*/ true,
+            DisplayPreferences::default(),
         );
         assert!(
             cell.complete(Duration::from_millis(1420), Ok(result))
@@ -4727,6 +4765,7 @@ mod tests {
             "call-image".into(),
             invocation,
             /*animations_enabled*/ true,
+            DisplayPreferences::default(),
         );
         let extra_cell = cell
             .complete(Duration::from_millis(25), Ok(result))
@@ -4758,6 +4797,7 @@ mod tests {
             "call-image-data-url".into(),
             invocation,
             /*animations_enabled*/ true,
+            DisplayPreferences::default(),
         );
         let extra_cell = cell
             .complete(Duration::from_millis(25), Ok(result))
@@ -4765,6 +4805,41 @@ mod tests {
 
         let rendered = render_lines(&extra_cell.display_lines(/*width*/ 80));
         assert_eq!(rendered, vec!["tool result (image output)"]);
+    }
+
+    #[test]
+    fn completed_mcp_tool_call_hides_image_result_placeholder_when_disabled() {
+        let invocation = McpInvocation {
+            server: "image".into(),
+            tool: "generate".into(),
+            arguments: Some(json!({
+                "prompt": "tiny image",
+            })),
+        };
+
+        let result = CallToolResult {
+            content: vec![image_block(SMALL_PNG_BASE64)],
+            is_error: None,
+            structured_content: None,
+            meta: None,
+        };
+
+        let display_preferences = DisplayPreferences::default();
+        display_preferences.set_enabled(
+            crate::display_preferences::DisplayPreferenceKey::ToolResults,
+            false,
+        );
+        let mut cell = new_active_mcp_tool_call(
+            "call-image-hidden".into(),
+            invocation,
+            /*animations_enabled*/ true,
+            display_preferences,
+        );
+        let extra_cell = cell
+            .complete(Duration::from_millis(25), Ok(result))
+            .expect("expected image cell");
+
+        assert!(extra_cell.display_lines(/*width*/ 80).is_empty());
     }
 
     #[test]
@@ -4788,6 +4863,7 @@ mod tests {
             "call-image-2".into(),
             invocation,
             /*animations_enabled*/ true,
+            DisplayPreferences::default(),
         );
         let extra_cell = cell
             .complete(Duration::from_millis(25), Ok(result))
@@ -4812,6 +4888,7 @@ mod tests {
             "call-3".into(),
             invocation,
             /*animations_enabled*/ true,
+            DisplayPreferences::default(),
         );
         assert!(
             cell.complete(Duration::from_secs(2), Err("network timeout".into()))
@@ -4821,6 +4898,47 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
 
         insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn completed_mcp_tool_call_hides_text_results_when_disabled() {
+        let invocation = McpInvocation {
+            server: "search".into(),
+            tool: "find_docs".into(),
+            arguments: Some(json!({
+                "query": "ratatui styling",
+                "limit": 3,
+            })),
+        };
+
+        let result = CallToolResult {
+            content: vec![text_block("Found styling guidance in styles.md")],
+            is_error: None,
+            structured_content: None,
+            meta: None,
+        };
+
+        let display_preferences = DisplayPreferences::default();
+        display_preferences.set_enabled(
+            crate::display_preferences::DisplayPreferenceKey::ToolResults,
+            false,
+        );
+        let mut cell = new_active_mcp_tool_call(
+            "call-hidden-text".into(),
+            invocation,
+            /*animations_enabled*/ true,
+            display_preferences,
+        );
+        assert!(
+            cell.complete(Duration::from_millis(200), Ok(result))
+                .is_none()
+        );
+
+        let rendered = render_lines(&cell.display_lines(/*width*/ 80));
+        assert_eq!(
+            rendered,
+            vec!["• Called search.find_docs({\"query\":\"ratatui styling\",\"limit\":3})"]
+        );
     }
 
     #[test]
@@ -4855,6 +4973,7 @@ mod tests {
             "call-4".into(),
             invocation,
             /*animations_enabled*/ true,
+            DisplayPreferences::default(),
         );
         assert!(
             cell.complete(Duration::from_millis(640), Ok(result))
@@ -4864,6 +4983,43 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(/*width*/ 48)).join("\n");
 
         insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn patch_event_hides_diff_summary_when_disabled() {
+        let mut changes = HashMap::new();
+        changes.insert(
+            PathBuf::from("src/lib.rs"),
+            FileChange::Add {
+                content: "pub fn demo() {}\n".to_string(),
+            },
+        );
+        let display_preferences = DisplayPreferences::default();
+        display_preferences.set_enabled(
+            crate::display_preferences::DisplayPreferenceKey::PatchDiffs,
+            false,
+        );
+
+        let cell = new_patch_event(changes, Path::new("/tmp/project"), display_preferences);
+        let rendered = render_lines(&cell.display_lines(/*width*/ 80));
+        assert_eq!(rendered, vec!["• Edited 1 file (diff hidden)"]);
+    }
+
+    #[test]
+    fn guardian_denied_patch_request_hides_diff_details_when_disabled() {
+        let display_preferences = DisplayPreferences::default();
+        display_preferences.set_enabled(
+            crate::display_preferences::DisplayPreferenceKey::PatchDiffs,
+            false,
+        );
+
+        let cell =
+            new_guardian_denied_patch_request(vec!["src/lib.rs".to_string()], display_preferences);
+        let rendered = render_transcript(cell.as_ref());
+        assert_eq!(
+            rendered,
+            vec!["✗ Request denied for codex to apply a patch touching 1 file (diff hidden)"]
+        );
     }
 
     #[test]
@@ -4890,6 +5046,7 @@ mod tests {
             "call-5".into(),
             invocation,
             /*animations_enabled*/ true,
+            DisplayPreferences::default(),
         );
         assert!(
             cell.complete(Duration::from_millis(1280), Ok(result))
@@ -4926,6 +5083,7 @@ mod tests {
             "call-6".into(),
             invocation,
             /*animations_enabled*/ true,
+            DisplayPreferences::default(),
         );
         assert!(
             cell.complete(Duration::from_millis(320), Ok(result))

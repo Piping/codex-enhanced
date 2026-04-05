@@ -53,6 +53,8 @@ use codex_config::types::SessionPickerViewMode;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverable;
+use codex_config::types::Tui;
+use codex_config::types::TuiDisplayPreferences;
 use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
 use codex_config::types::UriBasedFileOpener;
@@ -523,6 +525,9 @@ pub struct Config {
 
     /// Start the TUI in raw scrollback mode for copy-friendly transcript output.
     pub tui_raw_output_mode: bool,
+
+    /// Transcript visibility preferences that affect only local TUI rendering.
+    pub tui_display_preferences: TuiDisplayPreferences,
 
     /// Start the TUI in the specified collaboration mode (plan/default).
 
@@ -3179,6 +3184,11 @@ impl Config {
                 .as_ref()
                 .map(|t| t.raw_output_mode)
                 .unwrap_or(false),
+            tui_display_preferences: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.display_preferences.clone())
+                .unwrap_or_default(),
             tui_alternate_screen: cfg
                 .tui
                 .as_ref()
