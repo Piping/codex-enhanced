@@ -11,10 +11,13 @@ pub(crate) const DISPLAY_PREFERENCES_SELECTION_VIEW_ID: &str = "display-preferen
 pub(crate) fn display_preferences_items(
     display_preferences: &DisplayPreferences,
 ) -> Vec<SelectionItem> {
-    [DisplayPreferenceKey::RawThinking]
-        .into_iter()
-        .map(|key| display_preference_item(display_preferences, key))
-        .collect()
+    [
+        DisplayPreferenceKey::StartupTooltips,
+        DisplayPreferenceKey::RawThinking,
+    ]
+    .into_iter()
+    .map(|key| display_preference_item(display_preferences, key))
+    .collect()
 }
 
 pub(crate) fn display_preferences_panel_params(
@@ -43,6 +46,14 @@ fn display_preference_item(
 ) -> SelectionItem {
     let enabled = display_preferences.is_enabled(key);
     let (name, description) = match (key, enabled) {
+        (DisplayPreferenceKey::StartupTooltips, true) => (
+            "Hide Startup Tooltips",
+            "Currently visible. Hide first-run and local startup tooltip hints in this TUI.",
+        ),
+        (DisplayPreferenceKey::StartupTooltips, false) => (
+            "Show Startup Tooltips",
+            "Currently hidden. Restore first-run and local startup tooltip hints in this TUI.",
+        ),
         (DisplayPreferenceKey::RawThinking, true) => (
             "Hide Raw Thinking",
             "Currently visible. Hide raw reasoning text while keeping summaries.",
