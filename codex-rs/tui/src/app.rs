@@ -171,6 +171,7 @@ use uuid::Uuid;
 mod agent_navigation;
 mod app_server_adapter;
 pub(crate) mod app_server_requests;
+mod key_chord;
 mod loaded_threads;
 mod pending_interactive_replay;
 mod workflow_controls;
@@ -182,6 +183,9 @@ mod workflow_scheduler;
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
+use self::key_chord::KeyChordAction;
+use self::key_chord::KeyChordResolution;
+use self::key_chord::KeyChordState;
 use self::loaded_threads::find_loaded_subagent_threads_for_primary;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 use self::workflow_history::WorkflowHistoryState;
@@ -1081,6 +1085,7 @@ pub(crate) struct App {
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
+    key_chord: KeyChordState,
     /// When set, the next draw re-renders the transcript into terminal scrollback once.
     ///
     /// This is used after a confirmed thread rollback to ensure scrollback reflects the trimmed
@@ -4542,6 +4547,7 @@ impl App {
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
             terminal_title_invalid_items_warned: terminal_title_invalid_items_warned.clone(),
             backtrack: BacktrackState::default(),
+            key_chord: KeyChordState::default(),
             backtrack_render_pending: false,
             feedback: feedback.clone(),
             feedback_audience,
@@ -6805,12 +6811,57 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
+    fn handle_key_chord_key_event(&mut self, key_event: KeyEvent) -> Option<KeyEvent> {
+        if self.overlay.is_some()
+            || !self.chat_widget.no_modal_or_popup_active()
+            || self.chat_widget.external_editor_state() != ExternalEditorState::Closed
+        {
+            self.key_chord.clear();
+            return Some(key_event);
+        }
+
+        match self.key_chord.handle_key_event(key_event) {
+            KeyChordResolution::NoMatch => Some(key_event),
+            KeyChordResolution::AwaitingSecondKey | KeyChordResolution::Cancelled => None,
+            KeyChordResolution::Forward(forwarded_key_event) => Some(forwarded_key_event),
+            KeyChordResolution::Matched(action) => {
+                match action {
+                    KeyChordAction::UndoLastUserMessage => {
+                        self.undo_last_user_message();
+                    }
+                    KeyChordAction::CopyLatestOutput => {
+                        self.chat_widget.copy_latest_output_to_clipboard();
+                    }
+                    KeyChordAction::RespawnCurrentSession => {
+                        if self.chat_widget.can_run_respawn_now() {
+                            self.app_event_tx
+                                .send(AppEvent::Exit(ExitMode::RespawnImmediate));
+                        }
+                    }
+                }
+                None
+            }
+        }
+    }
+
     async fn handle_key_event(
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         key_event: KeyEvent,
     ) {
+        let mut key_event = key_event;
+        if matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && key_event.code != KeyCode::Esc
+            && self.backtrack.primed
+        {
+            self.reset_backtrack_state();
+        }
+        let Some(forwarded_key_event) = self.handle_key_chord_key_event(key_event) else {
+            return;
+        };
+        key_event = forwarded_key_event;
+
         // Some terminals, especially on macOS, encode Option+Left/Right as Option+b/f unless
         // enhanced keyboard reporting is available. We only treat those word-motion fallbacks as
         // agent-switch shortcuts when the composer is empty so we never steal the expected
@@ -6929,12 +6980,6 @@ impl App {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
-                // Any non-Esc key press should cancel a primed backtrack.
-                // This avoids stale "Esc-primed" state after the user starts typing
-                // (even if they later backspace to empty).
-                if key_event.code != KeyCode::Esc && self.backtrack.primed {
-                    self.reset_backtrack_state();
-                }
                 self.chat_widget.handle_key_event(key_event);
             }
             _ => {
@@ -10340,6 +10385,7 @@ guardian_approval = true
             status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            key_chord: KeyChordState::default(),
             backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
             feedback_audience: FeedbackAudience::External,
@@ -10398,6 +10444,7 @@ guardian_approval = true
                 status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
                 terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
                 backtrack: BacktrackState::default(),
+                key_chord: KeyChordState::default(),
                 backtrack_render_pending: false,
                 feedback: codex_feedback::CodexFeedback::new(),
                 feedback_audience: FeedbackAudience::External,
@@ -11850,6 +11897,155 @@ model = "gpt-5.2"
                 UserInput::Image { image_url } if image_url == &data_image_url
             )
         }));
+    }
+
+    #[tokio::test]
+    async fn undo_last_user_message_restores_latest_user_input_and_rolls_back_one_turn() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+
+        let remote_image_url = "https://example.com/latest.png".to_string();
+        app.transcript_cells = vec![
+            Arc::new(UserHistoryCell {
+                message: "first".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "latest".to_string(),
+                text_elements: vec![TextElement::new(
+                    codex_protocol::user_input::ByteRange { start: 0, end: 6 },
+                    Some("latest".to_string()),
+                )],
+                local_image_paths: Vec::new(),
+                remote_image_urls: vec![remote_image_url.clone()],
+            }) as Arc<dyn HistoryCell>,
+        ];
+        app.chat_widget
+            .set_composer_text("stale draft".to_string(), Vec::new(), Vec::new());
+
+        assert!(app.undo_last_user_message());
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "latest");
+        assert_eq!(app.chat_widget.remote_image_urls(), vec![remote_image_url]);
+
+        let mut rollback_turns = None;
+        while let Ok(op) = op_rx.try_recv() {
+            if let Op::ThreadRollback { num_turns } = op {
+                rollback_turns = Some(num_turns);
+            }
+        }
+
+        assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn ctrl_x_ctrl_u_triggers_undo_last_user_message() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        app.transcript_cells = vec![
+            Arc::new(UserHistoryCell {
+                message: "first".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "latest".to_string(),
+                text_elements: vec![TextElement::new(
+                    codex_protocol::user_input::ByteRange { start: 0, end: 6 },
+                    Some("latest".to_string()),
+                )],
+                local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+        ];
+
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('x'),
+                KeyModifiers::CONTROL,
+            )),
+            None
+        );
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('u'),
+                KeyModifiers::CONTROL,
+            )),
+            None
+        );
+
+        let mut rollback_turns = None;
+        while let Ok(op) = op_rx.try_recv() {
+            if let Op::ThreadRollback { num_turns } = op {
+                rollback_turns = Some(num_turns);
+            }
+        }
+
+        assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn ctrl_x_unknown_second_key_falls_through_to_composer_input() {
+        let mut app = make_test_app().await;
+
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('x'),
+                KeyModifiers::CONTROL,
+            )),
+            None
+        );
+        let forwarded =
+            app.handle_key_chord_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert_eq!(
+            forwarded,
+            Some(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE))
+        );
+    }
+
+    #[tokio::test]
+    async fn ctrl_x_ctrl_y_runs_copy_action_without_inserting_y_into_the_composer() {
+        let mut app = make_test_app().await;
+
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('x'),
+                KeyModifiers::CONTROL,
+            )),
+            None
+        );
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('y'),
+                KeyModifiers::CONTROL,
+            )),
+            None
+        );
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "");
     }
 
     #[tokio::test]

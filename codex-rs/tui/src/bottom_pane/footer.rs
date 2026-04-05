@@ -764,6 +764,9 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut external_editor = Line::from("");
     let mut edit_previous = Line::from("");
     let mut history_search = Line::from("");
+    let mut undo_last_message = Line::from("");
+    let mut copy_latest_output = Line::from("");
+    let mut respawn_current_session = Line::from("");
     let mut quit = Line::from("");
     let mut show_transcript = Line::from("");
     let mut change_mode = Line::from("");
@@ -780,6 +783,9 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::ExternalEditor => external_editor = text,
                 ShortcutId::EditPrevious => edit_previous = text,
                 ShortcutId::HistorySearch => history_search = text,
+                ShortcutId::UndoLastMessage => undo_last_message = text,
+                ShortcutId::CopyLatestOutput => copy_latest_output = text,
+                ShortcutId::RespawnCurrentSession => respawn_current_session = text,
                 ShortcutId::Quit => quit = text,
                 ShortcutId::ShowTranscript => show_transcript = text,
                 ShortcutId::ChangeMode => change_mode = text,
@@ -797,6 +803,9 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         external_editor,
         edit_previous,
         history_search,
+        undo_last_message,
+        copy_latest_output,
+        respawn_current_session,
         quit,
     ];
     if change_mode.width() > 0 {
@@ -880,6 +889,9 @@ enum ShortcutId {
     ExternalEditor,
     EditPrevious,
     HistorySearch,
+    UndoLastMessage,
+    CopyLatestOutput,
+    RespawnCurrentSession,
     Quit,
     ShowTranscript,
     ChangeMode,
@@ -922,6 +934,7 @@ struct ShortcutDescriptor {
     id: ShortcutId,
     bindings: &'static [ShortcutBinding],
     prefix: &'static str,
+    display_label: Option<&'static str>,
     label: &'static str,
 }
 
@@ -932,7 +945,12 @@ impl ShortcutDescriptor {
 
     fn overlay_entry(&self, state: ShortcutsState) -> Option<Line<'static>> {
         let binding = self.binding_for(state)?;
-        let mut line = Line::from(vec![self.prefix.into(), binding.key.into()]);
+        let mut line = Line::from(vec![self.prefix.into()]);
+        if let Some(display_label) = self.display_label {
+            line.push_span(display_label);
+        } else {
+            line.push_span(Span::from(binding.key));
+        }
         match self.id {
             ShortcutId::EditPrevious => {
                 if state.esc_backtrack_hint {
@@ -959,6 +977,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
             condition: DisplayCondition::Always,
         }],
         prefix: "",
+        display_label: None,
         label: " for commands",
     },
     ShortcutDescriptor {
@@ -968,6 +987,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
             condition: DisplayCondition::Always,
         }],
         prefix: "",
+        display_label: None,
         label: " for shell commands",
     },
     ShortcutDescriptor {
@@ -983,6 +1003,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
             },
         ],
         prefix: "",
+        display_label: None,
         label: " for newline",
     },
     ShortcutDescriptor {
@@ -992,6 +1013,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
             condition: DisplayCondition::Always,
         }],
         prefix: "",
+        display_label: None,
         label: " to queue message",
     },
     ShortcutDescriptor {
@@ -1001,6 +1023,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
             condition: DisplayCondition::Always,
         }],
         prefix: "",
+        display_label: None,
         label: " for file paths",
     },
     ShortcutDescriptor {
@@ -1018,6 +1041,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
             },
         ],
         prefix: "",
+        display_label: None,
         label: " to paste images",
     },
     ShortcutDescriptor {
@@ -1027,6 +1051,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
             condition: DisplayCondition::Always,
         }],
         prefix: "",
+        display_label: None,
         label: " to edit in external editor",
     },
     ShortcutDescriptor {
@@ -1036,6 +1061,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
             condition: DisplayCondition::Always,
         }],
         prefix: "",
+        display_label: None,
         label: "",
     },
     ShortcutDescriptor {
@@ -1045,7 +1071,38 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
             condition: DisplayCondition::Always,
         }],
         prefix: "",
+        display_label: None,
         label: " search history",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::UndoLastMessage,
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl(KeyCode::Char('x')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        display_label: Some("ctrl + x then ctrl + u"),
+        label: " to undo last message",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::CopyLatestOutput,
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl(KeyCode::Char('x')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        display_label: Some("ctrl + x then ctrl + y"),
+        label: " to copy last output",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::RespawnCurrentSession,
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl(KeyCode::Char('x')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        display_label: Some("ctrl + x then ctrl + r"),
+        label: " to restart Codex",
     },
     ShortcutDescriptor {
         id: ShortcutId::Quit,
@@ -1054,6 +1111,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
             condition: DisplayCondition::Always,
         }],
         prefix: "",
+        display_label: None,
         label: " to exit",
     },
     ShortcutDescriptor {
@@ -1063,6 +1121,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
             condition: DisplayCondition::Always,
         }],
         prefix: "",
+        display_label: None,
         label: " to view transcript",
     },
     ShortcutDescriptor {
@@ -1072,6 +1131,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
             condition: DisplayCondition::WhenCollaborationModesEnabled,
         }],
         prefix: "",
+        display_label: None,
         label: " to change mode",
     },
 ];
