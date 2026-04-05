@@ -14,6 +14,8 @@ pub(crate) fn display_preferences_items(
     [
         DisplayPreferenceKey::StartupTooltips,
         DisplayPreferenceKey::RawThinking,
+        DisplayPreferenceKey::ToolResults,
+        DisplayPreferenceKey::PatchDiffs,
     ]
     .into_iter()
     .map(|key| display_preference_item(display_preferences, key))
@@ -61,6 +63,22 @@ fn display_preference_item(
         (DisplayPreferenceKey::RawThinking, false) => (
             "Show Raw Thinking",
             "Currently hidden. Reveal raw reasoning text in this TUI only.",
+        ),
+        (DisplayPreferenceKey::ToolResults, true) => (
+            "Hide Tool Results",
+            "Currently visible. Collapse MCP/custom tool result bodies in transcript cells.",
+        ),
+        (DisplayPreferenceKey::ToolResults, false) => (
+            "Show Tool Results",
+            "Currently hidden. Reveal MCP/custom tool result bodies in transcript cells.",
+        ),
+        (DisplayPreferenceKey::PatchDiffs, true) => (
+            "Hide Patch Diffs",
+            "Currently visible. Collapse patch/edit diff summaries in transcript cells.",
+        ),
+        (DisplayPreferenceKey::PatchDiffs, false) => (
+            "Show Patch Diffs",
+            "Currently hidden. Reveal patch/edit diff summaries in transcript cells.",
         ),
     };
 

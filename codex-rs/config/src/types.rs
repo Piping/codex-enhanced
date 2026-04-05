@@ -450,6 +450,29 @@ pub struct ModelAvailabilityNuxConfig {
     pub shown_count: HashMap<String, u32>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiDisplayPreferences {
+    /// Show MCP/custom tool result bodies in transcript cells.
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub show_tool_results: bool,
+
+    /// Show patch/edit diff summaries in transcript cells.
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub show_patch_diffs: bool,
+}
+
+impl Default for TuiDisplayPreferences {
+    fn default() -> Self {
+        Self {
+            show_tool_results: true,
+            show_patch_diffs: true,
+        }
+    }
+}
+
 /// Collection of settings that are specific to the TUI.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -510,6 +533,10 @@ pub struct Tui {
     /// Startup tooltip availability NUX state persisted by the TUI.
     #[serde(default)]
     pub model_availability_nux: ModelAvailabilityNuxConfig,
+
+    /// Transcript visibility preferences that affect only local TUI rendering.
+    #[serde(default)]
+    pub display_preferences: TuiDisplayPreferences,
 }
 
 const fn default_true() -> bool {
