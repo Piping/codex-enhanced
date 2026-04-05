@@ -141,6 +141,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
@@ -164,6 +165,7 @@ use uuid::Uuid;
 mod agent_navigation;
 mod app_server_adapter;
 mod app_server_requests;
+mod btw;
 mod key_chord;
 mod loaded_threads;
 mod pending_interactive_replay;
@@ -176,6 +178,7 @@ mod workflow_scheduler;
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
+use self::btw::BtwSessionState;
 use self::key_chord::KeyChordAction;
 use self::key_chord::KeyChordResolution;
 use self::key_chord::KeyChordState;
@@ -1089,6 +1092,8 @@ pub(crate) struct App {
         HashMap<ThreadId, mpsc::UnboundedSender<ServerNotification>>,
     workflow_scheduler: WorkflowSchedulerState,
     workflow_history: WorkflowHistoryState,
+    btw_session: Option<BtwSessionState>,
+    btw_closing_thread_ids: HashSet<ThreadId>,
 }
 
 #[derive(Default)]
@@ -4378,6 +4383,8 @@ impl App {
             workflow_thread_notification_channels: HashMap::new(),
             workflow_scheduler: WorkflowSchedulerState::default(),
             workflow_history: WorkflowHistoryState::default(),
+            btw_session: None,
+            btw_closing_thread_ids: HashSet::new(),
         };
         if let Some(started) = initial_started_thread {
             app.enqueue_primary_thread_session(started.session, started.turns)
@@ -4833,6 +4840,25 @@ impl App {
             AppEvent::UnregisterWorkflowThreadNotificationForwarder { thread_id } => {
                 self.workflow_thread_notification_channels
                     .remove(&thread_id);
+            }
+            AppEvent::StartBtwDiscussion { prompt } => {
+                self.start_btw_discussion(app_server, prompt).await;
+            }
+            AppEvent::BtwCompleted { thread_id, result } => {
+                let is_error = result.is_err();
+                self.finish_btw_discussion(thread_id, result);
+                if is_error {
+                    self.close_btw_session(app_server).await;
+                }
+            }
+            AppEvent::BtwInsertSummary => {
+                self.insert_btw_summary(app_server).await;
+            }
+            AppEvent::BtwInsertFull => {
+                self.insert_btw_full(app_server).await;
+            }
+            AppEvent::BtwDiscard => {
+                self.discard_btw_session(app_server).await;
             }
             AppEvent::RetryLastUserTurnWithProfileFallback {
                 action,
@@ -9837,6 +9863,8 @@ guardian_approval = true
             workflow_thread_notification_channels: HashMap::new(),
             workflow_scheduler: WorkflowSchedulerState::default(),
             workflow_history: WorkflowHistoryState::default(),
+            btw_session: None,
+            btw_closing_thread_ids: HashSet::new(),
         }
     }
 
@@ -9894,9 +9922,11 @@ guardian_approval = true
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),
-                workflow_thread_notification_channels: HashMap::new(),
-                workflow_scheduler: WorkflowSchedulerState::default(),
-                workflow_history: WorkflowHistoryState::default(),
+            workflow_thread_notification_channels: HashMap::new(),
+            workflow_scheduler: WorkflowSchedulerState::default(),
+            workflow_history: WorkflowHistoryState::default(),
+            btw_session: None,
+            btw_closing_thread_ids: HashSet::new(),
             },
             rx,
             op_rx,
@@ -12393,6 +12423,60 @@ model = "gpt-5.2"
     }
 
     #[tokio::test]
+    async fn btw_completion_notification_emits_completion_event_and_is_swallowed() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        app.btw_session = Some(BtwSessionState {
+            thread_id,
+            final_message: None,
+        });
+
+        let swallowed = app.handle_btw_notification(
+            thread_id,
+            &turn_completed_notification_with_agent_message(
+                thread_id,
+                "turn-btw",
+                TurnStatus::Completed,
+                "Temporary answer",
+            ),
+        );
+
+        assert!(swallowed);
+        match app_event_rx.try_recv() {
+            Ok(AppEvent::BtwCompleted {
+                thread_id: actual_thread_id,
+                result: Ok(message),
+            }) => {
+                assert_eq!(actual_thread_id, thread_id);
+                assert_eq!(message, "Temporary answer");
+            }
+            other => panic!("expected BtwCompleted event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn btw_insert_summary_appends_to_existing_composer() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let thread_id = ThreadId::new();
+        app.btw_session = Some(BtwSessionState {
+            thread_id,
+            final_message: Some("First point.\n\nSecond point.".to_string()),
+        });
+        app.chat_widget
+            .set_composer_text("Existing draft".to_string(), Vec::new(), Vec::new());
+
+        app.insert_btw_summary(&mut app_server).await;
+
+        assert_eq!(
+            app.chat_widget.composer_text_with_pending(),
+            "Existing draft\n\nBTW summary:\nFirst point.\nSecond point."
+        );
+        assert!(app.btw_session.is_none());
+        Ok(())
+    }
+
     async fn shutdown_first_exit_returns_immediate_exit_when_shutdown_submit_fails() {
         let mut app = make_test_app().await;
         let thread_id = ThreadId::new();

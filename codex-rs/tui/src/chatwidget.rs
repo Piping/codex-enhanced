@@ -5409,6 +5409,9 @@ impl ChatWidget {
             SlashCommand::Workflow => {
                 self.app_event_tx.send(AppEvent::OpenWorkflowControls);
             }
+            SlashCommand::Btw => {
+                self.add_error_message("Usage: /btw <temporary discussion prompt>".to_string());
+            }
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {
                     self.add_info_message(
@@ -5581,6 +5584,18 @@ impl ChatWidget {
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot {
                         path: prepared_args,
                     });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::Btw if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
+                else {
+                    return;
+                };
+                self.app_event_tx.send(AppEvent::StartBtwDiscussion {
+                    prompt: prepared_args,
+                });
                 self.bottom_pane.drain_pending_submission_state();
             }
             _ => self.dispatch_command(cmd),

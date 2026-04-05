@@ -1,0 +1,61 @@
+---
+source: tui/src/app/btw.rs
+expression: "render_selection_popup(&view, 92, 28)"
+---
+TestBackend { buffer: Buffer {
+    area: Rect { x: 0, y: 0, width: 92, height: 28 },
+    content: [
+        "                                                                                            ",
+        "  Temporary BTW answer                         Use a hidden thread to brainstorm            ",
+        "  Choose what to do with the temporary answer  tradeoffs, then choose whether to insert     ",
+        "                                               the summary or the full answer back into     ",
+        "› 1. Insert Summary  Insert a short summary    the main composer.                           ",
+        "                     into the main composer.                                                ",
+        "  2. Insert Full     Insert the full answer                                                 ",
+        "                     into the main composer.                                                ",
+        "  3. Discard         Destroy the temporary                                                  ",
+        "                     discussion and keep the                                                ",
+        "                     main composer untouched.                                               ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "  Press enter to confirm or esc to go back                                                  ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 22, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 45, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 4, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 43, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 5, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 44, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 21, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 43, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 21, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 44, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 21, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 42, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 21, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 44, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 21, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 45, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 27, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+    ]
+}, scrollback: Buffer {
+    area: Rect { x: 0, y: 0, width: 92, height: 0 }
+}, cursor: false, pos: (0, 0) }
