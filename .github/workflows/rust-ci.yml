@@ -164,6 +164,8 @@ jobs:
       - name: Run argument comment lint on codex-rs via Bazel
         if: ${{ steps.argument_comment_lint_gate.outputs.run == 'true' }}
         uses: ./.github/actions/run-argument-comment-lint
+        env:
+          CODEX_BAZEL_FORCE_LOCAL: ${{ github.repository != 'openai/codex' && '1' || '0' }}
         with:
           target: ${{ runner.os }}
           buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}

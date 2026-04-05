@@ -382,7 +382,26 @@ if (( ${#bazel_startup_args[@]} > 0 )); then
   bazel_cmd+=("${bazel_startup_args[@]}")
 fi
 
-if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+if [[ "${CODEX_BAZEL_FORCE_LOCAL:-0}" == "1" ]]; then
+  echo "CODEX_BAZEL_FORCE_LOCAL=1; using local Bazel configuration."
+  bazel_run_args=(
+    "${bazel_args[@]}"
+    --remote_cache=
+    --remote_executor=
+  )
+  if (( ${#post_config_bazel_args[@]} > 0 )); then
+    bazel_run_args+=("${post_config_bazel_args[@]}")
+  fi
+  set +e
+  run_bazel "${bazel_cmd[@]:1}" \
+    --noexperimental_remote_repo_contents_cache \
+    "${bazel_run_args[@]}" \
+    -- \
+    "${bazel_targets[@]}" \
+    2>&1 | tee "$bazel_console_log"
+  bazel_status=${PIPESTATUS[0]}
+  set -e
+elif [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   echo "BuildBuddy API key is available; using remote Bazel configuration."
   # Work around Bazel 9 remote repo contents cache / overlay materialization failures
   # seen in CI (for example "is not a symlink" or permission errors while
