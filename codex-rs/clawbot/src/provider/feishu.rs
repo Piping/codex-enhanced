@@ -1,4 +1,5 @@
 mod runtime_loop;
+mod sync;
 
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -114,6 +115,14 @@ impl FeishuProviderRuntime {
                 response.msg()
             ))
         }
+    }
+
+    pub async fn scan_sessions(&self) -> Result<Vec<ProviderEvent>> {
+        let sessions = sync::discover_private_sessions(&self.messaging_config()?).await?;
+        Ok(sessions
+            .into_iter()
+            .map(ProviderEvent::SessionUpserted)
+            .collect())
     }
 
     pub fn normalize_private_chat_message(

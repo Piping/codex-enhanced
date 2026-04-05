@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -12,6 +13,7 @@ use crate::model::ClawbotSnapshot;
 use crate::model::ForwardingDirection;
 use crate::model::ForwardingState;
 use crate::model::InboundMessageReceipt;
+use crate::model::ProviderKind;
 use crate::model::ProviderSession;
 use crate::model::ProviderSessionRef;
 use crate::model::SessionBinding;
@@ -66,6 +68,47 @@ impl ClawbotRuntime {
     pub fn update_turn_mode(&mut self, mode: ClawbotTurnMode) -> Result<&ClawbotSnapshot> {
         self.snapshot.config.turn_mode = mode;
         self.store.save_config(&self.snapshot.config)?;
+        self.reload()
+    }
+
+    pub async fn scan_feishu_sessions(&mut self) -> Result<&ClawbotSnapshot> {
+        let provider = self
+            .feishu_provider()
+            .context("Feishu credentials are not configured")?;
+        for event in provider.scan_sessions().await? {
+            self.apply_provider_event(event)?;
+        }
+        self.reload()
+    }
+
+    pub fn clear_unbound_feishu_sessions(&mut self) -> Result<&ClawbotSnapshot> {
+        let bound_sessions = self
+            .store
+            .load_bindings()?
+            .into_iter()
+            .map(|binding| binding.session_ref())
+            .collect::<HashSet<_>>();
+        let sessions = self
+            .store
+            .load_sessions()?
+            .into_iter()
+            .filter(|session| {
+                session.provider != ProviderKind::Feishu
+                    || bound_sessions.contains(&session.session_ref())
+            })
+            .collect::<Vec<_>>();
+        let unread_messages = self
+            .store
+            .load_unread_messages()?
+            .into_iter()
+            .filter(|message| {
+                message.provider != ProviderKind::Feishu
+                    || bound_sessions.contains(&message.session_ref())
+            })
+            .collect::<Vec<_>>();
+
+        self.store.save_sessions(&sessions)?;
+        self.store.save_unread_messages(&unread_messages)?;
         self.reload()
     }
 
@@ -341,6 +384,7 @@ mod tests {
     use crate::config::ClawbotTurnMode;
     use crate::config::FeishuConfig;
     use crate::events::ProviderInboundMessage;
+    use crate::model::CachedUnreadMessage;
     use crate::model::ConnectionStatus;
     use crate::model::ForwardingDirection;
     use crate::model::ForwardingState;
@@ -577,6 +621,75 @@ mod tests {
                 created_at: runtime.snapshot().bindings[0].created_at,
                 updated_at: runtime.snapshot().bindings[0].updated_at,
             }
+        );
+    }
+
+    #[test]
+    fn clear_unbound_feishu_sessions_removes_unbound_sessions_and_unread_cache() {
+        let tempdir = tempdir().expect("tempdir");
+        let mut runtime = ClawbotRuntime::load(tempdir.path().to_path_buf()).expect("runtime");
+        let bound_session = ProviderSessionRef::new(ProviderKind::Feishu, "chat_bound");
+        let unbound_session = ProviderSessionRef::new(ProviderKind::Feishu, "chat_unbound");
+
+        runtime
+            .connect_session_to_thread(&bound_session, "thread_3".to_string())
+            .expect("bind session");
+        runtime
+            .persist_session(ProviderSession {
+                provider: ProviderKind::Feishu,
+                session_id: "chat_unbound".to_string(),
+                display_name: Some("Unbound".to_string()),
+                unread_count: 0,
+                last_message_at: None,
+                status: SessionStatus::Discovered,
+                bound_thread_id: None,
+            })
+            .expect("persist unbound session");
+        runtime
+            .apply_provider_event(ProviderEvent::InboundMessage(ProviderInboundMessage {
+                session: bound_session.clone(),
+                message_id: "msg_bound".to_string(),
+                text: "bound".to_string(),
+                received_at: 1,
+            }))
+            .expect("bound unread");
+        runtime
+            .apply_provider_event(ProviderEvent::InboundMessage(ProviderInboundMessage {
+                session: unbound_session,
+                message_id: "msg_unbound".to_string(),
+                text: "unbound".to_string(),
+                received_at: 2,
+            }))
+            .expect("unbound unread");
+
+        runtime
+            .clear_unbound_feishu_sessions()
+            .expect("clear unbound sessions");
+
+        assert_eq!(
+            runtime.snapshot().sessions,
+            vec![ProviderSession {
+                provider: ProviderKind::Feishu,
+                session_id: "chat_bound".to_string(),
+                display_name: None,
+                unread_count: 1,
+                last_message_at: Some(1),
+                status: SessionStatus::Bound,
+                bound_thread_id: Some("thread_3".to_string()),
+            }]
+        );
+        assert_eq!(
+            runtime
+                .store()
+                .load_unread_messages()
+                .expect("unread messages"),
+            vec![CachedUnreadMessage {
+                provider: ProviderKind::Feishu,
+                session_id: "chat_bound".to_string(),
+                message_id: "msg_bound".to_string(),
+                text: "bound".to_string(),
+                received_at: 1,
+            }]
         );
     }
 }
