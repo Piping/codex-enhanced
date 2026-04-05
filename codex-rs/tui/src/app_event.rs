@@ -26,6 +26,7 @@ use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
+use codex_app_server_protocol::ServerNotification;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
@@ -542,6 +543,15 @@ pub(crate) enum AppEvent {
         result: Box<BackgroundWorkflowRunResult>,
     },
 
+    RegisterWorkflowThreadNotificationForwarder {
+        thread_id: ThreadId,
+        sender: tokio::sync::mpsc::UnboundedSender<ServerNotification>,
+        ready_tx: tokio::sync::oneshot::Sender<()>,
+    },
+
+    UnregisterWorkflowThreadNotificationForwarder {
+        thread_id: ThreadId,
+    },
     OpenWorkflowControls,
 
     StartManualWorkflowTrigger {
