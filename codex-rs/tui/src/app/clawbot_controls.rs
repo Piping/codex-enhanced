@@ -258,6 +258,19 @@ impl App {
         }
         let session = ProviderSessionRef::new(ProviderKind::Feishu, trimmed.clone());
         let mut runtime = ClawbotRuntime::load(self.config.cwd.to_path_buf())?;
+        if runtime.snapshot().config.feishu.is_some() {
+            runtime.scan_feishu_sessions().await?;
+            if !runtime
+                .snapshot()
+                .sessions
+                .iter()
+                .any(|existing| existing.session_ref() == session)
+            {
+                return Err(anyhow::anyhow!(
+                    "Feishu session {trimmed} is not visible to the current bot"
+                ));
+            }
+        }
         runtime.connect_session_to_thread(&session, thread_id.to_string())?;
         self.refresh_clawbot_provider_runtime()?;
         self.dispatch_next_clawbot_message(app_server, &session)

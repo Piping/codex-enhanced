@@ -60,6 +60,12 @@ impl App {
             self.clawbot_workspace_root = Some(workspace_root.clone());
             self.clawbot_pending_turns.clear();
             self.refresh_clawbot_provider_runtime()?;
+            if let Ok(mut runtime) = ClawbotRuntime::load(workspace_root.clone())
+                && runtime.snapshot().config.feishu.is_some()
+                && let Err(err) = runtime.scan_feishu_sessions().await
+            {
+                tracing::warn!(error = %err, "failed to refresh clawbot Feishu sessions");
+            }
         }
 
         let runtime = ClawbotRuntime::load(workspace_root)?;
