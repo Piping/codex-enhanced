@@ -1,6 +1,7 @@
 use anyhow::Context;
 use anyhow::Result;
 use codex_clawbot::ClawbotRuntime;
+use codex_clawbot::ClawbotTurnMode;
 use codex_clawbot::ConnectionStatus;
 use codex_clawbot::FeishuConfig;
 use codex_clawbot::ForwardingDirection;
@@ -228,6 +229,20 @@ impl App {
         Ok(())
     }
 
+    pub(crate) fn save_clawbot_turn_mode(&mut self, mode: ClawbotTurnMode) -> Result<()> {
+        let mut runtime = ClawbotRuntime::load(self.config.cwd.to_path_buf())?;
+        runtime.update_turn_mode(mode)?;
+        self.open_clawbot_management_popup();
+        self.chat_widget.add_info_message(
+            format!(
+                "Clawbot turn mode set to {}.",
+                clawbot_turn_mode_label(mode)
+            ),
+            /*hint*/ None,
+        );
+        Ok(())
+    }
+
     pub(crate) async fn save_clawbot_manual_bind_session_id(
         &mut self,
         app_server: &mut AppServerSession,
@@ -340,7 +355,31 @@ impl App {
                 .iter()
                 .find(|binding| binding.thread_id == thread_id)
         });
+        let turn_mode = snapshot.config.turn_mode;
+        let next_turn_mode = match turn_mode {
+            ClawbotTurnMode::Interactive => ClawbotTurnMode::NonInteractive,
+            ClawbotTurnMode::NonInteractive => ClawbotTurnMode::Interactive,
+        };
         let mut items = vec![
+            SelectionItem {
+                name: "Turn Mode".to_string(),
+                description: Some(clawbot_turn_mode_summary(turn_mode)),
+                selected_description: Some(match turn_mode {
+                    ClawbotTurnMode::Interactive => {
+                        "Switch clawbot-originated turns into non-interactive mode so remote sessions do not block on prompts.".to_string()
+                    }
+                    ClawbotTurnMode::NonInteractive => {
+                        "Restore normal interactive prompt handling for clawbot-originated turns.".to_string()
+                    }
+                }),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::ClawbotSetTurnMode {
+                        mode: next_turn_mode,
+                    });
+                })],
+                dismiss_on_select: false,
+                ..Default::default()
+            },
             clawbot_config_item(ClawbotFeishuConfigField::AppId, feishu_config),
             clawbot_config_item(ClawbotFeishuConfigField::AppSecret, feishu_config),
             clawbot_config_item(ClawbotFeishuConfigField::VerificationToken, feishu_config),
@@ -473,6 +512,25 @@ fn connection_description(state: &ProviderRuntimeState) -> String {
             format!("{status}: {}", truncate_value(error, 48))
         }
         _ => status.to_string(),
+    }
+}
+
+fn clawbot_turn_mode_label(mode: ClawbotTurnMode) -> &'static str {
+    match mode {
+        ClawbotTurnMode::Interactive => "interactive",
+        ClawbotTurnMode::NonInteractive => "non-interactive",
+    }
+}
+
+fn clawbot_turn_mode_summary(mode: ClawbotTurnMode) -> String {
+    match mode {
+        ClawbotTurnMode::Interactive => {
+            "interactive: clawbot turns may surface question and approval prompts.".to_string()
+        }
+        ClawbotTurnMode::NonInteractive => {
+            "non-interactive: clawbot turns auto-dismiss question and permission prompts."
+                .to_string()
+        }
     }
 }
 
