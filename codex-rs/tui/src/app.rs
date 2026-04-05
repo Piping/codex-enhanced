@@ -205,6 +205,7 @@ mod input;
 mod clawbot;
 mod jump_navigation;
 mod key_chord;
+mod clawbot_controls;
 mod loaded_threads;
 mod pending_interactive_replay;
 mod platform_actions;
@@ -5096,6 +5097,49 @@ See the Codex keymap documentation for supported actions and examples."
                         .add_error_message(format!("Clawbot turn forwarding failed: {err}"));
                 }
             }
+            AppEvent::OpenClawbotManagement => {
+                self.open_clawbot_management_popup();
+            }
+            AppEvent::OpenClawbotFeishuConfigPrompt { field } => {
+                self.open_clawbot_feishu_config_prompt(field);
+            }
+            AppEvent::SaveClawbotFeishuConfigValue { field, value } => {
+                if let Err(err) = self.save_clawbot_feishu_config_value(field, value) {
+                    self.chat_widget
+                        .add_error_message(format!("Failed to save Clawbot config: {err}"));
+                }
+            }
+            AppEvent::OpenClawbotManualBindPrompt => {
+                self.open_clawbot_manual_bind_prompt();
+            }
+            AppEvent::SaveClawbotManualBindSessionId { session_id } => {
+                if let Err(err) = self
+                    .save_clawbot_manual_bind_session_id(app_server, session_id)
+                    .await
+                {
+                    self.chat_widget
+                        .add_error_message(format!("Failed to bind Clawbot session: {err}"));
+                }
+            }
+            AppEvent::ClawbotDisconnectCurrentThread => {
+                if let Err(err) = self.clawbot_disconnect_current_thread() {
+                    self.chat_widget
+                        .add_error_message(format!("Failed to disconnect Clawbot binding: {err}"));
+                }
+            }
+            AppEvent::ClawbotSetCurrentThreadForwarding { channel, enabled } => {
+                if let Err(err) = self.clawbot_set_current_thread_forwarding(channel, enabled) {
+                    self.chat_widget
+                        .add_error_message(format!("Failed to update Clawbot forwarding: {err}"));
+                }
+            }
+            AppEvent::RetryClawbotFeishuConnection => {
+                if let Err(err) = self.retry_clawbot_feishu_connection() {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to restart Clawbot Feishu runtime: {err}"
+                    ));
+                }
+            }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
                     tui.frame_requester().schedule_frame();
@@ -7236,6 +7280,7 @@ mod tests {
     use crate::legacy_core::config::ConfigBuilder;
     use crate::legacy_core::config::ConfigOverrides;
     use crate::render::renderable::Renderable;
+    use crate::app_event::ClawbotForwardingChannel;
     use codex_app_server_protocol::AdditionalFileSystemPermissions;
     use codex_app_server_protocol::AdditionalNetworkPermissions;
     use codex_app_server_protocol::AdditionalPermissionProfile;
@@ -7315,6 +7360,9 @@ mod tests {
     use codex_utils_absolute_path::AbsolutePathBuf;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use crate::render::renderable::Renderable;
     use pretty_assertions::assert_eq;
 
     use ratatui::prelude::Line;
@@ -10594,6 +10642,38 @@ jobs:
         app.sync_clawbot_workspace(app_server).await;
         Ok((thread_id, session))
     }
+
+    fn render_bottom_popup(chat: &crate::chatwidget::ChatWidget, width: u16) -> String {
+        let height = chat.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        chat.render(area, &mut buf);
+
+        let mut lines: Vec<String> = (0..area.height)
+            .map(|row| {
+                let mut line = String::new();
+                for col in 0..area.width {
+                    let symbol = buf[(area.x + col, area.y + row)].symbol();
+                    if symbol.is_empty() {
+                        line.push(' ');
+                    } else {
+                        line.push_str(symbol);
+                    }
+                }
+                line.trim_end().to_string()
+            })
+            .collect();
+
+        while lines.first().is_some_and(|line| line.trim().is_empty()) {
+            lines.remove(0);
+        }
+        while lines.last().is_some_and(|line| line.trim().is_empty()) {
+            lines.pop();
+        }
+
+        lines.join("\n")
+    }
+
     fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {
         ThreadSessionState {
             thread_id,
@@ -12771,6 +12851,58 @@ model = "gpt-5.2"
     }
 
     #[tokio::test]
+    async fn clawbot_manual_bind_replays_cached_unread_messages() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start thread");
+        let thread_id = started.session.thread_id;
+        app.active_thread_id = Some(thread_id);
+
+        let session = ProviderSessionRef::new(ClawbotProviderKind::Feishu, "chat_bind");
+        let mut runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+        runtime
+            .apply_provider_event(ClawbotProviderEvent::InboundMessage(
+                codex_clawbot::ProviderInboundMessage {
+                    session: session.clone(),
+                    message_id: "msg_1".to_string(),
+                    text: "queued before bind".to_string(),
+                    received_at: 1,
+                },
+            ))
+            .expect("queue unread");
+
+        app.save_clawbot_manual_bind_session_id(&mut app_server, "chat_bind".to_string())
+            .await
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+
+        let runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+        assert_eq!(
+            runtime
+                .bound_session_for_thread(&thread_id.to_string())
+                .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?,
+            Some(session)
+        );
+        assert_eq!(
+            app.clawbot_pending_turns
+                .get(&thread_id)
+                .map(std::collections::VecDeque::len),
+            Some(1)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn before_turn_workflow_augments_primary_user_turn() -> Result<()> {
         let mut app = make_test_app().await;
         let mut app_server =
@@ -13176,6 +13308,81 @@ model = "gpt-5.2"
             }
             other => panic!("expected forwarded workflow notification, got {other:?}"),
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn clawbot_current_thread_controls_update_binding_state() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+
+        let (thread_id, _session) =
+            bind_test_clawbot_session(&mut app, &mut app_server, "chat_controls").await?;
+        app.active_thread_id = Some(thread_id);
+
+        app.clawbot_set_current_thread_forwarding(ClawbotForwardingChannel::Inbound, false)
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+        app.clawbot_set_current_thread_forwarding(ClawbotForwardingChannel::Outbound, false)
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+
+        let runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+        let binding = runtime
+            .load_binding_for_thread(&thread_id.to_string())
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?
+            .expect("binding");
+        assert!(!binding.inbound_forwarding_enabled);
+        assert!(!binding.outbound_forwarding_enabled);
+
+        app.clawbot_disconnect_current_thread()
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+        let runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+        assert_eq!(
+            runtime
+                .load_binding_for_thread(&thread_id.to_string())
+                .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?,
+            None
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn clawbot_management_popup_snapshot() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+
+        let (thread_id, _session) =
+            bind_test_clawbot_session(&mut app, &mut app_server, "chat_snapshot").await?;
+        app.active_thread_id = Some(thread_id);
+
+        let mut runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+        runtime
+            .update_feishu_config(Some(codex_clawbot::FeishuConfig {
+                app_id: "cli_app_123".to_string(),
+                app_secret: "secret_value_4567".to_string(),
+                verification_token: Some("verify_token".to_string()),
+                encrypt_key: None,
+                bot_open_id: Some("ou_bot_open_id".to_string()),
+                bot_user_id: None,
+            }))
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+
+        app.open_clawbot_management_popup();
+
+        let popup = render_bottom_popup(&app.chat_widget, /*width*/ 100);
+        assert_snapshot!("clawbot_management_popup", popup);
         Ok(())
     }
 

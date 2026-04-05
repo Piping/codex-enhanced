@@ -98,6 +98,22 @@ pub(crate) enum RuntimeProfileTarget {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClawbotFeishuConfigField {
+    AppId,
+    AppSecret,
+    VerificationToken,
+    EncryptKey,
+    BotOpenId,
+    BotUserId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClawbotForwardingChannel {
+    Inbound,
+    Outbound,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) enum WindowsSandboxEnableMode {
     Elevated,
@@ -627,6 +643,31 @@ pub(crate) enum AppEvent {
         turn: AppServerTurn,
     },
 
+    OpenClawbotManagement,
+
+    OpenClawbotFeishuConfigPrompt {
+        field: ClawbotFeishuConfigField,
+    },
+
+    SaveClawbotFeishuConfigValue {
+        field: ClawbotFeishuConfigField,
+        value: String,
+    },
+
+    OpenClawbotManualBindPrompt,
+
+    SaveClawbotManualBindSessionId {
+        session_id: String,
+    },
+
+    ClawbotDisconnectCurrentThread,
+
+    ClawbotSetCurrentThreadForwarding {
+        channel: ClawbotForwardingChannel,
+        enabled: bool,
+    },
+
+    RetryClawbotFeishuConnection,
     /// Apply rollback semantics to local transcript cells.
     ///
     /// This is emitted when rollback was not initiated by the current

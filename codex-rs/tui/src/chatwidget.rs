@@ -51,6 +51,7 @@ use crate::approval_events::ApplyPatchApprovalRequestEvent;
 use crate::approval_events::ExecApprovalRequestEvent;
 #[cfg(not(target_os = "linux"))]
 use crate::audio_device::list_realtime_audio_device_names;
+use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLineSetupView;
 use crate::bottom_pane::StatusSurfacePreviewData;
@@ -5493,6 +5494,10 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
+        self.bottom_pane.show_view(view);
+        self.request_redraw();
+    }
     pub(crate) fn replace_selection_view_if_active(
         &mut self,
         view_id: &'static str,
@@ -5510,7 +5515,6 @@ impl ChatWidget {
     pub(crate) fn selected_index_for_active_view(&self, view_id: &'static str) -> Option<usize> {
         self.bottom_pane.selected_index_for_active_view(view_id)
     }
-
     pub(crate) fn no_modal_or_popup_active(&self) -> bool {
         self.bottom_pane.no_modal_or_popup_active()
     }
@@ -5688,6 +5692,9 @@ impl ChatWidget {
             }
             SlashCommand::Settings => {
                 self.open_settings_popup();
+            }
+            SlashCommand::Clawbot => {
+                self.app_event_tx.send(AppEvent::OpenClawbotManagement);
             }
             SlashCommand::Personality => {
                 self.open_personality_popup();

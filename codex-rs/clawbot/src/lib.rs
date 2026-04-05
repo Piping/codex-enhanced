@@ -18,6 +18,8 @@ pub use model::CLAWBOT_UNREAD_MESSAGES_RELATIVE_PATH;
 pub use model::CachedUnreadMessage;
 pub use model::ClawbotSnapshot;
 pub use model::ConnectionStatus;
+pub use model::ForwardingDirection;
+pub use model::ForwardingState;
 pub use model::ProviderKind;
 pub use model::ProviderRuntimeState;
 pub use model::ProviderSession;

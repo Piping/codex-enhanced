@@ -22,4 +22,25 @@ impl FeishuConfig {
     pub fn has_api_credentials(&self) -> bool {
         !self.app_id.trim().is_empty() && !self.app_secret.trim().is_empty()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.app_id.trim().is_empty()
+            && self.app_secret.trim().is_empty()
+            && self
+                .verification_token
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            && self
+                .encrypt_key
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            && self
+                .bot_open_id
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            && self
+                .bot_user_id
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+    }
 }
