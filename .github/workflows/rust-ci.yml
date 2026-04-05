@@ -130,23 +130,11 @@ jobs:
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     needs: changed
-    if: ${{ (needs.changed.outputs.argument_comment_lint == 'true' || needs.changed.outputs.workflows == 'true') && (github.repository == 'openai/codex' || matrix.name == 'Linux') }}
+    if: ${{ needs.changed.outputs.argument_comment_lint == 'true' || needs.changed.outputs.workflows == 'true' }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: Linux
-            runner: ubuntu-24.04
-            timeout_minutes: 30
-          - name: macOS
-            runner: macos-15-xlarge
-            timeout_minutes: 30
-          - name: Windows
-            runner: windows-x64
-            timeout_minutes: 30
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+        include: ${{ fromJSON(github.repository == 'openai/codex' && '[{"name":"Linux","runner":"ubuntu-24.04","timeout_minutes":30},{"name":"macOS","runner":"macos-15-xlarge","timeout_minutes":30},{"name":"Windows","runner":"windows-x64","timeout_minutes":30,"runs_on":{"group":"codex-runners","labels":"codex-windows-x64"}}]' || '[{"name":"Linux","runner":"ubuntu-24.04","timeout_minutes":30}]') }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-bazel-ci
