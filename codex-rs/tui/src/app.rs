@@ -6,6 +6,7 @@ use crate::app_event::ExitMode;
 use crate::app_event::FeedbackCategory;
 use crate::app_event::RateLimitRefreshOrigin;
 use crate::app_event::RealtimeAudioDeviceKind;
+use crate::app_event::RuntimeProfileTarget;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -187,6 +188,7 @@ mod workflow_definition;
 mod workflow_history;
 pub(crate) mod workflow_runtime;
 mod workflow_scheduler;
+mod profile_management;
 mod thread_menu;
 
 use self::agent_navigation::AgentNavigationDirection;
@@ -1291,6 +1293,7 @@ impl App {
         if !reload_live_thread || self.chat_widget.thread_id().is_none() {
             self.active_profile = next_config.active_profile.clone();
             self.config = next_config;
+            self.display_preferences.sync_from_config(&self.config);
             self.chat_widget
                 .sync_config_for_profile_switch(&self.config);
             tui.set_notification_method(self.config.tui_notification_method);
@@ -1327,9 +1330,9 @@ impl App {
                 format!("Failed to start a fresh session after switching profiles: {err}")
             })?
         };
-
         self.active_profile = next_config.active_profile.clone();
         self.config = next_config;
+        self.display_preferences.sync_from_config(&self.config);
         tui.set_notification_method(self.config.tui_notification_method);
         self.file_search
             .update_search_dir(self.config.cwd.to_path_buf());
@@ -1428,20 +1431,19 @@ impl App {
         }
         Ok(())
     }
-
     async fn switch_runtime_profile(
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
-        profile_id: &str,
+        profile_id: Option<&str>,
     ) -> std::result::Result<(), String> {
-        if self.active_profile.as_deref() == Some(profile_id) {
+        if self.active_profile.as_deref() == profile_id {
             return Ok(());
         }
 
         let previous_override = self.harness_overrides.config_profile.clone();
         let previous_active_profile = self.active_profile.clone();
-        self.harness_overrides.config_profile = Some(profile_id.to_string());
+        self.harness_overrides.config_profile = profile_id.map(ToOwned::to_owned);
 
         let current_cwd = self.chat_widget.config_ref().cwd.to_path_buf();
         let mut next_config = match self.rebuild_config_for_cwd(current_cwd).await {
@@ -1568,7 +1570,6 @@ impl App {
             }
         }
     }
-
     async fn rebuild_config_for_resume_or_fallback(
         &mut self,
         current_cwd: &Path,
@@ -5041,6 +5042,9 @@ impl App {
             AppEvent::OpenDisplayPreferencesPanel => {
                 self.open_display_preferences_panel();
             }
+            AppEvent::OpenProfileManagementPanel => {
+                self.open_profile_management_panel();
+            }
             AppEvent::OpenThreadPanel => {
                 self.open_thread_panel();
             }
@@ -5124,6 +5128,38 @@ impl App {
             }
             AppEvent::UndoLastUserMessage => {
                 self.undo_last_user_message();
+            }
+            AppEvent::SwitchRuntimeProfile { target } => {
+                let is_default_target = matches!(&target, RuntimeProfileTarget::Default);
+                let target_profile = match &target {
+                    RuntimeProfileTarget::Default => None,
+                    RuntimeProfileTarget::Named(profile_id) => Some(profile_id.as_str()),
+                };
+                let target_label = target_profile.unwrap_or("default");
+                if let Err(err) = self
+                    .switch_runtime_profile(tui, app_server, target_profile)
+                    .await
+                {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to switch to profile `{target_label}`: {err}"
+                    ));
+                } else if let Err(err) = self.profile_router_store().update(|state| {
+                    state.set_runtime_active_profile(target_profile);
+                }) {
+                    self.chat_widget.add_error_message(format!(
+                        "Switched to profile `{target_label}`, but failed to persist {PROFILE_ROUTER_STATE_RELATIVE_PATH}: {err}"
+                    ));
+                } else if is_default_target {
+                    self.chat_widget.add_info_message(
+                        "Switched to the default config profile.".to_string(),
+                        /*hint*/ None,
+                    );
+                } else {
+                    self.chat_widget.add_info_message(
+                        format!("Switched to profile `{target_label}`."),
+                        /*hint*/ None,
+                    );
+                }
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();

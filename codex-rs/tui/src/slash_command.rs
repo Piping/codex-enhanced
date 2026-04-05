@@ -29,6 +29,7 @@ pub enum SlashCommand {
     Resume,
     Fork,
     Thread,
+    Profile,
     Init,
     Compact,
     Plan,
@@ -84,6 +85,7 @@ impl SlashCommand {
             SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Fork => "fork the current chat",
             SlashCommand::Thread => "open thread actions for the current conversation",
+            SlashCommand::Profile => "show and switch routed API profiles",
             // SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
             SlashCommand::Copy => "copy last response as markdown",
@@ -185,6 +187,7 @@ impl SlashCommand {
             | SlashCommand::Plugins
             | SlashCommand::Workflow
             | SlashCommand::Thread
+            | SlashCommand::Profile
             | SlashCommand::Feedback
             | SlashCommand::Quit
             | SlashCommand::Exit => true,

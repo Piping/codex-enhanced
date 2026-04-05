@@ -1,0 +1,55 @@
+---
+source: tui/src/app/profile_management.rs
+expression: "render_selection_popup(&view, 96, 22)"
+---
+TestBackend { buffer: Buffer {
+    area: Rect { x: 0, y: 0, width: 96, height: 22 },
+    content: [
+        "                                                                                                ",
+        "  Profiles                                                                                      ",
+        "  Current: primary · 2 named profile(s) · 2 routed fallback entries.                            ",
+        "                                                                                                ",
+        "  Type to search profiles                                                                       ",
+        "› Default Config                Reload the current session with this profile while preserving   ",
+        "                                input continuity.                                               ",
+        "  primary (current) (disabled)  provider: OpenAI · https://api.primary.example/v1 · model:      ",
+        "                                gpt-5 · fallback #1 (disabled: Already active.)                 ",
+        "  secondary                     provider: OpenAI · https://api.secondary.example/v1 · model:    ",
+        "                                gpt-5 · fallback #2                                             ",
+        "                                                                                                ",
+        "                                                                                                ",
+        "                                                                                                ",
+        "                                                                                                ",
+        "                                                                                                ",
+        "                                                                                                ",
+        "                                                                                                ",
+        "                                                                                                ",
+        "                                                                                                ",
+        "                                                                                                ",
+        "  Press enter to confirm or esc to go back                                                      ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 10, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 68, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 25, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 5, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 93, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 6, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 49, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 90, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 79, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 32, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 92, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 32, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 51, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 21, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+    ]
+}, scrollback: Buffer {
+    area: Rect { x: 0, y: 0, width: 96, height: 0 }
+}, cursor: false, pos: (0, 0) }
