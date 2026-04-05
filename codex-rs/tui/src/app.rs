@@ -132,6 +132,8 @@ use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
 use codex_config::ConfigLayerStackOrdering;
+#[cfg(test)]
+use codex_clawbot::ProviderOutboundReaction;
 use codex_clawbot::ProviderOutboundTextMessage;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::ModelAvailabilityNuxConfig;
@@ -1059,6 +1061,8 @@ pub(crate) struct App {
     clawbot_pending_turns: HashMap<ThreadId, VecDeque<PendingClawbotTurn>>,
     #[cfg(test)]
     clawbot_outbound_messages: Vec<ProviderOutboundTextMessage>,
+    #[cfg(test)]
+    clawbot_outbound_reactions: Vec<ProviderOutboundReaction>,
 }
 
 #[derive(Default)]
@@ -4407,6 +4411,8 @@ See the Codex keymap documentation for supported actions and examples."
             clawbot_pending_turns: HashMap::new(),
             #[cfg(test)]
             clawbot_outbound_messages: Vec::new(),
+            #[cfg(test)]
+            clawbot_outbound_reactions: Vec::new(),
         };
         if let Some(started) = initial_started_thread {
             let thread_id = started.session.thread_id;
@@ -5119,6 +5125,12 @@ See the Codex keymap documentation for supported actions and examples."
                 {
                     self.chat_widget
                         .add_error_message(format!("Failed to bind Clawbot session: {err}"));
+                }
+            }
+            AppEvent::ClawbotSetTurnMode { mode } => {
+                if let Err(err) = self.save_clawbot_turn_mode(mode) {
+                    self.chat_widget
+                        .add_error_message(format!("Failed to save Clawbot turn mode: {err}"));
                 }
             }
             AppEvent::ClawbotDisconnectCurrentThread => {
@@ -7281,6 +7293,7 @@ mod tests {
     use crate::legacy_core::config::ConfigOverrides;
     use crate::render::renderable::Renderable;
     use crate::app_event::ClawbotForwardingChannel;
+    use crate::render::renderable::Renderable;
     use codex_app_server_protocol::AdditionalFileSystemPermissions;
     use codex_app_server_protocol::AdditionalNetworkPermissions;
     use codex_app_server_protocol::AdditionalPermissionProfile;
@@ -7324,8 +7337,11 @@ mod tests {
     use codex_app_server_protocol::TurnStatus;
     use codex_app_server_protocol::UserInput as AppServerUserInput;
     use codex_clawbot::ClawbotRuntime;
+    use codex_clawbot::ClawbotTurnMode;
     use codex_clawbot::ProviderEvent as ClawbotProviderEvent;
     use codex_clawbot::ProviderKind as ClawbotProviderKind;
+    use codex_clawbot::ProviderMessageRef;
+    use codex_clawbot::ProviderOutboundReaction;
     use codex_clawbot::ProviderOutboundTextMessage;
     use codex_clawbot::ProviderSession;
     use codex_clawbot::ProviderSessionRef;
@@ -7360,11 +7376,11 @@ mod tests {
     use codex_utils_absolute_path::AbsolutePathBuf;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use crate::render::renderable::Renderable;
     use pretty_assertions::assert_eq;
-
     use ratatui::prelude::Line;
     use std::path::Path;
     use std::path::PathBuf;
@@ -10456,6 +10472,8 @@ guardian_approval = true
             clawbot_pending_turns: HashMap::new(),
             #[cfg(test)]
             clawbot_outbound_messages: Vec::new(),
+            #[cfg(test)]
+            clawbot_outbound_reactions: Vec::new(),
         }
     }
 
@@ -10528,6 +10546,8 @@ guardian_approval = true
                 clawbot_pending_turns: HashMap::new(),
                 #[cfg(test)]
                 clawbot_outbound_messages: Vec::new(),
+                #[cfg(test)]
+                clawbot_outbound_reactions: Vec::new(),
             },
             rx,
             op_rx,
@@ -12695,6 +12715,17 @@ model = "gpt-5.2"
 
         assert!(app.thread_event_channels.contains_key(&thread_id));
         assert_eq!(
+            app.clawbot_outbound_reactions,
+            vec![ProviderOutboundReaction {
+                target: ProviderMessageRef::new(
+                    ClawbotProviderKind::Feishu,
+                    "chat_resume",
+                    "msg_1"
+                ),
+                emoji_type: "TONGUE".to_string(),
+            }]
+        );
+        assert_eq!(
             app.clawbot_pending_turns
                 .get(&thread_id)
                 .map(std::collections::VecDeque::len),
@@ -12703,6 +12734,91 @@ model = "gpt-5.2"
         assert!(app.active_turn_id_for_thread(thread_id).await.is_some());
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn noninteractive_clawbot_request_user_input_builds_auto_response() {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.clawbot_pending_turns.insert(
+            thread_id,
+            VecDeque::from([PendingClawbotTurn {
+                turn_id: "turn-1".to_string(),
+                session: ProviderSessionRef::new(ClawbotProviderKind::Feishu, "chat_auto"),
+                turn_mode: ClawbotTurnMode::NonInteractive,
+            }]),
+        );
+        let request = ServerRequest::ToolRequestUserInput {
+            request_id: AppServerRequestId::Integer(1),
+            params: ToolRequestUserInputParams {
+                thread_id: thread_id.to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "call-1".to_string(),
+                questions: Vec::new(),
+            },
+        };
+
+        let op = app
+            .clawbot_auto_response_op_for_server_request(thread_id, &request)
+            .expect("auto response op");
+
+        match op.view() {
+            crate::app_command::AppCommandView::UserInputAnswer { id, response } => {
+                assert_eq!(id, "turn-1");
+                assert_eq!(
+                    response,
+                    &codex_protocol::request_user_input::RequestUserInputResponse {
+                        answers: HashMap::new(),
+                    }
+                );
+            }
+            _ => panic!("expected UserInputAnswer"),
+        }
+    }
+
+    #[tokio::test]
+    async fn noninteractive_clawbot_permissions_request_builds_auto_response() {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.clawbot_pending_turns.insert(
+            thread_id,
+            VecDeque::from([PendingClawbotTurn {
+                turn_id: "turn-1".to_string(),
+                session: ProviderSessionRef::new(ClawbotProviderKind::Feishu, "chat_auto"),
+                turn_mode: ClawbotTurnMode::NonInteractive,
+            }]),
+        );
+        let request = ServerRequest::PermissionsRequestApproval {
+            request_id: AppServerRequestId::Integer(7),
+            params: PermissionsRequestApprovalParams {
+                thread_id: thread_id.to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "call-approval".to_string(),
+                reason: Some("Need access".to_string()),
+                permissions: codex_app_server_protocol::RequestPermissionProfile {
+                    network: None,
+                    file_system: None,
+                },
+            },
+        };
+
+        let op = app
+            .clawbot_auto_response_op_for_server_request(thread_id, &request)
+            .expect("auto response op");
+
+        match op.view() {
+            crate::app_command::AppCommandView::RequestPermissionsResponse { id, response } => {
+                assert_eq!(id, "call-approval");
+                assert_eq!(
+                    response,
+                    &codex_protocol::request_permissions::RequestPermissionsResponse {
+                        permissions: Default::default(),
+                        scope: codex_protocol::request_permissions::PermissionGrantScope::Turn,
+                    }
+                );
+            }
+            _ => panic!("expected RequestPermissionsResponse"),
+        }
     }
 
     #[tokio::test]

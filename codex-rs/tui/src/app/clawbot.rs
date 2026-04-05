@@ -1,17 +1,27 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_app_server_protocol::ServerRequest;
 use codex_clawbot::CachedUnreadMessage;
 use codex_clawbot::ClawbotRuntime;
+use codex_clawbot::ClawbotTurnMode;
 use codex_clawbot::FeishuConfig;
 use codex_clawbot::FeishuProviderRuntime;
 use codex_clawbot::ProviderEvent;
+use codex_clawbot::ProviderMessageRef;
+use codex_clawbot::ProviderOutboundReaction;
 use codex_clawbot::ProviderOutboundTextMessage;
 use codex_clawbot::ProviderSessionRef;
 use codex_clawbot::feishu_failure_reply_text;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::Op;
+use codex_protocol::request_permissions::PermissionGrantScope;
+use codex_protocol::request_permissions::RequestPermissionsResponse;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
 use tokio::sync::mpsc;
 
@@ -21,10 +31,13 @@ use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::ThreadSessionState;
 
+const FEISHU_AUTO_ACK_EMOJI_TYPE: &str = "TONGUE";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PendingClawbotTurn {
     pub(crate) turn_id: String,
     pub(crate) session: ProviderSessionRef,
+    pub(crate) turn_mode: ClawbotTurnMode,
 }
 
 impl App {
@@ -181,12 +194,36 @@ impl App {
         let Some(message) = next_unread_message_for_session(&runtime, session) else {
             return Ok(());
         };
+        let turn_mode = runtime.snapshot().config.turn_mode;
         self.attach_clawbot_bound_thread_if_needed(app_server, thread_id)
             .await?;
+        if let Err(err) = self
+            .send_clawbot_outbound_reaction(ProviderOutboundReaction {
+                target: ProviderMessageRef::new(
+                    message.provider,
+                    message.session_id.clone(),
+                    message.message_id.clone(),
+                ),
+                emoji_type: FEISHU_AUTO_ACK_EMOJI_TYPE.to_string(),
+            })
+            .await
+        {
+            tracing::warn!(
+                thread_id = %thread_id,
+                session = session.session_id,
+                error = %err,
+                "failed to auto-ack clawbot inbound message"
+            );
+        }
         let turn_id = self
-            .submit_clawbot_message_to_thread(app_server, thread_id, message.text.clone())
+            .submit_clawbot_message_to_thread(
+                app_server,
+                thread_id,
+                message.text.clone(),
+                turn_mode,
+            )
             .await?;
-        self.register_pending_clawbot_turn(thread_id, session.clone(), turn_id);
+        self.register_pending_clawbot_turn(thread_id, session.clone(), turn_id, turn_mode);
         let removed = runtime.take_next_unread_message(session)?;
         if removed.as_ref().map(|entry| entry.message_id.as_str())
             != Some(message.message_id.as_str())
@@ -237,6 +274,7 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
         message: String,
+        turn_mode: ClawbotTurnMode,
     ) -> Result<String> {
         let trimmed = message.trim().to_string();
         if trimmed.is_empty() {
@@ -249,13 +287,13 @@ impl App {
             .with_context(|| {
                 format!("missing live thread session for clawbot thread {thread_id}")
             })?;
-        let op = AppCommand::from_core(Op::UserTurn {
+        let op: AppCommand = Op::UserTurn {
             items: vec![UserInput::Text {
                 text: trimmed.clone(),
                 text_elements: Vec::new(),
             }],
             cwd: session.cwd.clone(),
-            approval_policy: session.approval_policy,
+            approval_policy: clawbot_approval_policy(session.approval_policy, turn_mode),
             approvals_reviewer: Some(session.approvals_reviewer),
             sandbox_policy: session.sandbox_policy.clone(),
             model: session.model.clone(),
@@ -265,7 +303,8 @@ impl App {
             final_output_json_schema: None,
             collaboration_mode: None,
             personality: self.config.personality,
-        });
+        }
+        .into();
         crate::session_log::log_outbound_op(&op);
         let response = app_server
             .turn_start(
@@ -275,7 +314,7 @@ impl App {
                     text_elements: Vec::new(),
                 }],
                 session.cwd,
-                session.approval_policy,
+                clawbot_approval_policy(session.approval_policy, turn_mode),
                 session.approvals_reviewer,
                 session.sandbox_policy,
                 session.model,
@@ -354,16 +393,45 @@ impl App {
         }
     }
 
+    async fn send_clawbot_outbound_reaction(
+        &mut self,
+        reaction: ProviderOutboundReaction,
+    ) -> Result<()> {
+        #[cfg(test)]
+        {
+            self.clawbot_outbound_reactions.push(reaction);
+            Ok(())
+        }
+
+        #[cfg(not(test))]
+        {
+            let workspace_root = self
+                .clawbot_workspace_root
+                .clone()
+                .context("missing clawbot workspace root for outbound reaction")?;
+            let runtime = ClawbotRuntime::load(workspace_root)?;
+            let provider = runtime
+                .feishu_provider()
+                .context("missing Feishu config for clawbot outbound bridge")?;
+            provider.add_reaction(reaction).await
+        }
+    }
+
     fn register_pending_clawbot_turn(
         &mut self,
         thread_id: ThreadId,
         session: ProviderSessionRef,
         turn_id: String,
+        turn_mode: ClawbotTurnMode,
     ) {
         self.clawbot_pending_turns
             .entry(thread_id)
             .or_default()
-            .push_back(PendingClawbotTurn { turn_id, session });
+            .push_back(PendingClawbotTurn {
+                turn_id,
+                session,
+                turn_mode,
+            });
     }
 
     fn take_pending_clawbot_turn(
@@ -381,13 +449,114 @@ impl App {
         }
         pending
     }
+
+    fn clawbot_turn_mode_for_turn(
+        &self,
+        thread_id: ThreadId,
+        turn_id: &str,
+    ) -> Option<ClawbotTurnMode> {
+        self.clawbot_pending_turns
+            .get(&thread_id)?
+            .iter()
+            .find(|pending| pending.turn_id == turn_id)
+            .map(|pending| pending.turn_mode)
+    }
+
+    pub(super) fn clawbot_auto_response_op_for_server_request(
+        &self,
+        thread_id: ThreadId,
+        request: &ServerRequest,
+    ) -> Option<AppCommand> {
+        match request {
+            ServerRequest::ToolRequestUserInput { params, .. } => {
+                let turn_mode = self.clawbot_turn_mode_for_turn(thread_id, &params.turn_id)?;
+                if !turn_mode.uses_noninteractive_prompt_handling() {
+                    return None;
+                }
+                Some(AppCommand::user_input_answer(
+                    params.turn_id.clone(),
+                    RequestUserInputResponse {
+                        answers: HashMap::new(),
+                    },
+                ))
+            }
+            ServerRequest::PermissionsRequestApproval { params, .. } => {
+                let turn_mode = self.clawbot_turn_mode_for_turn(thread_id, &params.turn_id)?;
+                if !turn_mode.uses_noninteractive_prompt_handling() {
+                    return None;
+                }
+                Some(AppCommand::request_permissions_response(
+                    params.item_id.clone(),
+                    RequestPermissionsResponse {
+                        permissions: Default::default(),
+                        scope: PermissionGrantScope::Turn,
+                    },
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    pub(super) async fn maybe_auto_resolve_clawbot_server_request(
+        &mut self,
+        app_server: &AppServerSession,
+        thread_id: ThreadId,
+        request: &ServerRequest,
+    ) -> bool {
+        let Some(op) = self.clawbot_auto_response_op_for_server_request(thread_id, request) else {
+            return false;
+        };
+
+        match self
+            .try_resolve_app_server_request(app_server, thread_id, &op)
+            .await
+        {
+            Ok(true) => true,
+            Ok(false) => {
+                self.pending_app_server_requests
+                    .note_server_request(request);
+                false
+            }
+            Err(err) => {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    error = %err,
+                    "failed to auto-resolve clawbot server request"
+                );
+                self.pending_app_server_requests
+                    .note_server_request(request);
+                false
+            }
+        }
+    }
+}
+
+fn clawbot_approval_policy(
+    existing_policy: AskForApproval,
+    turn_mode: ClawbotTurnMode,
+) -> AskForApproval {
+    if !turn_mode.uses_noninteractive_prompt_handling() {
+        return existing_policy;
+    }
+
+    AskForApproval::Granular(GranularApprovalConfig {
+        sandbox_approval: false,
+        rules: false,
+        skill_approval: false,
+        request_permissions: false,
+        mcp_elicitations: false,
+    })
 }
 
 fn clawbot_outbound_text_for_turn(turn: &codex_app_server_protocol::Turn) -> Option<String> {
     match turn.status {
-        codex_app_server_protocol::TurnStatus::Completed => {
-            super::last_agent_message_for_turn(turn)
-        }
+        codex_app_server_protocol::TurnStatus::Completed => turn.items.iter().find_map(|item| {
+            let codex_app_server_protocol::ThreadItem::AgentMessage { text, .. } = item else {
+                return None;
+            };
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }),
         codex_app_server_protocol::TurnStatus::Failed => turn
             .error
             .as_ref()
