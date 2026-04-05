@@ -27,6 +27,7 @@ pub enum SlashCommand {
     New,
     Resume,
     Fork,
+    Thread,
     Init,
     Compact,
     Plan,
@@ -81,6 +82,7 @@ impl SlashCommand {
             SlashCommand::Resume => "resume a saved chat",
             SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Fork => "fork the current chat",
+            SlashCommand::Thread => "open thread actions for the current conversation",
             // SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
@@ -114,8 +116,6 @@ impl SlashCommand {
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Apps => "manage apps",
             SlashCommand::Plugins => "browse plugins",
-            SlashCommand::Workflow => "inspect and trigger workspace workflows",
-            SlashCommand::Btw => "run a hidden read-only temporary discussion",
             SlashCommand::Workflow => "inspect and trigger workspace workflows",
             SlashCommand::Btw => "run a hidden read-only temporary discussion",
             SlashCommand::Logout => "log out of Codex",
@@ -180,6 +180,7 @@ impl SlashCommand {
             | SlashCommand::Apps
             | SlashCommand::Plugins
             | SlashCommand::Workflow
+            | SlashCommand::Thread
             | SlashCommand::Feedback
             | SlashCommand::Quit
             | SlashCommand::Exit => true,
