@@ -26,7 +26,48 @@ runs:
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
 
     - name: Run argument comment lint on codex-rs via Bazel
-      if: ${{ runner.os != 'Windows' }}
+      if: ${{ runner.os == 'Linux' }}
+      env:
+        BUILDBUDDY_API_KEY: ${{ inputs.buildbuddy-api-key }}
+      shell: bash
+      run: |
+        bazel_targets="$(./tools/argument-comment-lint/list-bazel-targets.sh)"
+
+        heartbeat() {
+          while true; do
+            sleep 60
+            echo "argument comment lint still running via Bazel ($(date -u '+%Y-%m-%dT%H:%M:%SZ'))"
+          done
+        }
+
+        heartbeat &
+        heartbeat_pid=$!
+        cleanup() {
+          kill "$heartbeat_pid" 2>/dev/null || true
+        }
+        trap cleanup EXIT
+
+        set +e
+        timeout --foreground --signal=TERM --kill-after=30s 110m \
+          ./.github/scripts/run-bazel-ci.sh \
+            -- \
+            build \
+            --config=argument-comment-lint \
+            --keep_going \
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
+            -- \
+            ${bazel_targets}
+        status=$?
+        set -e
+
+        if [[ $status -eq 124 ]]; then
+          echo "argument comment lint Bazel step exceeded 110 minutes; failing explicitly before the 120-minute job timeout so shared CI follow-up can diagnose it."
+        fi
+
+        exit "$status"
+
+    - name: Run argument comment lint on codex-rs via Bazel
+      if: ${{ runner.os == 'macOS' }}
       env:
         BUILDBUDDY_API_KEY: ${{ inputs.buildbuddy-api-key }}
       shell: bash
