@@ -5,6 +5,7 @@ use std::time::UNIX_EPOCH;
 use anyhow::Context;
 use anyhow::Result;
 
+use crate::config::ClawbotTurnMode;
 use crate::config::FeishuConfig;
 use crate::model::CachedUnreadMessage;
 use crate::model::ClawbotSnapshot;
@@ -57,9 +58,14 @@ impl ClawbotRuntime {
         &mut self,
         feishu: Option<FeishuConfig>,
     ) -> Result<&ClawbotSnapshot> {
-        self.store.save_config(&crate::config::ClawbotConfig {
-            feishu: feishu.filter(|config| !config.is_empty()),
-        })?;
+        self.snapshot.config.feishu = feishu.filter(|config| !config.is_empty());
+        self.store.save_config(&self.snapshot.config)?;
+        self.reload()
+    }
+
+    pub fn update_turn_mode(&mut self, mode: ClawbotTurnMode) -> Result<&ClawbotSnapshot> {
+        self.snapshot.config.turn_mode = mode;
+        self.store.save_config(&self.snapshot.config)?;
         self.reload()
     }
 
@@ -332,6 +338,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::ClawbotRuntime;
+    use crate::config::ClawbotTurnMode;
     use crate::config::FeishuConfig;
     use crate::events::ProviderInboundMessage;
     use crate::model::ConnectionStatus;
@@ -471,6 +478,22 @@ mod tests {
             .update_feishu_config(Some(FeishuConfig::default()))
             .expect("clear config");
         assert_eq!(runtime.snapshot().config.feishu, None);
+    }
+
+    #[test]
+    fn update_turn_mode_persists_in_config() {
+        let tempdir = tempdir().expect("tempdir");
+        let mut runtime = ClawbotRuntime::load(tempdir.path().to_path_buf()).expect("runtime");
+
+        runtime
+            .update_turn_mode(ClawbotTurnMode::NonInteractive)
+            .expect("save turn mode");
+
+        let reloaded = ClawbotRuntime::load(tempdir.path().to_path_buf()).expect("reload runtime");
+        assert_eq!(
+            reloaded.snapshot().config.turn_mode,
+            ClawbotTurnMode::NonInteractive
+        );
     }
 
     #[test]
