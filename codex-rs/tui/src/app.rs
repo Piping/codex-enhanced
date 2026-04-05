@@ -1074,6 +1074,8 @@ pub(crate) struct App {
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
+    workflow_thread_notification_channels:
+        HashMap<ThreadId, mpsc::UnboundedSender<ServerNotification>>,
     workflow_scheduler: WorkflowSchedulerState,
     workflow_history: WorkflowHistoryState,
 }
@@ -4338,6 +4340,7 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            workflow_thread_notification_channels: HashMap::new(),
             workflow_scheduler: WorkflowSchedulerState::default(),
             workflow_history: WorkflowHistoryState::default(),
         };
@@ -4779,6 +4782,19 @@ impl App {
                 for cell in cells {
                     self.insert_visible_history_cell(tui, cell);
                 }
+            }
+            AppEvent::RegisterWorkflowThreadNotificationForwarder {
+                thread_id,
+                sender,
+                ready_tx,
+            } => {
+                self.workflow_thread_notification_channels
+                    .insert(thread_id, sender);
+                let _ = ready_tx.send(());
+            }
+            AppEvent::UnregisterWorkflowThreadNotificationForwarder { thread_id } => {
+                self.workflow_thread_notification_channels
+                    .remove(&thread_id);
             }
             AppEvent::RetryLastUserTurnWithProfileFallback {
                 action,
@@ -6857,6 +6873,7 @@ mod tests {
     use codex_app_server_protocol::HookRunSummary as AppServerHookRunSummary;
     use codex_app_server_protocol::HookScope as AppServerHookScope;
     use codex_app_server_protocol::HookStartedNotification;
+    use codex_app_server_protocol::ItemCompletedNotification;
     use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::NetworkApprovalContext as AppServerNetworkApprovalContext;
     use codex_app_server_protocol::NetworkApprovalProtocol as AppServerNetworkApprovalProtocol;
@@ -9729,6 +9746,7 @@ guardian_approval = true
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            workflow_thread_notification_channels: HashMap::new(),
             workflow_scheduler: WorkflowSchedulerState::default(),
             workflow_history: WorkflowHistoryState::default(),
         }
@@ -9785,6 +9803,7 @@ guardian_approval = true
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),
+                workflow_thread_notification_channels: HashMap::new(),
                 workflow_scheduler: WorkflowSchedulerState::default(),
                 workflow_history: WorkflowHistoryState::default(),
             },
@@ -12088,6 +12107,48 @@ model = "gpt-5.2"
             }
             other => panic!("expected workflow follow-up submission, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn app_server_notifications_forward_to_workflow_thread_receivers() -> Result<()> {
+        let mut app = make_test_app().await;
+        let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+            .await
+            .expect("embedded app server");
+        let thread_id = ThreadId::new();
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        app.workflow_thread_notification_channels
+            .insert(thread_id, sender);
+
+        let notification = ServerNotification::ItemCompleted(ItemCompletedNotification {
+            item: ThreadItem::AgentMessage {
+                id: "msg-1".to_string(),
+                text: "workflow reply".to_string(),
+                phase: None,
+                memory_citation: None,
+            },
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-1".to_string(),
+        });
+
+        app.handle_app_server_event(
+            &app_server,
+            AppServerEvent::ServerNotification(notification.clone()),
+        )
+        .await;
+
+        match receiver.recv().await {
+            Some(ServerNotification::ItemCompleted(received)) => {
+                assert_eq!(received.thread_id, thread_id.to_string());
+                assert_eq!(received.turn_id, "turn-1");
+                let ThreadItem::AgentMessage { text, .. } = received.item else {
+                    panic!("expected forwarded workflow agent message");
+                };
+                assert_eq!(text, "workflow reply");
+            }
+            other => panic!("expected forwarded workflow notification, got {other:?}"),
+        }
+        Ok(())
     }
 
     #[tokio::test]

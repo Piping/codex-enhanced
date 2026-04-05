@@ -10,22 +10,27 @@ use super::workflow_definition::ordered_jobs_for_roots;
 use super::workflow_history::WorkflowReplySource;
 use super::workflow_history::workflow_result_cell;
 use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
 use crate::app_server_session::AppServerSession;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
+use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -44,6 +49,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
+use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -161,10 +167,11 @@ pub(crate) struct BackgroundWorkflowRunResult {
     pub(crate) outcome: BackgroundWorkflowRunOutcome,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 struct WorkflowThreadSession {
     thread_id: String,
     cwd: PathBuf,
+    notifications: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<ServerNotification>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -191,11 +198,11 @@ trait WorkflowRuntimeClient: Send + Sync {
         cwd: PathBuf,
         input: String,
     ) -> BoxFuture<'_, Result<String, String>>;
-    fn read_turn(
-        &self,
-        thread_id: String,
+    fn read_turn<'a>(
+        &'a self,
+        thread: &'a WorkflowThreadSession,
         turn_id: String,
-    ) -> BoxFuture<'_, Result<WorkflowTurnState, String>>;
+    ) -> BoxFuture<'a, Result<WorkflowTurnState, String>>;
     fn interrupt_turn(
         &self,
         thread_id: String,
@@ -206,6 +213,7 @@ trait WorkflowRuntimeClient: Send + Sync {
 
 pub(crate) struct AppServerWorkflowRuntimeClient {
     request_handle: AppServerRequestHandle,
+    app_event_tx: AppEventSender,
     config: Config,
     primary_thread_id: Option<ThreadId>,
     is_remote: bool,
@@ -215,11 +223,13 @@ pub(crate) struct AppServerWorkflowRuntimeClient {
 impl AppServerWorkflowRuntimeClient {
     pub(crate) fn new(
         app_server: &AppServerSession,
+        app_event_tx: AppEventSender,
         config: Config,
         primary_thread_id: Option<ThreadId>,
     ) -> Self {
         Self {
             request_handle: app_server.request_handle(),
+            app_event_tx,
             config,
             primary_thread_id,
             is_remote: app_server.is_remote(),
@@ -231,7 +241,29 @@ impl AppServerWorkflowRuntimeClient {
 impl WorkflowRuntimeClient for AppServerWorkflowRuntimeClient {
     fn start_workflow_thread(&self) -> BoxFuture<'_, Result<WorkflowThreadSession, String>> {
         Box::pin(async move {
-            if let Some(primary_thread_id) = self.primary_thread_id {
+            let fork_source_thread_id = if let Some(primary_thread_id) = self.primary_thread_id {
+                let response: ThreadReadResponse = self
+                    .request_handle
+                    .request_typed(ClientRequest::ThreadRead {
+                        request_id: request_id(),
+                        params: ThreadReadParams {
+                            thread_id: primary_thread_id.to_string(),
+                            include_turns: false,
+                        },
+                    })
+                    .await
+                    .map_err(|err| format!("failed to inspect workflow source thread: {err}"))?;
+                response
+                    .thread
+                    .path
+                    .as_ref()
+                    .is_some_and(|path| path.exists())
+                    .then_some(primary_thread_id)
+            } else {
+                None
+            };
+
+            if let Some(primary_thread_id) = fork_source_thread_id {
                 let response: ThreadForkResponse = self
                     .request_handle
                     .request_typed(ClientRequest::ThreadFork {
@@ -245,9 +277,27 @@ impl WorkflowRuntimeClient for AppServerWorkflowRuntimeClient {
                     })
                     .await
                     .map_err(|err| format!("failed to fork workflow thread: {err}"))?;
+                let thread_id = ThreadId::from_string(&response.thread.id).map_err(|err| {
+                    format!(
+                        "workflow thread id `{}` is invalid: {err}",
+                        response.thread.id
+                    )
+                })?;
+                let (sender, receiver) = mpsc::unbounded_channel();
+                let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+                self.app_event_tx
+                    .send(AppEvent::RegisterWorkflowThreadNotificationForwarder {
+                        thread_id,
+                        sender,
+                        ready_tx,
+                    });
+                ready_rx.await.map_err(|_| {
+                    "workflow thread notification forwarder setup was cancelled".to_string()
+                })?;
                 return Ok(WorkflowThreadSession {
                     thread_id: response.thread.id,
                     cwd: response.cwd,
+                    notifications: Arc::new(tokio::sync::Mutex::new(receiver)),
                 });
             }
 
@@ -263,9 +313,27 @@ impl WorkflowRuntimeClient for AppServerWorkflowRuntimeClient {
                 })
                 .await
                 .map_err(|err| format!("failed to start workflow thread: {err}"))?;
+            let thread_id = ThreadId::from_string(&response.thread.id).map_err(|err| {
+                format!(
+                    "workflow thread id `{}` is invalid: {err}",
+                    response.thread.id
+                )
+            })?;
+            let (sender, receiver) = mpsc::unbounded_channel();
+            let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+            self.app_event_tx
+                .send(AppEvent::RegisterWorkflowThreadNotificationForwarder {
+                    thread_id,
+                    sender,
+                    ready_tx,
+                });
+            ready_rx.await.map_err(|_| {
+                "workflow thread notification forwarder setup was cancelled".to_string()
+            })?;
             Ok(WorkflowThreadSession {
                 thread_id: response.thread.id,
                 cwd: response.cwd,
+                notifications: Arc::new(tokio::sync::Mutex::new(receiver)),
             })
         })
     }
@@ -313,41 +381,43 @@ impl WorkflowRuntimeClient for AppServerWorkflowRuntimeClient {
         })
     }
 
-    fn read_turn(
-        &self,
-        thread_id: String,
+    fn read_turn<'a>(
+        &'a self,
+        thread: &'a WorkflowThreadSession,
         turn_id: String,
-    ) -> BoxFuture<'_, Result<WorkflowTurnState, String>> {
+    ) -> BoxFuture<'a, Result<WorkflowTurnState, String>> {
         Box::pin(async move {
-            let response: ThreadReadResponse = self
-                .request_handle
-                .request_typed(ClientRequest::ThreadRead {
-                    request_id: request_id(),
-                    params: ThreadReadParams {
-                        thread_id: thread_id.clone(),
-                        include_turns: true,
-                    },
-                })
-                .await
-                .map_err(|err| format!("failed to read workflow thread: {err}"))?;
-            let turn = response
-                .thread
-                .turns
-                .into_iter()
-                .find(|turn| turn.id == turn_id)
-                .ok_or_else(|| {
-                    format!("workflow turn `{turn_id}` is missing from thread `{thread_id}`")
-                })?;
-            Ok(WorkflowTurnState {
-                status: turn.status,
-                error: turn.error.map(|error| error.message),
-                last_agent_message: turn.items.into_iter().fold(None, |_, item| match item {
-                    codex_app_server_protocol::ThreadItem::AgentMessage { text, .. } => {
-                        (!text.trim().is_empty()).then_some(text.trim().to_string())
+            let mut notifications = thread.notifications.lock().await;
+            let mut last_agent_message = None;
+            loop {
+                match notifications.recv().await {
+                    Some(ServerNotification::ItemCompleted(notification))
+                        if notification.thread_id == thread.thread_id
+                            && notification.turn_id == turn_id =>
+                    {
+                        update_last_workflow_agent_message(&mut last_agent_message, &notification);
                     }
-                    _ => None,
-                }),
-            })
+                    Some(ServerNotification::TurnCompleted(notification))
+                        if notification.thread_id == thread.thread_id
+                            && notification.turn.id == turn_id =>
+                    {
+                        let status = notification.turn.status.clone();
+                        let error = notification.turn.error.clone().map(|error| error.message);
+                        return Ok(WorkflowTurnState {
+                            status,
+                            error,
+                            last_agent_message: last_agent_message
+                                .or_else(|| last_agent_message_for_turn_completed(&notification)),
+                        });
+                    }
+                    Some(_) => {}
+                    None => {
+                        return Err(format!(
+                            "workflow notification stream closed before turn `{turn_id}` completed"
+                        ));
+                    }
+                }
+            }
         })
     }
 
@@ -371,15 +441,23 @@ impl WorkflowRuntimeClient for AppServerWorkflowRuntimeClient {
 
     fn unsubscribe_thread(&self, thread_id: String) -> BoxFuture<'_, Result<(), String>> {
         Box::pin(async move {
-            let _: ThreadUnsubscribeResponse = self
+            let result: Result<ThreadUnsubscribeResponse, String> = self
                 .request_handle
                 .request_typed(ClientRequest::ThreadUnsubscribe {
                     request_id: request_id(),
-                    params: ThreadUnsubscribeParams { thread_id },
+                    params: ThreadUnsubscribeParams {
+                        thread_id: thread_id.clone(),
+                    },
                 })
                 .await
-                .map_err(|err| format!("failed to unsubscribe workflow thread: {err}"))?;
-            Ok(())
+                .map_err(|err| format!("failed to unsubscribe workflow thread: {err}"));
+            if let Ok(parsed_thread_id) = ThreadId::from_string(&thread_id) {
+                self.app_event_tx
+                    .send(AppEvent::UnregisterWorkflowThreadNotificationForwarder {
+                        thread_id: parsed_thread_id,
+                    });
+            }
+            result.map(|_| ())
         })
     }
 }
@@ -396,6 +474,7 @@ impl App {
             .map_err(|error| format!("failed to load workflows: {error}"))?;
         let client = AppServerWorkflowRuntimeClient::new(
             app_server,
+            self.app_event_tx.clone(),
             self.config.clone(),
             self.primary_thread_id,
         );
@@ -616,6 +695,7 @@ impl App {
             .next_background_run_id(target.workflow_name(), target.slot_key());
         let runtime_client = AppServerWorkflowRuntimeClient::new(
             app_server,
+            self.app_event_tx.clone(),
             self.config.clone(),
             self.primary_thread_id,
         );
@@ -959,11 +1039,11 @@ async fn run_workflow_prompt(
         .map_err(WorkflowRunError::Failed)?;
     loop {
         if cancellation.is_some_and(CancellationToken::is_cancelled) {
-            interrupt_active_workflow_turn(client, thread.thread_id.clone(), turn_id.clone()).await;
+            interrupt_active_workflow_turn(client, thread, turn_id.clone()).await;
             return Err(WorkflowRunError::Cancelled);
         }
         let turn = client
-            .read_turn(thread.thread_id.clone(), turn_id.clone())
+            .read_turn(thread, turn_id.clone())
             .await
             .map_err(WorkflowRunError::Failed)?;
         match turn.status {
@@ -982,15 +1062,15 @@ async fn run_workflow_prompt(
 
 async fn interrupt_active_workflow_turn(
     client: &dyn WorkflowRuntimeClient,
-    thread_id: String,
+    thread: &WorkflowThreadSession,
     turn_id: String,
 ) {
     let _ = client
-        .interrupt_turn(thread_id.clone(), turn_id.clone())
+        .interrupt_turn(thread.thread_id.clone(), turn_id.clone())
         .await;
     let deadline = tokio::time::Instant::now() + WORKFLOW_INTERRUPT_SETTLE_TIMEOUT;
     while tokio::time::Instant::now() < deadline {
-        match client.read_turn(thread_id.clone(), turn_id.clone()).await {
+        match client.read_turn(thread, turn_id.clone()).await {
             Ok(turn) if !matches!(turn.status, TurnStatus::InProgress) => return,
             Ok(_) | Err(_) => sleep(WORKFLOW_POLL_INTERVAL).await,
         }
@@ -1200,6 +1280,34 @@ fn retry_backoff_delay(attempt: u32) -> Duration {
     Duration::from_secs(seconds.max(1))
 }
 
+fn update_last_workflow_agent_message(
+    last_agent_message: &mut Option<String>,
+    notification: &ItemCompletedNotification,
+) {
+    if let ThreadItem::AgentMessage { text, .. } = &notification.item {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            *last_agent_message = Some(trimmed.to_string());
+        }
+    }
+}
+
+fn last_agent_message_for_turn_completed(
+    notification: &TurnCompletedNotification,
+) -> Option<String> {
+    notification
+        .turn
+        .items
+        .iter()
+        .fold(None, |_, item| match item {
+            ThreadItem::AgentMessage { text, .. } => {
+                let trimmed = text.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            }
+            _ => None,
+        })
+}
+
 #[derive(Debug)]
 enum WorkflowRunError {
     Failed(String),
@@ -1209,10 +1317,20 @@ enum WorkflowRunError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
     use std::collections::VecDeque;
     use std::sync::Mutex;
+    use tempfile::TempDir;
     use tempfile::tempdir;
+
+    async fn build_config(temp_dir: &TempDir) -> Config {
+        ConfigBuilder::default()
+            .codex_home(temp_dir.path().to_path_buf())
+            .build()
+            .await
+            .expect("config should build")
+    }
 
     struct FakeWorkflowRuntimeClient {
         calls: Mutex<Vec<String>>,
@@ -1235,6 +1353,7 @@ mod tests {
     impl WorkflowRuntimeClient for FakeWorkflowRuntimeClient {
         fn start_workflow_thread(&self) -> BoxFuture<'_, Result<WorkflowThreadSession, String>> {
             Box::pin(async move {
+                let (_sender, receiver) = mpsc::unbounded_channel();
                 self.calls
                     .lock()
                     .expect("calls lock")
@@ -1242,6 +1361,7 @@ mod tests {
                 Ok(WorkflowThreadSession {
                     thread_id: self.thread_id.clone(),
                     cwd: PathBuf::from("/tmp/workflow"),
+                    notifications: Arc::new(tokio::sync::Mutex::new(receiver)),
                 })
             })
         }
@@ -1261,16 +1381,16 @@ mod tests {
             })
         }
 
-        fn read_turn(
-            &self,
-            thread_id: String,
+        fn read_turn<'a>(
+            &'a self,
+            thread: &'a WorkflowThreadSession,
             turn_id: String,
-        ) -> BoxFuture<'_, Result<WorkflowTurnState, String>> {
+        ) -> BoxFuture<'a, Result<WorkflowTurnState, String>> {
             Box::pin(async move {
                 self.calls
                     .lock()
                     .expect("calls lock")
-                    .push(format!("read_turn:{thread_id}:{turn_id}"));
+                    .push(format!("read_turn:{}:{turn_id}", thread.thread_id));
                 self.reads
                     .lock()
                     .expect("reads lock")
@@ -1433,6 +1553,115 @@ jobs:
                 "read_turn:thr_workflow:turn_workflow".to_string(),
                 "unsubscribe_thread:thr_workflow".to_string(),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn read_turn_uses_forwarded_notifications_for_ephemeral_threads() {
+        let temp_dir = tempdir().expect("tempdir");
+        let config = build_config(&temp_dir).await;
+        let app_server = crate::start_embedded_app_server_for_picker(&config)
+            .await
+            .expect("embedded app server");
+        let (app_event_tx, _app_event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let client = AppServerWorkflowRuntimeClient::new(
+            &app_server,
+            crate::app_event_sender::AppEventSender::new(app_event_tx),
+            config,
+            None,
+        );
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let thread = WorkflowThreadSession {
+            thread_id: "thr_workflow".to_string(),
+            cwd: PathBuf::from("/tmp/workflow"),
+            notifications: Arc::new(tokio::sync::Mutex::new(receiver)),
+        };
+
+        sender
+            .send(ServerNotification::ItemCompleted(
+                ItemCompletedNotification {
+                    item: ThreadItem::AgentMessage {
+                        id: "msg-1".to_string(),
+                        text: "workflow reply".to_string(),
+                        phase: None,
+                        memory_citation: None,
+                    },
+                    thread_id: thread.thread_id.clone(),
+                    turn_id: "turn-1".to_string(),
+                },
+            ))
+            .expect("item completed notification");
+        sender
+            .send(ServerNotification::TurnCompleted(
+                TurnCompletedNotification {
+                    thread_id: thread.thread_id.clone(),
+                    turn: codex_app_server_protocol::Turn {
+                        id: "turn-1".to_string(),
+                        items: Vec::new(),
+                        error: None,
+                        status: TurnStatus::Completed,
+                    },
+                },
+            ))
+            .expect("turn completed notification");
+
+        let state = client
+            .read_turn(&thread, "turn-1".to_string())
+            .await
+            .expect("read workflow turn");
+
+        assert_eq!(
+            state,
+            WorkflowTurnState {
+                status: TurnStatus::Completed,
+                error: None,
+                last_agent_message: Some("workflow reply".to_string()),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn start_workflow_thread_starts_fresh_thread_when_primary_thread_is_unmaterialized() {
+        let temp_dir = tempdir().expect("tempdir");
+        let config = build_config(&temp_dir).await;
+        let mut app_server = crate::start_embedded_app_server_for_picker(&config)
+            .await
+            .expect("embedded app server");
+        let primary = app_server
+            .start_thread(&config)
+            .await
+            .expect("start primary thread");
+        assert!(
+            primary
+                .session
+                .rollout_path
+                .as_ref()
+                .is_some_and(|path| !path.exists())
+        );
+        let (app_event_tx, mut app_event_rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let Some(AppEvent::RegisterWorkflowThreadNotificationForwarder { ready_tx, .. }) =
+                app_event_rx.recv().await
+            else {
+                panic!("expected workflow notification registration event");
+            };
+            let _ = ready_tx.send(());
+        });
+
+        let client = AppServerWorkflowRuntimeClient::new(
+            &app_server,
+            crate::app_event_sender::AppEventSender::new(app_event_tx),
+            config,
+            Some(primary.session.thread_id),
+        );
+        let workflow_thread = client
+            .start_workflow_thread()
+            .await
+            .expect("start workflow thread");
+
+        assert_ne!(
+            workflow_thread.thread_id,
+            primary.session.thread_id.to_string()
         );
     }
 }

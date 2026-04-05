@@ -215,6 +215,12 @@ impl App {
                         )
                         .await;
                 }
+                if let Some(sender) = self.workflow_thread_notification_channels.get(&thread_id)
+                    && sender.send(notification.clone()).is_err()
+                {
+                    self.workflow_thread_notification_channels
+                        .remove(&thread_id);
+                }
                 return;
             }
             ServerNotificationThreadTarget::InvalidThreadId(thread_id) => {
