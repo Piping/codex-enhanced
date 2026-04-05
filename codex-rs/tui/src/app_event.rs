@@ -310,6 +310,19 @@ pub(crate) enum AppEvent {
         result: Box<BackgroundWorkflowRunResult>,
     },
 
+    OpenWorkflowControls,
+
+    StartManualWorkflowTrigger {
+        workflow_name: String,
+        trigger_id: String,
+    },
+
+    StartManualWorkflowJob {
+        workflow_name: String,
+        job_name: String,
+    },
+
+    ShowWorkflowBackgroundTasks,
     /// Retry the last turn using the routed profile fallback policy.
     RetryLastUserTurnWithProfileFallback {
         action: ProfileFallbackAction,

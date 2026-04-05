@@ -5302,6 +5302,365 @@ impl ChatWidget {
         self.copy_last_agent_markdown_with(crate::clipboard_copy::copy_to_clipboard);
     }
 
+    fn dispatch_command(&mut self, cmd: SlashCommand) {
+        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+            let message = format!(
+                "'/{}' is disabled while a task is in progress.",
+                cmd.command()
+            );
+            self.add_to_history(history_cell::new_error_event(message));
+            self.bottom_pane.drain_pending_submission_state();
+            self.request_redraw();
+            return;
+        }
+        match cmd {
+            SlashCommand::Feedback => {
+                if !self.config.feedback_enabled {
+                    let params = crate::bottom_pane::feedback_disabled_params();
+                    self.bottom_pane.show_selection_view(params);
+                    self.request_redraw();
+                    return;
+                }
+                // Step 1: pick a category (UI built in feedback_view)
+                let params =
+                    crate::bottom_pane::feedback_selection_params(self.app_event_tx.clone());
+                self.bottom_pane.show_selection_view(params);
+                self.request_redraw();
+            }
+            SlashCommand::New => {
+                self.app_event_tx.send(AppEvent::NewSession);
+            }
+            SlashCommand::Clear => {
+                self.app_event_tx.send(AppEvent::ClearUi);
+            }
+            SlashCommand::Resume => {
+                self.app_event_tx.send(AppEvent::OpenResumePicker);
+            }
+            SlashCommand::Fork => {
+                self.app_event_tx.send(AppEvent::ForkCurrentSession);
+            }
+            SlashCommand::Init => {
+                let init_target = match self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME) {
+                    Ok(path) => path,
+                    Err(err) => {
+                        self.add_error_message(format!(
+                            "Failed to prepare {DEFAULT_PROJECT_DOC_FILENAME}: {err}",
+                        ));
+                        return;
+                    }
+                };
+                if init_target.exists() {
+                    let message = format!(
+                        "{DEFAULT_PROJECT_DOC_FILENAME} already exists here. Skipping /init to avoid overwriting it."
+                    );
+                    self.add_info_message(message, /*hint*/ None);
+                    return;
+                }
+                const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
+                self.submit_user_message(INIT_PROMPT.to_string().into());
+            }
+            SlashCommand::Compact => {
+                self.clear_token_usage();
+                if !self.bottom_pane.is_task_running() {
+                    self.bottom_pane.set_task_running(/*running*/ true);
+                }
+                self.app_event_tx.compact();
+            }
+            SlashCommand::Review => {
+                self.open_review_popup();
+            }
+            SlashCommand::Rename => {
+                self.session_telemetry
+                    .counter("codex.thread.rename", /*inc*/ 1, &[]);
+                self.show_rename_prompt();
+            }
+            SlashCommand::Model => {
+                self.open_model_popup();
+            }
+            SlashCommand::Fast => {
+                let next_tier = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
+                    None
+                } else {
+                    Some(ServiceTier::Fast)
+                };
+                self.set_service_tier_selection(next_tier);
+            }
+            SlashCommand::Realtime => {
+                if !self.realtime_conversation_enabled() {
+                    return;
+                }
+                if self.realtime_conversation.is_live() {
+                    self.stop_realtime_conversation_from_ui();
+                } else {
+                    self.start_realtime_conversation();
+                }
+            }
+            SlashCommand::Settings => {
+                if !self.realtime_audio_device_selection_enabled() {
+                    return;
+                }
+                self.open_realtime_audio_popup();
+            }
+            SlashCommand::Personality => {
+                self.open_personality_popup();
+            }
+            SlashCommand::Plan => {
+                if !self.collaboration_modes_enabled() {
+                    self.add_info_message(
+                        "Collaboration modes are disabled.".to_string(),
+                        Some("Enable collaboration modes to use /plan.".to_string()),
+                    );
+                    return;
+                }
+                if let Some(mask) = collaboration_modes::plan_mask(self.model_catalog.as_ref()) {
+                    self.set_collaboration_mask(mask);
+                } else {
+                    self.add_info_message(
+                        "Plan mode unavailable right now.".to_string(),
+                        /*hint*/ None,
+                    );
+                }
+            }
+            SlashCommand::Collab => {
+                if !self.collaboration_modes_enabled() {
+                    self.add_info_message(
+                        "Collaboration modes are disabled.".to_string(),
+                        Some("Enable collaboration modes to use /collab.".to_string()),
+                    );
+                    return;
+                }
+                self.open_collaboration_modes_popup();
+            }
+            SlashCommand::Agent | SlashCommand::MultiAgents => {
+                self.app_event_tx.send(AppEvent::OpenAgentPicker);
+            }
+            SlashCommand::Approvals => {
+                self.open_permissions_popup();
+            }
+            SlashCommand::Permissions => {
+                self.open_permissions_popup();
+            }
+            SlashCommand::ElevateSandbox => {
+                #[cfg(target_os = "windows")]
+                {
+                    let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+                    let windows_degraded_sandbox_enabled =
+                        matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken);
+                    if !windows_degraded_sandbox_enabled
+                        || !codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                    {
+                        // This command should not be visible/recognized outside degraded mode,
+                        // but guard anyway in case something dispatches it directly.
+                        return;
+                    }
+
+                    let Some(preset) = builtin_approval_presets()
+                        .into_iter()
+                        .find(|preset| preset.id == "auto")
+                    else {
+                        // Avoid panicking in interactive UI; treat this as a recoverable
+                        // internal error.
+                        self.add_error_message(
+                            "Internal error: missing the 'auto' approval preset.".to_string(),
+                        );
+                        return;
+                    };
+
+                    if let Err(err) = self
+                        .config
+                        .permissions
+                        .approval_policy
+                        .can_set(&preset.approval)
+                    {
+                        self.add_error_message(err.to_string());
+                        return;
+                    }
+
+                    self.session_telemetry.counter(
+                        "codex.windows_sandbox.setup_elevated_sandbox_command",
+                        /*inc*/ 1,
+                        &[],
+                    );
+                    self.app_event_tx
+                        .send(AppEvent::BeginWindowsSandboxElevatedSetup { preset });
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = &self.session_telemetry;
+                    // Not supported; on non-Windows this command should never be reachable.
+                };
+            }
+            SlashCommand::SandboxReadRoot => {
+                self.add_error_message(
+                    "Usage: /sandbox-add-read-dir <absolute-directory-path>".to_string(),
+                );
+            }
+            SlashCommand::Experimental => {
+                self.open_experimental_popup();
+            }
+            SlashCommand::Quit | SlashCommand::Exit => {
+                self.request_quit_without_confirmation();
+            }
+            SlashCommand::Logout => {
+                if let Err(e) = codex_login::logout(
+                    &self.config.codex_home,
+                    self.config.cli_auth_credentials_store_mode,
+                ) {
+                    tracing::error!("failed to logout: {e}");
+                }
+                self.request_quit_without_confirmation();
+            }
+            // SlashCommand::Undo => {
+            //     self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
+            // }
+            SlashCommand::Diff => {
+                self.add_diff_in_progress();
+                let tx = self.app_event_tx.clone();
+                tokio::spawn(async move {
+                    let text = match get_git_diff().await {
+                        Ok((is_git_repo, diff_text)) => {
+                            if is_git_repo {
+                                diff_text
+                            } else {
+                                "`/diff` — _not inside a git repository_".to_string()
+                            }
+                        }
+                        Err(e) => format!("Failed to compute diff: {e}"),
+                    };
+                    tx.send(AppEvent::DiffResult(text));
+                });
+            }
+            SlashCommand::Copy => {
+                let Some(text) = self.last_copyable_output.as_deref() else {
+                    self.add_info_message(
+                        "`/copy` is unavailable before the first Codex output or right after a rollback."
+                            .to_string(),
+                        /*hint*/ None,
+                    );
+                    return;
+                };
+
+                let copy_result = clipboard_text::copy_text_to_clipboard(text);
+
+                match copy_result {
+                    Ok(()) => {
+                        let hint = self.agent_turn_running.then_some(
+                            "Current turn is still running; copied the latest completed output (not the in-progress response)."
+                                .to_string(),
+                        );
+                        self.add_info_message(
+                            "Copied latest Codex output to clipboard.".to_string(),
+                            hint,
+                        );
+                    }
+                    Err(err) => {
+                        self.add_error_message(format!("Failed to copy to clipboard: {err}"))
+                    }
+                }
+            }
+            SlashCommand::Mention => {
+                self.insert_str("@");
+            }
+            SlashCommand::Skills => {
+                self.open_skills_menu();
+            }
+            SlashCommand::Status => {
+                if self.should_prefetch_rate_limits() {
+                    let request_id = self.next_status_refresh_request_id;
+                    self.next_status_refresh_request_id =
+                        self.next_status_refresh_request_id.wrapping_add(1);
+                    self.add_status_output(/*refreshing_rate_limits*/ true, Some(request_id));
+                    self.app_event_tx
+                        .send(AppEvent::RefreshRateLimits { request_id });
+                } else {
+                    self.add_status_output(
+                        /*refreshing_rate_limits*/ false, /*request_id*/ None,
+                    );
+                }
+            }
+            SlashCommand::DebugConfig => {
+                self.add_debug_config_output();
+            }
+            SlashCommand::Title => {
+                self.open_terminal_title_setup();
+            }
+            SlashCommand::Statusline => {
+                self.open_status_line_setup();
+            }
+            SlashCommand::Theme => {
+                self.open_theme_picker();
+            }
+            SlashCommand::Ps => {
+                self.add_ps_output();
+            }
+            SlashCommand::Stop => {
+                self.clean_background_terminals();
+            }
+            SlashCommand::MemoryDrop => {
+                self.add_app_server_stub_message("Memory maintenance");
+            }
+            SlashCommand::MemoryUpdate => {
+                self.add_app_server_stub_message("Memory maintenance");
+            }
+            SlashCommand::Mcp => {
+                self.add_mcp_output();
+            }
+            SlashCommand::Apps => {
+                self.add_connectors_output();
+            }
+            SlashCommand::Plugins => {
+                self.add_plugins_output();
+            }
+            SlashCommand::Workflow => {
+                self.app_event_tx.send(AppEvent::OpenWorkflowControls);
+            }
+            SlashCommand::Rollout => {
+                if let Some(path) = self.rollout_path() {
+                    self.add_info_message(
+                        format!("Current rollout path: {}", path.display()),
+                        /*hint*/ None,
+                    );
+                } else {
+                    self.add_info_message(
+                        "Rollout path is not available yet.".to_string(),
+                        /*hint*/ None,
+                    );
+                }
+            }
+            SlashCommand::TestApproval => {
+                use std::collections::HashMap;
+
+                use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
+                use codex_protocol::protocol::FileChange;
+
+                self.on_apply_patch_approval_request(
+                    "1".to_string(),
+                    ApplyPatchApprovalRequestEvent {
+                        call_id: "1".to_string(),
+                        turn_id: "turn-1".to_string(),
+                        changes: HashMap::from([
+                            (
+                                PathBuf::from("/tmp/test.txt"),
+                                FileChange::Add {
+                                    content: "test".to_string(),
+                                },
+                            ),
+                            (
+                                PathBuf::from("/tmp/test2.txt"),
+                                FileChange::Update {
+                                    unified_diff: "+test\n-test2".to_string(),
+                                    move_path: None,
+                                },
+                            ),
+                        ]),
+                        reason: None,
+                        grant_root: Some(PathBuf::from("/tmp")),
+                    },
+                );
+            }
+        }
+    }
+
     /// Inner implementation with an injectable clipboard backend for testing.
     fn copy_last_agent_markdown_with(
         &mut self,
