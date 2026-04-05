@@ -31,12 +31,14 @@ runs:
         BUILDBUDDY_API_KEY: ${{ inputs.buildbuddy-api-key }}
       shell: bash
       run: |
-        bazel_targets="$(./tools/argument-comment-lint/list-bazel-targets.sh)"
-
         heartbeat() {
           while true; do
             sleep 60
-            echo "argument comment lint still running via Bazel ($(date -u '+%Y-%m-%dT%H:%M:%SZ'))"
+            if [[ "${CODEX_BAZEL_FORCE_LOCAL:-0}" == "1" ]]; then
+              echo "argument comment lint still running via source wrapper ($(date -u '+%Y-%m-%dT%H:%M:%SZ'))"
+            else
+              echo "argument comment lint still running via Bazel ($(date -u '+%Y-%m-%dT%H:%M:%SZ'))"
+            fi
           done
         }
 
@@ -48,20 +50,38 @@ runs:
         trap cleanup EXIT
 
         set +e
-        timeout --foreground --signal=TERM --kill-after=30s 110m \
-          ./.github/scripts/run-bazel-ci.sh \
-            -- \
-            build \
-            --config=argument-comment-lint \
-            --keep_going \
-            --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
-            -- \
-            ${bazel_targets}
+        if [[ "${CODEX_BAZEL_FORCE_LOCAL:-0}" == "1" ]]; then
+          rustup toolchain install nightly-2025-09-18 \
+            --profile minimal \
+            --component llvm-tools-preview \
+            --component rustc-dev \
+            --component rust-src \
+            --no-self-update
+          cargo install --locked cargo-dylint dylint-link
+
+          timeout --foreground --signal=TERM --kill-after=30s 110m \
+            ./tools/argument-comment-lint/run.py
+        else
+          bazel_targets="$(./tools/argument-comment-lint/list-bazel-targets.sh)"
+          timeout --foreground --signal=TERM --kill-after=30s 110m \
+            ./.github/scripts/run-bazel-ci.sh \
+              -- \
+              build \
+              --config=argument-comment-lint \
+              --keep_going \
+              --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
+              -- \
+              ${bazel_targets}
+        fi
         status=$?
         set -e
 
         if [[ $status -eq 124 ]]; then
-          echo "argument comment lint Bazel step exceeded 110 minutes; failing explicitly before the 120-minute job timeout so shared CI follow-up can diagnose it."
+          if [[ "${CODEX_BAZEL_FORCE_LOCAL:-0}" == "1" ]]; then
+            echo "argument comment lint source-wrapper step exceeded 110 minutes; failing explicitly before the 120-minute job timeout so shared CI follow-up can diagnose it."
+          else
+            echo "argument comment lint Bazel step exceeded 110 minutes; failing explicitly before the 120-minute job timeout so shared CI follow-up can diagnose it."
+          fi
         fi
 
         exit "$status"
