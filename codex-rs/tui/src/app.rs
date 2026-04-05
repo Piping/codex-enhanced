@@ -5105,7 +5105,7 @@ impl App {
             }
             AppEvent::SaveClawbotManualBindSessionId { session_id } => {
                 if let Err(err) = self
-                    .save_clawbot_manual_bind_session_id(app_server, session_id)
+                    .bind_clawbot_session_to_current_thread(app_server, session_id)
                     .await
                 {
                     self.chat_widget
@@ -12991,7 +12991,7 @@ model = "gpt-5.2"
             ))
             .expect("queue unread");
 
-        app.save_clawbot_manual_bind_session_id(&mut app_server, "chat_bind".to_string())
+        app.bind_clawbot_session_to_current_thread(&mut app_server, "chat_bind".to_string())
             .await
             .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
 
@@ -13517,6 +13517,47 @@ model = "gpt-5.2"
 
         let popup = render_bottom_popup(&app.chat_widget, /*width*/ 100);
         assert_snapshot!("clawbot_management_popup", popup);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn clawbot_rebinds_discovered_session_from_management_actions() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start thread");
+        let target_thread_id = started.session.thread_id;
+        app.active_thread_id = Some(target_thread_id);
+
+        let (source_thread_id, session) =
+            bind_test_clawbot_session(&mut app, &mut app_server, "chat_rebind").await?;
+
+        app.bind_clawbot_session_to_current_thread(&mut app_server, "chat_rebind".to_string())
+            .await
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+
+        let runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+        assert_eq!(
+            runtime
+                .bound_session_for_thread(&target_thread_id.to_string())
+                .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?,
+            Some(session.clone())
+        );
+        assert_eq!(
+            runtime
+                .bound_session_for_thread(&source_thread_id.to_string())
+                .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?,
+            None
+        );
         Ok(())
     }
 

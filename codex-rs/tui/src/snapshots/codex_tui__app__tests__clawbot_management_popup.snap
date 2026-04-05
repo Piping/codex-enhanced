@@ -1,6 +1,5 @@
 ---
 source: tui/src/app.rs
-assertion_line: 12754
 expression: popup
 ---
   Clawbot
@@ -13,7 +12,7 @@ expression: popup
                                 credentials.
   4. Clear Unbound Sessions     Remove 1 unbound sessions and 1 cached unread messages.
      Alice                      bound · 0 unread
-     Bob                        unbound · 1 unread
+  6. Bob                        unbound · 1 unread
   7. Feishu App ID              Configured: cli_app_123
   8. Feishu App Secret          Configured: *************4567
 
