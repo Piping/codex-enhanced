@@ -221,6 +221,7 @@ use self::thread_events::*;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
+const PROFILE_SWITCH_THREAD_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 enum ThreadInteractiveRequest {
     AppLink(AppLinkViewParams),
@@ -671,18 +672,30 @@ impl App {
         }
 
         let input_state = self.chat_widget.capture_thread_input_state();
+        let can_resume_live_thread = self
+            .chat_widget
+            .rollout_path()
+            .as_ref()
+            .is_some_and(|path| path.exists());
         let thread_id = self
             .chat_widget
             .thread_id()
             .ok_or_else(|| "No active thread to reload after switching profiles.".to_string())?;
-        let next_thread = app_server
-            .resume_thread(next_config.clone(), thread_id)
-            .await
-            .map_err(|err| {
-                format!("Failed to reload current session after switching profiles: {err}")
-            })?;
+        self.close_active_thread_for_profile_reload(app_server, thread_id)
+            .await?;
+        let next_thread = if can_resume_live_thread {
+            app_server
+                .resume_thread(next_config.clone(), thread_id)
+                .await
+                .map_err(|err| {
+                    format!("Failed to reload current session after switching profiles: {err}")
+                })?
+        } else {
+            app_server.start_thread(&next_config).await.map_err(|err| {
+                format!("Failed to start a fresh session after switching profiles: {err}")
+            })?
+        };
 
-        self.shutdown_current_thread(app_server).await;
         self.active_profile = next_config.active_profile.clone();
         self.config = next_config;
         tui.set_notification_method(self.config.tui_notification_method);
@@ -692,6 +705,61 @@ impl App {
             .await
             .map_err(|err| err.to_string())?;
         self.chat_widget.restore_thread_input_state(input_state);
+        Ok(())
+    }
+
+    async fn close_active_thread_for_profile_reload(
+        &mut self,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+    ) -> std::result::Result<(), String> {
+        self.backtrack.pending_rollback = None;
+        app_server
+            .thread_unsubscribe(thread_id)
+            .await
+            .map_err(|err| {
+                format!("Failed to unload current session before switching profiles: {err}")
+            })?;
+
+        let close_wait = async {
+            loop {
+                match app_server.next_event().await {
+                    Some(codex_app_server_client::AppServerEvent::ServerNotification(
+                        ServerNotification::ThreadClosed(notification),
+                    )) if notification.thread_id == thread_id.to_string() => {
+                        break Ok(());
+                    }
+                    Some(codex_app_server_client::AppServerEvent::Disconnected { message }) => {
+                        self.chat_widget.add_error_message(message.clone());
+                        self.app_event_tx
+                            .send(AppEvent::FatalExitRequest(message.clone()));
+                        break Err(format!(
+                            "App-server disconnected while closing current session: {message}"
+                        ));
+                    }
+                    Some(event) => {
+                        self.handle_app_server_event(app_server, event).await;
+                    }
+                    None => {
+                        break Err(
+                            "App-server event stream closed while closing current session."
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+        };
+
+        tokio::time::timeout(PROFILE_SWITCH_THREAD_CLOSE_TIMEOUT, close_wait)
+            .await
+            .map_err(|_| {
+                format!(
+                    "Timed out waiting for current session `{thread_id}` to close before switching profiles."
+                )
+            })??;
+
+        self.clear_active_thread().await;
+        self.abort_thread_event_listener(thread_id);
         Ok(())
     }
 
@@ -11336,6 +11404,34 @@ model = "gpt-5.2"
             .expect("interrupt submission should not fail");
 
         assert_eq!(handled, true);
+    }
+
+    #[tokio::test]
+    async fn closing_active_thread_for_profile_reload_allows_fresh_start() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start thread");
+        let thread_id = started.session.thread_id;
+        app.primary_thread_id = Some(thread_id);
+        app.active_thread_id = Some(thread_id);
+
+        app.close_active_thread_for_profile_reload(&mut app_server, thread_id)
+            .await
+            .map_err(|err| color_eyre::eyre::eyre!(err))?;
+
+        assert_eq!(app.active_thread_id, None);
+
+        let restarted = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await?;
+        assert_ne!(restarted.session.thread_id, thread_id);
+        Ok(())
     }
 
     #[tokio::test]
