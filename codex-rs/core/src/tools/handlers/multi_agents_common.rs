@@ -24,6 +24,8 @@ use codex_protocol::user_input::UserInput;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
 
 /// Minimum wait timeout to prevent tight polling loops from burning CPU.
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
@@ -191,6 +193,44 @@ pub(crate) fn parse_collab_input(
             Ok(items.into())
         }
     }
+}
+
+pub(crate) fn resolve_requested_agent_cwd(
+    parent_cwd: &Path,
+    requested_cwd: Option<&str>,
+) -> Result<Option<PathBuf>, FunctionCallError> {
+    let Some(requested_cwd) = requested_cwd else {
+        return Ok(None);
+    };
+
+    let requested_cwd = requested_cwd.trim();
+    if requested_cwd.is_empty() {
+        return Err(FunctionCallError::RespondToModel(
+            "spawn_agent cwd cannot be empty".to_string(),
+        ));
+    }
+
+    let requested_path = PathBuf::from(requested_cwd);
+    let resolved = if requested_path.is_absolute() {
+        requested_path
+    } else {
+        parent_cwd.join(requested_path)
+    };
+
+    if !resolved.exists() {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "spawn_agent cwd {} does not exist",
+            resolved.display()
+        )));
+    }
+    if !resolved.is_dir() {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "spawn_agent cwd {} is not a directory",
+            resolved.display()
+        )));
+    }
+
+    Ok(Some(resolved))
 }
 
 /// Builds the base config snapshot for a newly spawned sub-agent.
