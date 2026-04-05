@@ -178,6 +178,7 @@ mod agent_navigation;
 mod app_server_adapter;
 pub(crate) mod app_server_requests;
 mod btw;
+mod jump_navigation;
 mod key_chord;
 mod loaded_threads;
 mod pending_interactive_replay;
@@ -186,6 +187,7 @@ mod workflow_definition;
 mod workflow_history;
 pub(crate) mod workflow_runtime;
 mod workflow_scheduler;
+mod thread_menu;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
@@ -5039,6 +5041,25 @@ impl App {
             AppEvent::OpenDisplayPreferencesPanel => {
                 self.open_display_preferences_panel();
             }
+            AppEvent::OpenThreadPanel => {
+                self.open_thread_panel();
+            }
+            AppEvent::OpenJumpToMessagePanel => {
+                self.open_jump_to_message_panel();
+            }
+            AppEvent::JumpToTranscriptCell { cell_index } => {
+                self.reset_backtrack_state();
+                self.backtrack.overlay_preview_active = false;
+                if !matches!(self.overlay, Some(Overlay::Transcript(_))) {
+                    self.open_transcript_overlay(tui);
+                }
+                if let Some(Overlay::Transcript(overlay)) = &mut self.overlay
+                    && cell_index < self.transcript_cells.len()
+                {
+                    overlay.set_highlight_cell(Some(cell_index));
+                    tui.frame_requester().schedule_frame();
+                }
+            }
             AppEvent::ForkCurrentSession => {
                 self.session_telemetry.counter(
                     "codex.thread.fork",
@@ -5100,6 +5121,9 @@ impl App {
                 }
 
                 tui.frame_requester().schedule_frame();
+            }
+            AppEvent::UndoLastUserMessage => {
+                self.undo_last_user_message();
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();

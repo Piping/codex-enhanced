@@ -254,6 +254,15 @@ async fn slash_btw_requires_prompt() {
 }
 
 #[tokio::test]
+async fn slash_thread_dispatches_open_thread_panel_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Thread);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenThreadPanel));
+}
+
+#[tokio::test]
 async fn slash_btw_dispatches_start_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
