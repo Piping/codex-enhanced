@@ -12861,10 +12861,16 @@ model = "gpt-5.2"
             bind_test_clawbot_session(&mut app, &mut app_server, "chat_controls").await?;
         app.active_thread_id = Some(thread_id);
 
-        app.clawbot_set_current_thread_forwarding(ClawbotForwardingChannel::Inbound, false)
-            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
-        app.clawbot_set_current_thread_forwarding(ClawbotForwardingChannel::Outbound, false)
-            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+        app.clawbot_set_current_thread_forwarding(
+            ClawbotForwardingChannel::Inbound,
+            /*enabled*/ false,
+        )
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+        app.clawbot_set_current_thread_forwarding(
+            ClawbotForwardingChannel::Outbound,
+            /*enabled*/ false,
+        )
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
 
         let runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
             .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;

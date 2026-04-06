@@ -863,7 +863,7 @@ mod tests {
                 bound_thread_id: Some("019d607a-cf72-72e1-a5b7-0dc17ad019ad".to_string()),
             },
             Some("019d607a-cf72-72e1-a5b7-0dc17ad019ae"),
-            None,
+            /*current_binding_session_id*/ None,
         );
 
         assert!(!item.is_disabled);
@@ -896,7 +896,7 @@ mod tests {
                 bound_thread_id: Some("019d607a-cf72-72e1-a5b7-0dc17ad019ad".to_string()),
             },
             Some("019d607a-cf72-72e1-a5b7-0dc17ad019ae"),
-            None,
+            /*current_binding_session_id*/ None,
         );
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -913,7 +913,7 @@ mod tests {
 
         assert_snapshot!(
             "bound_session_jump_item",
-            render_selection_popup(&view, 92, 14)
+            render_selection_popup(&view, /*width*/ 92, /*height*/ 14)
         );
     }
 }
