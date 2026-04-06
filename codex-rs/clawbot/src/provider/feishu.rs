@@ -1,6 +1,8 @@
 mod runtime_loop;
 mod sync;
 
+use std::path::Path;
+use std::path::PathBuf;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -22,6 +24,7 @@ use tokio::sync::mpsc;
 use super::ProviderEvent;
 use super::ProviderOutboundReaction;
 use super::ProviderOutboundTextMessage;
+use crate::append_diagnostic_event;
 use crate::config::FeishuConfig;
 use crate::events::ProviderInboundMessage;
 use crate::model::ConnectionStatus;
@@ -32,30 +35,34 @@ use crate::model::ProviderSessionRef;
 use crate::model::SessionStatus;
 
 #[derive(Debug, Clone)]
-pub struct FeishuInboundPrivateMessage {
+pub struct FeishuInboundMessage {
     pub chat_id: String,
     pub chat_type: String,
+    pub chat_name: Option<String>,
     pub message_id: String,
     pub sender_open_id: Option<String>,
     pub sender_user_id: Option<String>,
     pub sender_union_id: Option<String>,
-    pub sender_name: Option<String>,
     pub text: String,
     pub received_at: i64,
 }
 
 #[derive(Debug, Clone)]
 pub struct FeishuProviderRuntime {
+    workspace_root: PathBuf,
     config: FeishuConfig,
 }
 
 impl FeishuProviderRuntime {
-    pub fn new(config: FeishuConfig) -> Self {
-        Self { config }
+    pub fn new(workspace_root: impl Into<PathBuf>, config: FeishuConfig) -> Self {
+        Self {
+            workspace_root: workspace_root.into(),
+            config,
+        }
     }
 
     pub async fn run(self, provider_event_tx: mpsc::UnboundedSender<ProviderEvent>) -> Result<()> {
-        runtime_loop::run_with_reconnect(self.config, provider_event_tx).await
+        runtime_loop::run_with_reconnect(self.workspace_root, self.config, provider_event_tx).await
     }
 
     pub async fn send_text(&self, message: ProviderOutboundTextMessage) -> Result<()> {
@@ -66,18 +73,43 @@ impl FeishuProviderRuntime {
             ));
         }
 
-        let body = CreateMessageBody {
-            receive_id: message.session.session_id,
-            msg_type: "text".to_string(),
-            content: serde_json::to_string(&serde_json::json!({ "text": message.text }))?,
-            uuid: None,
-        };
-        CreateMessageRequest::new(self.messaging_config()?)
+        let text = message.text;
+        let session_id = message.session.session_id;
+        let response = CreateMessageRequest::new(self.messaging_config()?)
             .receive_id_type(ReceiveIdType::ChatId)
-            .execute(body)
+            .execute(CreateMessageBody {
+                receive_id: session_id.clone(),
+                msg_type: "text".to_string(),
+                content: serde_json::to_string(&serde_json::json!({ "text": text.clone() }))?,
+                uuid: None,
+            })
             .await
-            .map_err(|error| anyhow!("failed to send Feishu text message: {error}"))?;
-        Ok(())
+            .map_err(|error| anyhow!("failed to send Feishu text message: {error}"));
+        match response {
+            Ok(_) => {
+                let _ = append_diagnostic_event(
+                    self.workspace_root.as_path(),
+                    "feishu.send_text_succeeded",
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "text": text,
+                    }),
+                );
+                Ok(())
+            }
+            Err(error) => {
+                let _ = append_diagnostic_event(
+                    self.workspace_root.as_path(),
+                    "feishu.send_text_failed",
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "text": text,
+                        "error": error.to_string(),
+                    }),
+                );
+                Err(error)
+            }
+        }
     }
 
     pub async fn add_reaction(&self, reaction: ProviderOutboundReaction) -> Result<()> {
@@ -118,28 +150,31 @@ impl FeishuProviderRuntime {
     }
 
     pub async fn scan_sessions(&self) -> Result<Vec<ProviderEvent>> {
-        let sessions = sync::discover_private_sessions(&self.messaging_config()?).await?;
+        let sessions = sync::discover_supported_sessions(&self.messaging_config()?).await?;
         Ok(sessions
             .into_iter()
             .map(ProviderEvent::SessionUpserted)
             .collect())
     }
 
-    pub fn normalize_private_chat_message(
-        message: FeishuInboundPrivateMessage,
-    ) -> Option<Vec<ProviderEvent>> {
-        if !is_private_chat_type(&message.chat_type) || message.text.trim().is_empty() {
+    pub fn normalize_chat_message(message: FeishuInboundMessage) -> Option<Vec<ProviderEvent>> {
+        if !is_supported_chat_type(&message.chat_type) || message.text.trim().is_empty() {
             return None;
         }
 
+        let display_name = if is_group_chat_type(&message.chat_type) {
+            message.chat_name
+        } else {
+            message
+                .chat_name
+                .or(message.sender_open_id.clone())
+                .or(message.sender_user_id.clone())
+                .or(message.sender_union_id.clone())
+        };
         let session = ProviderSession {
             provider: ProviderKind::Feishu,
             session_id: message.chat_id.clone(),
-            display_name: message
-                .sender_name
-                .or(message.sender_open_id.clone())
-                .or(message.sender_user_id.clone())
-                .or(message.sender_union_id.clone()),
+            display_name,
             unread_count: 0,
             last_message_at: Some(message.received_at),
             status: SessionStatus::Discovered,
@@ -179,8 +214,19 @@ pub fn failure_reply_text(message: &str) -> String {
     format!("Request failed: {truncated}")
 }
 
-pub(super) fn provider_events_from_payload(payload: &[u8]) -> Vec<ProviderEvent> {
+pub(super) fn provider_events_from_payload(
+    payload: &[u8],
+    config: &FeishuConfig,
+    workspace_root: &Path,
+) -> Vec<ProviderEvent> {
     let Ok(envelope) = serde_json::from_slice::<FeishuEventEnvelope>(payload) else {
+        let _ = append_diagnostic_event(
+            workspace_root,
+            "feishu.payload_parse_failed",
+            serde_json::json!({
+                "payload": String::from_utf8_lossy(payload),
+            }),
+        );
         return Vec::new();
     };
 
@@ -189,7 +235,11 @@ pub(super) fn provider_events_from_payload(payload: &[u8]) -> Vec<ProviderEvent>
             serde_json::from_value::<FeishuMessageReceiveEvent>(envelope.event)
                 .ok()
                 .and_then(|event| {
-                    normalize_message_receive_event(FeishuMessageReceiveEnvelope { event })
+                    normalize_message_receive_event(
+                        FeishuMessageReceiveEnvelope { event },
+                        config,
+                        workspace_root,
+                    )
                 })
                 .unwrap_or_default()
         }
@@ -199,16 +249,99 @@ pub(super) fn provider_events_from_payload(payload: &[u8]) -> Vec<ProviderEvent>
                 .map(|event| normalize_chat_entered_event(FeishuChatEnteredEnvelope { event }))
                 .unwrap_or_default()
         }
-        _ => Vec::new(),
+        _ => {
+            let _ = append_diagnostic_event(
+                workspace_root,
+                "feishu.unsupported_event",
+                serde_json::json!({
+                    "event_type": envelope.header.event_type,
+                }),
+            );
+            Vec::new()
+        }
     }
 }
 
 fn normalize_message_receive_event(
     envelope: FeishuMessageReceiveEnvelope,
+    config: &FeishuConfig,
+    workspace_root: &Path,
 ) -> Option<Vec<ProviderEvent>> {
     let chat = envelope.event.chat;
     let message = envelope.event.message;
-    if !is_private_chat_type(&message.chat_type) || message.message_type != "text" {
+    let chat_type = message
+        .chat_type
+        .clone()
+        .or(chat.as_ref().and_then(|chat| chat.chat_type.clone()));
+    let message_type = message
+        .message_type
+        .as_deref()
+        .or(message.msg_type.as_deref());
+    let sender = envelope.event.sender.sender_id;
+    let Some(chat_type) = chat_type else {
+        let _ = append_diagnostic_event(
+            workspace_root,
+            "feishu.message_dropped",
+            serde_json::json!({
+                "reason": "missing_chat_type",
+                "message_id": message.message_id,
+            }),
+        );
+        return None;
+    };
+    let Some(message_type) = message_type else {
+        let _ = append_diagnostic_event(
+            workspace_root,
+            "feishu.message_dropped",
+            serde_json::json!({
+                "reason": "missing_message_type",
+                "chat_id": message.chat_id,
+                "message_id": message.message_id,
+                "chat_type": chat_type,
+            }),
+        );
+        return None;
+    };
+    if !is_supported_chat_type(&chat_type) {
+        let _ = append_diagnostic_event(
+            workspace_root,
+            "feishu.message_dropped",
+            serde_json::json!({
+                "reason": "unsupported_chat_type",
+                "chat_id": message.chat_id,
+                "message_id": message.message_id,
+                "chat_type": chat_type,
+            }),
+        );
+        return None;
+    }
+    if message_type != "text" {
+        let _ = append_diagnostic_event(
+            workspace_root,
+            "feishu.message_dropped",
+            serde_json::json!({
+                "reason": "unsupported_message_type",
+                "chat_id": message.chat_id,
+                "message_id": message.message_id,
+                "chat_type": chat_type,
+                "message_type": message_type,
+            }),
+        );
+        return None;
+    }
+    if config.is_bot_sender(sender.open_id.as_deref(), sender.user_id.as_deref()) {
+        let _ = append_diagnostic_event(
+            workspace_root,
+            "feishu.message_dropped",
+            serde_json::json!({
+                "reason": "bot_sender",
+                "chat_id": message.chat_id,
+                "message_id": message.message_id,
+                "chat_type": chat_type,
+                "sender_open_id": sender.open_id,
+                "sender_user_id": sender.user_id,
+            }),
+        );
         return None;
     }
 
@@ -216,21 +349,40 @@ fn normalize_message_receive_event(
         .as_ref()
         .map(|chat| chat.chat_id.clone())
         .or(message.chat_id.clone())?;
-    let text = serde_json::from_str::<FeishuTextContent>(&message.content)
+    let raw_content = message
+        .content
+        .or(message.body.and_then(|body| body.content))
+        .unwrap_or_default();
+    let text = serde_json::from_str::<FeishuTextContent>(&raw_content)
         .ok()
         .map(|content| content.text)
-        .unwrap_or_default();
-    let received_at = parse_optional_timestamp(Some(message.create_time))?;
+        .unwrap_or(raw_content);
+    let normalized_text = if is_group_chat_type(&chat_type) {
+        strip_group_mention_prefix(&text)
+    } else {
+        text
+    };
+    let received_at = parse_timestamp_value(message.create_time)?;
+    let _ = append_diagnostic_event(
+        workspace_root,
+        "feishu.message_normalized",
+        serde_json::json!({
+            "chat_id": chat_id.clone(),
+            "chat_type": chat_type.clone(),
+            "message_id": message.message_id.clone(),
+            "text": normalized_text.clone(),
+        }),
+    );
 
-    FeishuProviderRuntime::normalize_private_chat_message(FeishuInboundPrivateMessage {
+    FeishuProviderRuntime::normalize_chat_message(FeishuInboundMessage {
         chat_id,
-        chat_type: message.chat_type,
+        chat_type,
+        chat_name: chat.and_then(|chat| chat.name),
         message_id: message.message_id,
-        sender_open_id: envelope.event.sender.sender_id.open_id,
-        sender_user_id: envelope.event.sender.sender_id.user_id,
-        sender_union_id: envelope.event.sender.sender_id.union_id,
-        sender_name: chat.and_then(|chat| chat.name),
-        text,
+        sender_open_id: sender.open_id,
+        sender_user_id: sender.user_id,
+        sender_union_id: sender.union_id,
+        text: normalized_text,
         received_at,
     })
 }
@@ -256,8 +408,55 @@ fn parse_optional_timestamp(timestamp: Option<String>) -> Option<i64> {
     timestamp.and_then(|value| value.parse::<i64>().ok())
 }
 
+fn parse_timestamp_value(timestamp: serde_json::Value) -> Option<i64> {
+    match timestamp {
+        serde_json::Value::String(value) => parse_optional_timestamp(Some(value)),
+        serde_json::Value::Number(value) => value.as_i64(),
+        _ => None,
+    }
+}
+
+fn is_supported_chat_type(chat_type: &str) -> bool {
+    is_private_chat_type(chat_type) || is_group_chat_type(chat_type)
+}
+
 fn is_private_chat_type(chat_type: &str) -> bool {
     matches!(chat_type, "p2p" | "private")
+}
+
+fn is_group_chat_type(chat_type: &str) -> bool {
+    matches!(chat_type, "group")
+}
+
+fn strip_group_mention_prefix(text: &str) -> String {
+    let mut remaining = text.trim_start();
+    let mut stripped = false;
+
+    loop {
+        let Some(after_at) = remaining.strip_prefix('@') else {
+            break;
+        };
+        let mention_len = after_at
+            .char_indices()
+            .find_map(|(idx, ch)| {
+                (ch.is_whitespace() || matches!(ch, ':' | '：' | ',' | '，')).then_some(idx)
+            })
+            .unwrap_or(after_at.len());
+        if mention_len == 0 {
+            break;
+        }
+        remaining = &after_at[mention_len..];
+        remaining = remaining.trim_start_matches(|ch: char| {
+            ch.is_whitespace() || matches!(ch, ':' | '：' | ',' | '，')
+        });
+        stripped = true;
+    }
+
+    if stripped {
+        remaining.to_string()
+    } else {
+        text.to_string()
+    }
 }
 
 pub(super) fn runtime_state(
@@ -325,17 +524,26 @@ struct FeishuUserId {
 #[derive(Debug, Deserialize)]
 struct FeishuEventMessage {
     message_id: String,
-    create_time: String,
+    create_time: serde_json::Value,
     #[serde(default)]
     chat_id: Option<String>,
-    chat_type: String,
-    message_type: String,
-    content: String,
+    #[serde(default)]
+    chat_type: Option<String>,
+    #[serde(default)]
+    message_type: Option<String>,
+    #[serde(default)]
+    msg_type: Option<String>,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    body: Option<FeishuEventMessageBody>,
 }
 
 #[derive(Debug, Deserialize)]
 struct FeishuEventChat {
     chat_id: String,
+    #[serde(default)]
+    chat_type: Option<String>,
     #[serde(default)]
     name: Option<String>,
 }
@@ -343,6 +551,11 @@ struct FeishuEventChat {
 #[derive(Debug, Deserialize)]
 struct FeishuTextContent {
     text: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct FeishuEventMessageBody {
+    content: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -359,12 +572,16 @@ struct FeishuChatEnteredEvent {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use pretty_assertions::assert_eq;
 
-    use super::FeishuInboundPrivateMessage;
+    use super::FeishuInboundMessage;
     use super::failure_reply_text;
     use super::normalize_chat_entered_event;
     use super::normalize_message_receive_event;
+    use super::strip_group_mention_prefix;
+    use crate::config::FeishuConfig;
     use crate::model::ProviderKind;
     use crate::model::ProviderSession;
     use crate::model::ProviderSessionRef;
@@ -372,20 +589,18 @@ mod tests {
     use crate::provider::ProviderEvent;
 
     #[test]
-    fn normalize_private_chat_message_creates_session_and_inbound_events() {
-        let events = super::FeishuProviderRuntime::normalize_private_chat_message(
-            FeishuInboundPrivateMessage {
-                chat_id: "chat_123".to_string(),
-                chat_type: "p2p".to_string(),
-                message_id: "msg_123".to_string(),
-                sender_open_id: Some("ou_123".to_string()),
-                sender_user_id: None,
-                sender_union_id: None,
-                sender_name: Some("Alice".to_string()),
-                text: "hello".to_string(),
-                received_at: 123,
-            },
-        )
+    fn normalize_chat_message_creates_session_and_inbound_events() {
+        let events = super::FeishuProviderRuntime::normalize_chat_message(FeishuInboundMessage {
+            chat_id: "chat_123".to_string(),
+            chat_type: "p2p".to_string(),
+            chat_name: Some("Alice".to_string()),
+            message_id: "msg_123".to_string(),
+            sender_open_id: Some("ou_123".to_string()),
+            sender_user_id: None,
+            sender_union_id: None,
+            text: "hello".to_string(),
+            received_at: 123,
+        })
         .expect("events");
 
         assert_eq!(
@@ -423,17 +638,171 @@ mod tests {
                 },
                 message: super::FeishuEventMessage {
                     message_id: "msg_123".to_string(),
-                    create_time: "456".to_string(),
+                    create_time: serde_json::json!("456"),
                     chat_id: Some("chat_123".to_string()),
-                    chat_type: "p2p".to_string(),
-                    message_type: "image".to_string(),
-                    content: "{}".to_string(),
+                    chat_type: Some("p2p".to_string()),
+                    message_type: Some("image".to_string()),
+                    msg_type: None,
+                    content: Some("{}".to_string()),
+                    body: None,
                 },
                 chat: None,
             },
         };
 
-        assert_eq!(normalize_message_receive_event(envelope), None);
+        assert_eq!(
+            normalize_message_receive_event(envelope, &FeishuConfig::default(), Path::new("/tmp")),
+            None
+        );
+    }
+
+    #[test]
+    fn message_receive_event_accepts_group_text_messages() {
+        let envelope = super::FeishuMessageReceiveEnvelope {
+            event: super::FeishuMessageReceiveEvent {
+                sender: super::FeishuEventSender {
+                    sender_id: super::FeishuUserId {
+                        open_id: Some("ou_member".to_string()),
+                        user_id: None,
+                        union_id: None,
+                    },
+                },
+                message: super::FeishuEventMessage {
+                    message_id: "msg_group_1".to_string(),
+                    create_time: serde_json::json!("456"),
+                    chat_id: Some("chat_group_123".to_string()),
+                    chat_type: Some("group".to_string()),
+                    message_type: Some("text".to_string()),
+                    msg_type: None,
+                    content: Some("{\"text\":\"hello group\"}".to_string()),
+                    body: None,
+                },
+                chat: Some(super::FeishuEventChat {
+                    chat_id: "chat_group_123".to_string(),
+                    chat_type: Some("group".to_string()),
+                    name: Some("tracker".to_string()),
+                }),
+            },
+        };
+
+        assert_eq!(
+            normalize_message_receive_event(envelope, &FeishuConfig::default(), Path::new("/tmp")),
+            Some(vec![
+                ProviderEvent::SessionUpserted(ProviderSession {
+                    provider: ProviderKind::Feishu,
+                    session_id: "chat_group_123".to_string(),
+                    display_name: Some("tracker".to_string()),
+                    unread_count: 0,
+                    last_message_at: Some(456),
+                    status: SessionStatus::Discovered,
+                    bound_thread_id: None,
+                }),
+                ProviderEvent::InboundMessage(crate::events::ProviderInboundMessage {
+                    session: ProviderSessionRef::new(ProviderKind::Feishu, "chat_group_123"),
+                    message_id: "msg_group_1".to_string(),
+                    text: "hello group".to_string(),
+                    received_at: 456,
+                }),
+            ])
+        );
+    }
+
+    #[test]
+    fn message_receive_event_skips_bot_authored_messages() {
+        let envelope = super::FeishuMessageReceiveEnvelope {
+            event: super::FeishuMessageReceiveEvent {
+                sender: super::FeishuEventSender {
+                    sender_id: super::FeishuUserId {
+                        open_id: Some("ou_bot".to_string()),
+                        user_id: None,
+                        union_id: None,
+                    },
+                },
+                message: super::FeishuEventMessage {
+                    message_id: "msg_bot_1".to_string(),
+                    create_time: serde_json::json!("456"),
+                    chat_id: Some("chat_group_123".to_string()),
+                    chat_type: Some("group".to_string()),
+                    message_type: Some("text".to_string()),
+                    msg_type: None,
+                    content: Some("{\"text\":\"hello group\"}".to_string()),
+                    body: None,
+                },
+                chat: Some(super::FeishuEventChat {
+                    chat_id: "chat_group_123".to_string(),
+                    chat_type: Some("group".to_string()),
+                    name: Some("tracker".to_string()),
+                }),
+            },
+        };
+
+        assert_eq!(
+            normalize_message_receive_event(
+                envelope,
+                &FeishuConfig {
+                    bot_open_id: Some("ou_bot".to_string()),
+                    ..FeishuConfig::default()
+                },
+                Path::new("/tmp"),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn message_receive_event_uses_chat_fallbacks_for_group_payloads() {
+        let envelope = super::FeishuMessageReceiveEnvelope {
+            event: super::FeishuMessageReceiveEvent {
+                sender: super::FeishuEventSender {
+                    sender_id: super::FeishuUserId {
+                        open_id: Some("ou_member".to_string()),
+                        user_id: None,
+                        union_id: None,
+                    },
+                },
+                message: super::FeishuEventMessage {
+                    message_id: "msg_group_fallback_1".to_string(),
+                    create_time: serde_json::json!(456),
+                    chat_id: None,
+                    chat_type: None,
+                    message_type: None,
+                    msg_type: Some("text".to_string()),
+                    content: None,
+                    body: Some(super::FeishuEventMessageBody {
+                        content: Some("{\"text\":\"hello fallback\"}".to_string()),
+                    }),
+                },
+                chat: Some(super::FeishuEventChat {
+                    chat_id: "chat_group_fallback_123".to_string(),
+                    chat_type: Some("group".to_string()),
+                    name: Some("tracker".to_string()),
+                }),
+            },
+        };
+
+        assert_eq!(
+            normalize_message_receive_event(envelope, &FeishuConfig::default(), Path::new("/tmp")),
+            Some(vec![
+                ProviderEvent::SessionUpserted(ProviderSession {
+                    provider: ProviderKind::Feishu,
+                    session_id: "chat_group_fallback_123".to_string(),
+                    display_name: Some("tracker".to_string()),
+                    unread_count: 0,
+                    last_message_at: Some(456),
+                    status: SessionStatus::Discovered,
+                    bound_thread_id: None,
+                }),
+                ProviderEvent::InboundMessage(crate::events::ProviderInboundMessage {
+                    session: ProviderSessionRef::new(
+                        ProviderKind::Feishu,
+                        "chat_group_fallback_123",
+                    ),
+                    message_id: "msg_group_fallback_1".to_string(),
+                    text: "hello fallback".to_string(),
+                    received_at: 456,
+                }),
+            ])
+        );
     }
 
     #[test]
@@ -469,6 +838,22 @@ mod tests {
         assert_eq!(
             failure_reply_text("\nboom\nsecond"),
             "Request failed: boom".to_string()
+        );
+    }
+
+    #[test]
+    fn strip_group_mention_prefix_removes_leading_mentions() {
+        assert_eq!(
+            strip_group_mention_prefix("@_user_1 TRACKER TEST 2"),
+            "TRACKER TEST 2".to_string()
+        );
+        assert_eq!(
+            strip_group_mention_prefix("@bot： hello"),
+            "hello".to_string()
+        );
+        assert_eq!(
+            strip_group_mention_prefix("@bot @helper ping"),
+            "ping".to_string()
         );
     }
 }

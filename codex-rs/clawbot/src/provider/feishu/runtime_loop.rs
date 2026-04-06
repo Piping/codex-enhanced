@@ -1,3 +1,5 @@
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,6 +12,7 @@ use tokio::sync::mpsc;
 
 use super::provider_events_from_payload;
 use super::runtime_state;
+use crate::append_diagnostic_event;
 use crate::config::FeishuConfig;
 use crate::model::ConnectionStatus;
 use crate::provider::ProviderEvent;
@@ -18,6 +21,7 @@ const INITIAL_RECONNECT_DELAY: Duration = Duration::from_secs(2);
 const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
 
 pub(super) async fn run_with_reconnect(
+    workspace_root: PathBuf,
     config: FeishuConfig,
     provider_event_tx: mpsc::UnboundedSender<ProviderEvent>,
 ) -> Result<()> {
@@ -31,8 +35,15 @@ pub(super) async fn run_with_reconnect(
 
     let mut reconnect_delay = INITIAL_RECONNECT_DELAY;
     loop {
-        match run_once(&config, &provider_event_tx).await {
+        match run_once(workspace_root.as_path(), &config, &provider_event_tx).await {
             Ok(()) => {
+                let _ = append_diagnostic_event(
+                    workspace_root.as_path(),
+                    "feishu.runtime_disconnected",
+                    serde_json::json!({
+                        "reconnect_delay_secs": reconnect_delay.as_secs(),
+                    }),
+                );
                 let _ = provider_event_tx.send(ProviderEvent::RuntimeStateUpdated(runtime_state(
                     ConnectionStatus::Disconnected,
                     Some(format!(
@@ -42,6 +53,14 @@ pub(super) async fn run_with_reconnect(
                 )?));
             }
             Err(error) => {
+                let _ = append_diagnostic_event(
+                    workspace_root.as_path(),
+                    "feishu.runtime_failed",
+                    serde_json::json!({
+                        "error": error.to_string(),
+                        "reconnect_delay_secs": reconnect_delay.as_secs(),
+                    }),
+                );
                 let _ = provider_event_tx.send(ProviderEvent::RuntimeStateUpdated(runtime_state(
                     ConnectionStatus::Error,
                     Some(format!(
@@ -58,6 +77,7 @@ pub(super) async fn run_with_reconnect(
 }
 
 async fn run_once(
+    workspace_root: &Path,
     config: &FeishuConfig,
     provider_event_tx: &mpsc::UnboundedSender<ProviderEvent>,
 ) -> Result<()> {
@@ -72,14 +92,30 @@ async fn run_once(
         .payload_sender(payload_tx)
         .build();
     let payload_provider_event_tx = provider_event_tx.clone();
+    let payload_config = config.clone();
+    let payload_workspace_root = workspace_root.to_path_buf();
     let payload_task = tokio::spawn(async move {
         while let Some(payload) = payload_rx.recv().await {
-            for event in provider_events_from_payload(&payload) {
+            let _ = append_diagnostic_event(
+                payload_workspace_root.as_path(),
+                "feishu.raw_payload",
+                payload_debug_value(&payload),
+            );
+            for event in provider_events_from_payload(
+                &payload,
+                &payload_config,
+                payload_workspace_root.as_path(),
+            ) {
                 let _ = payload_provider_event_tx.send(event);
             }
         }
     });
 
+    let _ = append_diagnostic_event(
+        workspace_root,
+        "feishu.runtime_connected",
+        serde_json::json!({}),
+    );
     let _ = provider_event_tx.send(ProviderEvent::RuntimeStateUpdated(runtime_state(
         ConnectionStatus::Connected,
         None,
@@ -97,4 +133,12 @@ pub(super) fn build_websocket_config(config: &FeishuConfig) -> Result<openlark_c
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|error| anyhow!("failed to build Feishu websocket config: {error}"))
+}
+
+fn payload_debug_value(payload: &[u8]) -> serde_json::Value {
+    serde_json::from_slice(payload).unwrap_or_else(|_| {
+        serde_json::json!({
+            "raw": String::from_utf8_lossy(payload),
+        })
+    })
 }

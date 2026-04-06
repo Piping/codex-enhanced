@@ -1,4 +1,5 @@
 mod config;
+mod diagnostics;
 mod events;
 mod model;
 mod provider;
@@ -8,9 +9,11 @@ mod store;
 pub use config::ClawbotConfig;
 pub use config::ClawbotTurnMode;
 pub use config::FeishuConfig;
+pub use diagnostics::append_diagnostic_event;
 pub use events::ProviderInboundMessage;
 pub use model::CLAWBOT_BINDINGS_RELATIVE_PATH;
 pub use model::CLAWBOT_CONFIG_RELATIVE_PATH;
+pub use model::CLAWBOT_DIAGNOSTICS_RELATIVE_PATH;
 pub use model::CLAWBOT_INBOUND_RECEIPTS_RELATIVE_PATH;
 pub use model::CLAWBOT_RELATIVE_DIR;
 pub use model::CLAWBOT_RUNTIME_RELATIVE_PATH;
