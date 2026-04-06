@@ -160,10 +160,14 @@ mod tests {
         let preferences = DisplayPreferences::from_config(&config);
         assert!(!preferences.show_startup_tooltips());
 
-        preferences.set_enabled(DisplayPreferenceKey::StartupTooltips, true);
+        preferences.set_enabled(DisplayPreferenceKey::StartupTooltips, /*enabled*/ true);
         assert!(preferences.show_startup_tooltips());
 
-        set_display_preference_in_config(&mut config, DisplayPreferenceKey::StartupTooltips, true);
+        set_display_preference_in_config(
+            &mut config,
+            DisplayPreferenceKey::StartupTooltips,
+            /*enabled*/ true,
+        );
         assert!(config.show_tooltips);
     }
 
@@ -177,20 +181,31 @@ mod tests {
         assert!(!preferences.show_tool_results());
         assert!(!preferences.show_patch_diffs());
 
-        preferences.set_enabled(DisplayPreferenceKey::ToolResults, true);
-        preferences.set_enabled(DisplayPreferenceKey::PatchDiffs, true);
+        preferences.set_enabled(DisplayPreferenceKey::ToolResults, /*enabled*/ true);
+        preferences.set_enabled(DisplayPreferenceKey::PatchDiffs, /*enabled*/ true);
         assert!(preferences.show_tool_results());
         assert!(preferences.show_patch_diffs());
 
-        set_display_preference_in_config(&mut config, DisplayPreferenceKey::ToolResults, true);
-        set_display_preference_in_config(&mut config, DisplayPreferenceKey::PatchDiffs, true);
+        set_display_preference_in_config(
+            &mut config,
+            DisplayPreferenceKey::ToolResults,
+            /*enabled*/ true,
+        );
+        set_display_preference_in_config(
+            &mut config,
+            DisplayPreferenceKey::PatchDiffs,
+            /*enabled*/ true,
+        );
         assert!(config.tui_display_preferences.show_tool_results);
         assert!(config.tui_display_preferences.show_patch_diffs);
     }
 
     #[test]
     fn startup_tooltips_edit_targets_tui_show_tooltips() {
-        match display_preference_edit(DisplayPreferenceKey::StartupTooltips, false) {
+        match display_preference_edit(
+            DisplayPreferenceKey::StartupTooltips,
+            /*enabled*/ false,
+        ) {
             ConfigEdit::SetPath { segments, value } => {
                 assert_eq!(
                     segments,
@@ -204,7 +219,7 @@ mod tests {
 
     #[test]
     fn transcript_visibility_edits_target_tui_display_preferences() {
-        match display_preference_edit(DisplayPreferenceKey::ToolResults, false) {
+        match display_preference_edit(DisplayPreferenceKey::ToolResults, /*enabled*/ false) {
             ConfigEdit::SetPath { segments, value } => {
                 assert_eq!(
                     segments,
@@ -219,7 +234,7 @@ mod tests {
             other => panic!("unexpected config edit: {other:?}"),
         }
 
-        match display_preference_edit(DisplayPreferenceKey::PatchDiffs, false) {
+        match display_preference_edit(DisplayPreferenceKey::PatchDiffs, /*enabled*/ false) {
             ConfigEdit::SetPath { segments, value } => {
                 assert_eq!(
                     segments,

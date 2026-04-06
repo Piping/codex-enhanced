@@ -200,14 +200,24 @@ mod tests {
     fn thread_panel_popup_snapshot() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let view = ListSelectionView::new(thread_panel_params(/*task_running*/ false, None), tx);
+        let view = ListSelectionView::new(
+            thread_panel_params(
+                /*task_running*/ false, /*initial_selected_idx*/ None,
+            ),
+            tx,
+        );
 
-        assert_snapshot!("thread_panel_popup", render_selection_popup(&view, 92, 20));
+        assert_snapshot!(
+            "thread_panel_popup",
+            render_selection_popup(&view, /*width*/ 92, /*height*/ 20)
+        );
     }
 
     #[test]
     fn thread_panel_disables_mutations_while_task_running() {
-        let params = thread_panel_params(/*task_running*/ true, None);
+        let params = thread_panel_params(
+            /*task_running*/ true, /*initial_selected_idx*/ None,
+        );
 
         assert_eq!(params.items[0].is_disabled, true);
         assert_eq!(params.items[1].is_disabled, false);
@@ -230,11 +240,14 @@ mod tests {
                 /*is_first_line*/ true,
             )) as Arc<dyn HistoryCell>,
         ];
-        let view = ListSelectionView::new(jump_to_message_panel_params(&cells, None), tx);
+        let view = ListSelectionView::new(
+            jump_to_message_panel_params(&cells, /*initial_selected_idx*/ None),
+            tx,
+        );
 
         assert_snapshot!(
             "jump_to_message_popup",
-            render_selection_popup(&view, 92, 22)
+            render_selection_popup(&view, /*width*/ 92, /*height*/ 22)
         );
     }
 
@@ -243,11 +256,14 @@ mod tests {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let cells: Vec<Arc<dyn HistoryCell>> = Vec::new();
-        let view = ListSelectionView::new(jump_to_message_panel_params(&cells, None), tx);
+        let view = ListSelectionView::new(
+            jump_to_message_panel_params(&cells, /*initial_selected_idx*/ None),
+            tx,
+        );
 
         assert_snapshot!(
             "jump_to_message_empty_popup",
-            render_selection_popup(&view, 92, 18)
+            render_selection_popup(&view, /*width*/ 92, /*height*/ 18)
         );
     }
 }
