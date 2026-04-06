@@ -10910,6 +10910,22 @@ jobs:
         }
     }
 
+    fn request_user_input_request(
+        thread_id: ThreadId,
+        turn_id: &str,
+        item_id: &str,
+    ) -> ServerRequest {
+        ServerRequest::ToolRequestUserInput {
+            request_id: AppServerRequestId::Integer(99),
+            params: ToolRequestUserInputParams {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                item_id: item_id.to_string(),
+                questions: Vec::new(),
+            },
+        }
+    }
+
     #[test]
     fn thread_event_store_tracks_active_turn_lifecycle() {
         let mut store = ThreadEventStore::new(/*capacity*/ 8);
@@ -13150,6 +13166,7 @@ model = "gpt-5.2"
         app.btw_session = Some(BtwSessionState {
             thread_id,
             final_message: None,
+            last_status: None,
         });
 
         let swallowed = app.handle_btw_notification(
@@ -13176,6 +13193,57 @@ model = "gpt-5.2"
     }
 
     #[tokio::test]
+    async fn btw_loading_popup_surfaces_hidden_hook_status() {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.btw_session = Some(BtwSessionState {
+            thread_id,
+            final_message: None,
+            last_status: None,
+        });
+
+        let swallowed = app
+            .handle_btw_notification(thread_id, &hook_started_notification(thread_id, "turn-btw"));
+
+        assert!(swallowed);
+        let popup = render_bottom_popup(&app.chat_widget, /*width*/ 100);
+        assert!(
+            popup.contains("Current hidden status:")
+                && popup.contains("Running UserPromptSubmit hook: checking")
+                && popup.contains("go-workflow input policy"),
+            "expected hidden hook status in /btw popup: {popup}"
+        );
+    }
+
+    #[tokio::test]
+    async fn btw_request_user_input_opens_failure_popup_instead_of_hanging() {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.btw_session = Some(BtwSessionState {
+            thread_id,
+            final_message: None,
+            last_status: None,
+        });
+
+        let reason = app.reject_btw_request(
+            thread_id,
+            &request_user_input_request(thread_id, "turn-btw", "call-1"),
+        );
+
+        assert_eq!(
+            reason,
+            Some(
+                "the hidden temporary discussion asked for interactive user input. Run the prompt in the main thread instead.".to_string()
+            )
+        );
+        let popup = render_bottom_popup(&app.chat_widget, /*width*/ 100);
+        assert!(
+            popup.contains("asked for interactive user input"),
+            "expected /btw failure popup for hidden request_user_input: {popup}"
+        );
+    }
+
+    #[tokio::test]
     async fn btw_insert_summary_appends_to_existing_composer() -> Result<()> {
         let mut app = make_test_app().await;
         let mut app_server =
@@ -13184,6 +13252,7 @@ model = "gpt-5.2"
         app.btw_session = Some(BtwSessionState {
             thread_id,
             final_message: Some("First point.\n\nSecond point.".to_string()),
+            last_status: None,
         });
         app.chat_widget
             .set_composer_text("Existing draft".to_string(), Vec::new(), Vec::new());
@@ -13197,7 +13266,6 @@ model = "gpt-5.2"
         assert!(app.btw_session.is_none());
         Ok(())
     }
-
     async fn shutdown_first_exit_returns_immediate_exit_when_shutdown_submit_fails() {
         let mut app = make_test_app().await;
         let thread_id = ThreadId::new();
