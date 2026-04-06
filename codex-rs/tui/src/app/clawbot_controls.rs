@@ -499,7 +499,7 @@ impl App {
             SelectionItem {
                 name: "Scan Feishu Sessions".to_string(),
                 description: Some(
-                    "Discover private Feishu chats using the persisted workspace credentials."
+                    "Discover Feishu chats and bot groups using the persisted workspace credentials."
                         .to_string(),
                 ),
                 selected_description: Some(
