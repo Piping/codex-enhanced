@@ -58,7 +58,7 @@ impl ClawbotFeishuConfigField {
         if self.is_secret() {
             format!("Configured: {}", mask_secret(&value))
         } else {
-            format!("Configured: {}", truncate_value(&value, 28))
+            format!("Configured: {}", truncate_value(&value, /*max_chars*/ 28))
         }
     }
 
@@ -81,7 +81,7 @@ impl ClawbotFeishuConfigField {
                 format!("Current: {}", mask_secret(&value))
             }
             Some(value) => {
-                format!("Current: {}", truncate_value(&value, 40))
+                format!("Current: {}", truncate_value(&value, /*max_chars*/ 40))
             }
             None => "Current: not set".to_string(),
         }
@@ -684,7 +684,7 @@ fn connection_description(state: &ProviderRuntimeState) -> String {
     };
     match state.last_error.as_deref() {
         Some(error) if !error.trim().is_empty() => {
-            format!("{status}: {}", truncate_value(error, 48))
+            format!("{status}: {}", truncate_value(error, /*max_chars*/ 48))
         }
         _ => status.to_string(),
     }

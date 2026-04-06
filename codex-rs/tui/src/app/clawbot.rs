@@ -425,11 +425,11 @@ impl App {
                 session.sandbox_policy,
                 session.model,
                 session.reasoning_effort,
-                None,
+                /*summary*/ None,
                 Some(session.service_tier),
-                None,
+                /*collaboration_mode*/ None,
                 self.config.personality,
-                None,
+                /*output_schema*/ None,
             )
             .await
             .map_err(|err| {
