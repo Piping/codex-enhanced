@@ -165,6 +165,13 @@ jobs:
           }
           trap cleanup EXIT
 
+          rustup toolchain install nightly-2025-09-18 \
+            --profile minimal \
+            --component llvm-tools-preview \
+            --component rustc-dev \
+            --component rust-src \
+            --no-self-update
+
           set +e
           timeout --foreground --signal=TERM --kill-after=30s 110m \
             ./tools/argument-comment-lint/run-prebuilt-linter.py
