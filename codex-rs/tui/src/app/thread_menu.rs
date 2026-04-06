@@ -200,9 +200,17 @@ mod tests {
     fn thread_panel_popup_snapshot() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let view = ListSelectionView::new(thread_panel_params(/*task_running*/ false, None), tx);
+        let view = ListSelectionView::new(
+            thread_panel_params(
+                /*task_running*/ false, /*initial_selected_idx*/ None,
+            ),
+            tx,
+        );
 
-        assert_snapshot!("thread_panel_popup", render_selection_popup(&view, 92, 20));
+        assert_snapshot!(
+            "thread_panel_popup",
+            render_selection_popup(&view, /*width*/ 92, /*height*/ 20)
+        );
     }
 
     #[test]

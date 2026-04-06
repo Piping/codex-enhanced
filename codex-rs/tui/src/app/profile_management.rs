@@ -322,14 +322,14 @@ mod tests {
                 &profiles,
                 /*routed_count*/ 2,
                 /*task_running*/ false,
-                None,
+                /*initial_selected_idx*/ None,
             ),
             tx,
         );
 
         assert_snapshot!(
             "profile_management_popup",
-            render_selection_popup(&view, 96, 22)
+            render_selection_popup(&view, /*width*/ 96, /*height*/ 22)
         );
     }
 
@@ -351,7 +351,7 @@ mod tests {
             }],
             /*routed_count*/ 1,
             /*task_running*/ true,
-            None,
+            /*initial_selected_idx*/ None,
         );
 
         assert_eq!(params.items[0].is_disabled, true);

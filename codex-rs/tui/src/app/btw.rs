@@ -718,7 +718,10 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let view = ListSelectionView::new(btw_loading_view_params(/*status_message*/ None), tx);
 
-        assert_snapshot!("btw_loading_popup", render_selection_popup(&view, 92, 20));
+        assert_snapshot!(
+            "btw_loading_popup",
+            render_selection_popup(&view, /*width*/ 92, /*height*/ 20)
+        );
     }
 
     #[test]
@@ -733,7 +736,10 @@ mod tests {
             tx,
         );
 
-        assert_snapshot!("btw_result_popup", render_selection_popup(&view, 92, 28));
+        assert_snapshot!(
+            "btw_result_popup",
+            render_selection_popup(&view, /*width*/ 92, /*height*/ 28)
+        );
     }
 
     #[test]
@@ -745,7 +751,10 @@ mod tests {
             tx,
         );
 
-        assert_snapshot!("btw_failure_popup", render_selection_popup(&view, 92, 20));
+        assert_snapshot!(
+            "btw_failure_popup",
+            render_selection_popup(&view, /*width*/ 92, /*height*/ 20)
+        );
     }
 
     #[test]
