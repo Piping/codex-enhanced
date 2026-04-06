@@ -3,8 +3,12 @@ use std::path::PathBuf;
 
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::HookEventName as AppServerHookEventName;
+use codex_app_server_protocol::HookOutputEntryKind as AppServerHookOutputEntryKind;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -43,6 +47,7 @@ const SUMMARY_MAX_CHARS: usize = 500;
 pub(crate) struct BtwSessionState {
     pub(crate) thread_id: ThreadId,
     pub(crate) final_message: Option<String>,
+    pub(crate) last_status: Option<String>,
 }
 
 impl App {
@@ -66,7 +71,7 @@ impl App {
             return;
         }
 
-        self.open_btw_loading_popup();
+        self.open_btw_loading_popup(/*status_message*/ None);
 
         let thread_id = match self.start_btw_thread(app_server).await {
             Ok(thread_id) => thread_id,
@@ -78,6 +83,7 @@ impl App {
         self.btw_session = Some(BtwSessionState {
             thread_id,
             final_message: None,
+            last_status: None,
         });
 
         let turn_result = app_server
@@ -121,31 +127,54 @@ impl App {
                 self.open_btw_result_popup(&message);
             }
             Err(err) => {
-                self.open_btw_failure_popup(&format!("`/btw` failed: {err}"));
+                let message = btw_failure_message(&err, session.last_status.as_deref());
+                self.open_btw_failure_popup(&message);
             }
         }
+    }
+
+    pub(crate) fn reject_btw_request(
+        &mut self,
+        thread_id: ThreadId,
+        request: &ServerRequest,
+    ) -> Option<String> {
+        let session = self.btw_session.as_mut()?;
+        if session.thread_id != thread_id {
+            return None;
+        }
+
+        let reason = btw_request_rejection_reason(request);
+        session.last_status = Some(reason.clone());
+        self.open_btw_failure_popup(&format!("`/btw` cannot continue: {reason}"));
+        Some(reason)
     }
 
     pub(crate) fn handle_btw_notification(
         &mut self,
         thread_id: ThreadId,
-        notification: &codex_app_server_protocol::ServerNotification,
+        notification: &ServerNotification,
     ) -> bool {
         if self.btw_closing_thread_ids.contains(&thread_id) {
-            if matches!(
-                notification,
-                codex_app_server_protocol::ServerNotification::ThreadClosed(_)
-            ) {
+            if matches!(notification, ServerNotification::ThreadClosed(_)) {
                 self.btw_closing_thread_ids.remove(&thread_id);
             }
             return true;
         }
 
-        let Some(session) = self.btw_session.as_ref() else {
+        let Some(session) = self.btw_session.as_mut() else {
             return false;
         };
         if session.thread_id != thread_id {
             return false;
+        }
+
+        if let Some(status) = btw_status_message(notification)
+            && session.final_message.is_none()
+            && session.last_status.as_deref() != Some(status.as_str())
+        {
+            session.last_status = Some(status);
+            let status_message = session.last_status.clone();
+            self.open_btw_loading_popup(status_message.as_deref());
         }
 
         if session.final_message.is_some() {
@@ -153,15 +182,13 @@ impl App {
         }
 
         match notification {
-            codex_app_server_protocol::ServerNotification::Error(notification)
-                if !notification.will_retry =>
-            {
+            ServerNotification::Error(notification) if !notification.will_retry => {
                 self.app_event_tx.send(AppEvent::BtwCompleted {
                     thread_id,
                     result: Err(notification.error.message.clone()),
                 });
             }
-            codex_app_server_protocol::ServerNotification::TurnCompleted(notification) => {
+            ServerNotification::TurnCompleted(notification) => {
                 let result = match notification.turn.status {
                     TurnStatus::Completed => last_agent_message_or_error(&notification.turn),
                     TurnStatus::Failed => last_agent_message_or_error(&notification.turn)
@@ -174,7 +201,7 @@ impl App {
                 self.app_event_tx
                     .send(AppEvent::BtwCompleted { thread_id, result });
             }
-            codex_app_server_protocol::ServerNotification::ThreadClosed(_) => {
+            ServerNotification::ThreadClosed(_) => {
                 self.app_event_tx.send(AppEvent::BtwCompleted {
                     thread_id,
                     result: Err("Temporary discussion closed before a final answer.".to_string()),
@@ -286,8 +313,9 @@ impl App {
         }
     }
 
-    fn open_btw_loading_popup(&mut self) {
-        self.show_btw_popup(btw_loading_view_params);
+    fn open_btw_loading_popup(&mut self, status_message: Option<&str>) {
+        let status_message = status_message.map(ToOwned::to_owned);
+        self.show_btw_popup(move || btw_loading_view_params(status_message.as_deref()));
     }
 
     fn open_btw_result_popup(&mut self, message: &str) {
@@ -462,7 +490,17 @@ fn turn_failed_error(turn: &codex_app_server_protocol::Turn) -> Result<String, S
         .unwrap_or_else(|| "Temporary discussion failed without a final error.".to_string()))
 }
 
-fn btw_loading_view_params() -> SelectionViewParams {
+fn btw_loading_view_params(status_message: Option<&str>) -> SelectionViewParams {
+    let mut body = String::new();
+    if let Some(status_message) = status_message.filter(|status| !status.trim().is_empty()) {
+        body.push_str("Current hidden status:\n");
+        body.push_str(status_message);
+        body.push_str("\n\n");
+    }
+    body.push_str(
+        "Codex is answering in a hidden ephemeral thread. Nothing will be written back to the \
+         main composer unless you explicitly choose an insert action.",
+    );
     SelectionViewParams {
         view_id: Some(BTW_DISCUSSION_VIEW_ID),
         title: Some("Temporary BTW discussion".to_string()),
@@ -475,17 +513,93 @@ fn btw_loading_view_params() -> SelectionViewParams {
             dismiss_on_select: true,
             ..Default::default()
         }],
-        side_content: Paragraph::new(
-            "Codex is answering in a hidden ephemeral thread. Nothing will be written back to the \
-             main composer unless you explicitly choose an insert action."
-                .to_string(),
-        )
-        .wrap(Wrap { trim: false })
-        .into(),
+        side_content: Paragraph::new(body).wrap(Wrap { trim: false }).into(),
         side_content_width: SideContentWidth::Half,
         side_content_min_width: 28,
         on_cancel: Some(Box::new(|tx| tx.send(AppEvent::BtwDiscard))),
         ..Default::default()
+    }
+}
+
+fn btw_failure_message(error: &str, last_status: Option<&str>) -> String {
+    let mut message = format!("`/btw` failed: {error}");
+    if let Some(last_status) = last_status.filter(|status| !status.trim().is_empty())
+        && !message.contains(last_status)
+    {
+        message.push_str("\n\nLast hidden status:\n");
+        message.push_str(last_status);
+    }
+    message
+}
+
+fn btw_request_rejection_reason(request: &ServerRequest) -> String {
+    match request {
+        ServerRequest::ToolRequestUserInput { .. } => {
+            "the hidden temporary discussion asked for interactive user input. Run the prompt in the main thread instead.".to_string()
+        }
+        ServerRequest::CommandExecutionRequestApproval { .. } => {
+            "the hidden temporary discussion requested command approval, which `/btw` does not support.".to_string()
+        }
+        ServerRequest::FileChangeRequestApproval { .. } => {
+            "the hidden temporary discussion tried to change files, which `/btw` does not allow.".to_string()
+        }
+        ServerRequest::PermissionsRequestApproval { .. } => {
+            "the hidden temporary discussion requested extra permissions, which `/btw` does not allow.".to_string()
+        }
+        ServerRequest::McpServerElicitationRequest { .. } => {
+            "the hidden temporary discussion requested MCP interaction, which `/btw` cannot surface.".to_string()
+        }
+        ServerRequest::DynamicToolCall { .. } => {
+            "the hidden temporary discussion required an unsupported client-side tool call.".to_string()
+        }
+        ServerRequest::ChatgptAuthTokensRefresh { .. }
+        | ServerRequest::ApplyPatchApproval { .. }
+        | ServerRequest::ExecCommandApproval { .. } => {
+            "the hidden temporary discussion required an unsupported client-side request.".to_string()
+        }
+    }
+}
+
+fn btw_status_message(notification: &ServerNotification) -> Option<String> {
+    match notification {
+        ServerNotification::HookStarted(notification) => {
+            let label = hook_event_label(notification.run.event_name);
+            Some(match notification.run.status_message.as_deref() {
+                Some(status_message) if !status_message.is_empty() => {
+                    format!("Running {label} hook: {status_message}")
+                }
+                _ => format!("Running {label} hook"),
+            })
+        }
+        ServerNotification::HookCompleted(notification) => {
+            let label = hook_event_label(notification.run.event_name);
+            let status = format!("{:?}", notification.run.status).to_lowercase();
+            let mut message = format!("{label} hook ({status})");
+            if let Some(entry) = notification.run.entries.iter().find(|entry| {
+                matches!(
+                    entry.kind,
+                    AppServerHookOutputEntryKind::Warning
+                        | AppServerHookOutputEntryKind::Stop
+                        | AppServerHookOutputEntryKind::Error
+                )
+            }) {
+                message.push_str(": ");
+                message.push_str(&entry.text);
+            }
+            Some(message)
+        }
+        ServerNotification::Error(notification) => Some(notification.error.message.clone()),
+        _ => None,
+    }
+}
+
+fn hook_event_label(event_name: AppServerHookEventName) -> &'static str {
+    match event_name {
+        AppServerHookEventName::PreToolUse => "PreToolUse",
+        AppServerHookEventName::PostToolUse => "PostToolUse",
+        AppServerHookEventName::SessionStart => "SessionStart",
+        AppServerHookEventName::UserPromptSubmit => "UserPromptSubmit",
+        AppServerHookEventName::Stop => "Stop",
     }
 }
 
@@ -589,7 +703,7 @@ mod tests {
     fn btw_loading_popup_snapshot() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let view = ListSelectionView::new(btw_loading_view_params(), tx);
+        let view = ListSelectionView::new(btw_loading_view_params(/*status_message*/ None), tx);
 
         assert_snapshot!("btw_loading_popup", render_selection_popup(&view, 92, 20));
     }
