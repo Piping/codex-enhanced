@@ -169,9 +169,9 @@ mod app_server_adapter;
 mod app_server_requests;
 mod btw;
 mod clawbot;
+mod clawbot_controls;
 mod jump_navigation;
 mod key_chord;
-mod clawbot_controls;
 mod loaded_threads;
 mod pending_interactive_replay;
 mod profile_management;
@@ -6951,7 +6951,6 @@ mod tests {
     use crate::chatwidget::ChatWidgetInit;
     use crate::chatwidget::create_initial_user_message;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
-    use crate::chatwidget::tests::render_bottom_popup;
     use crate::chatwidget::tests::set_chatgpt_auth;
     use crate::file_search::FileSearchManager;
     use crate::history_cell::AgentMessageCell;
@@ -7050,8 +7049,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
-    use crate::render::renderable::Renderable;
-    use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
     use std::path::Path;
     use std::path::PathBuf;

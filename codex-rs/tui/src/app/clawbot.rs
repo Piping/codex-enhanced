@@ -324,7 +324,7 @@ impl App {
             serde_json::json!({
                 "session_id": session.session_id,
                 "thread_id": thread_id,
-                "turn_id": turn_id.clone(),
+                "turn_id": turn_id,
                 "message_id": message.message_id.clone(),
                 "text": message.text.clone(),
             }),
@@ -468,7 +468,7 @@ impl App {
                 serde_json::json!({
                     "reason": "missing_binding",
                     "session_id": session.session_id,
-                    "text": text.clone(),
+                    "text": text,
                 }),
             );
             return Ok(());
@@ -481,7 +481,7 @@ impl App {
                     "reason": "outbound_forwarding_disabled",
                     "session_id": session.session_id,
                     "thread_id": binding.thread_id,
-                    "text": text.clone(),
+                    "text": text,
                 }),
             );
             return Ok(());
