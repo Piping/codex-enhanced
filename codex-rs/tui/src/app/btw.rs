@@ -168,16 +168,22 @@ impl App {
             return false;
         }
 
-        if let Some(status) = btw_status_message(notification)
+        let status_message = if let Some(status) = btw_status_message(notification)
             && session.final_message.is_none()
             && session.last_status.as_deref() != Some(status.as_str())
         {
-            session.last_status = Some(status);
-            let status_message = session.last_status.clone();
-            self.open_btw_loading_popup(status_message.as_deref());
+            session.last_status = Some(status.clone());
+            Some(status)
+        } else {
+            None
+        };
+        let final_message_recorded = session.final_message.is_some();
+
+        if let Some(status_message) = status_message.as_deref() {
+            self.open_btw_loading_popup(Some(status_message));
         }
 
-        if session.final_message.is_some() {
+        if final_message_recorded {
             return true;
         }
 
@@ -477,8 +483,15 @@ fn full_insert_text(message: &str) -> String {
     format!("BTW discussion:\n{message}")
 }
 
+fn last_agent_message_for_turn(turn: &codex_app_server_protocol::Turn) -> Option<String> {
+    turn.items.iter().rev().find_map(|item| match item {
+        codex_app_server_protocol::ThreadItem::AgentMessage { text, .. } => Some(text.clone()),
+        _ => None,
+    })
+}
+
 fn last_agent_message_or_error(turn: &codex_app_server_protocol::Turn) -> Result<String, String> {
-    super::last_agent_message_for_turn(turn)
+    last_agent_message_for_turn(turn)
         .ok_or_else(|| "Temporary discussion finished without a final answer.".to_string())
 }
 
@@ -705,7 +718,10 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let view = ListSelectionView::new(btw_loading_view_params(/*status_message*/ None), tx);
 
-        assert_snapshot!("btw_loading_popup", render_selection_popup(&view, 92, 20));
+        assert_snapshot!(
+            "btw_loading_popup",
+            render_selection_popup(&view, /*width*/ 92, /*height*/ 20)
+        );
     }
 
     #[test]
@@ -720,7 +736,10 @@ mod tests {
             tx,
         );
 
-        assert_snapshot!("btw_result_popup", render_selection_popup(&view, 92, 28));
+        assert_snapshot!(
+            "btw_result_popup",
+            render_selection_popup(&view, /*width*/ 92, /*height*/ 28)
+        );
     }
 
     #[test]
@@ -732,7 +751,10 @@ mod tests {
             tx,
         );
 
-        assert_snapshot!("btw_failure_popup", render_selection_popup(&view, 92, 20));
+        assert_snapshot!(
+            "btw_failure_popup",
+            render_selection_popup(&view, /*width*/ 92, /*height*/ 20)
+        );
     }
 
     #[test]

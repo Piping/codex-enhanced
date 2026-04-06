@@ -638,7 +638,7 @@ async fn replayed_reasoning_item_shows_raw_reasoning_when_enabled() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.display_preferences.set_enabled(
         crate::display_preferences::DisplayPreferenceKey::RawThinking,
-        true,
+        /*enabled*/ true,
     );
     chat.handle_codex_event(Event {
         id: "configured".into(),
