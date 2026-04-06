@@ -243,6 +243,7 @@ mod status_surface_previews;
 mod terminal_title;
 
 pub(crate) use helpers::make_chatwidget_manual_with_sender;
+pub(crate) use helpers::render_bottom_popup;
 pub(crate) use helpers::set_chatgpt_auth;
 pub(crate) use helpers::set_fast_mode_test_catalog;
 pub(super) use helpers::*;

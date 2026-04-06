@@ -10808,6 +10808,19 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn replace_selection_view_if_active(
+        &mut self,
+        view_id: &'static str,
+        params: SelectionViewParams,
+    ) -> bool {
+        self.bottom_pane
+            .replace_selection_view_if_active(view_id, params)
+    }
+
+    pub(crate) fn selected_index_for_active_view(&self, view_id: &'static str) -> Option<usize> {
+        self.bottom_pane.selected_index_for_active_view(view_id)
+    }
+
     fn open_connectors_loading_popup(&mut self) {
         if !self.bottom_pane.replace_selection_view_if_active(
             CONNECTORS_SELECTION_VIEW_ID,

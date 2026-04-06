@@ -117,7 +117,10 @@ impl App {
         {
             Ok(results) => {
                 for result in results {
-                    let source = WorkflowReplySource::new(workflow_job_source_hint(&result), None);
+                    let source = WorkflowReplySource::new(
+                        workflow_job_source_hint(&result),
+                        /*action*/ None,
+                    );
                     cells.push(Arc::new(history_cell::new_info_event(
                         "Workflow job completed".to_string(),
                         Some(source.hint()),
@@ -326,7 +329,8 @@ impl App {
 
         let mut visible_cells = Vec::new();
         for result in results {
-            let source = WorkflowReplySource::new(workflow_job_source_hint(&result), None);
+            let source =
+                WorkflowReplySource::new(workflow_job_source_hint(&result), /*action*/ None);
             let completed_cell: Arc<dyn HistoryCell> = Arc::new(history_cell::new_info_event(
                 "Workflow job completed".to_string(),
                 Some(source.hint()),
