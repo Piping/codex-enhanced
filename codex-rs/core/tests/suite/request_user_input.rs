@@ -30,6 +30,9 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 
+const QUESTION_TOOL_NAME: &str = "question";
+const REQUEST_USER_INPUT_TOOL_NAME: &str = "request_user_input";
+
 fn call_output(req: &ResponsesRequest, call_id: &str) -> String {
     let raw = req.function_call_output(call_id);
     assert_eq!(
@@ -74,6 +77,34 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
 }
 
 async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Result<()> {
+    interactive_question_round_trip_for_mode(
+        REQUEST_USER_INPUT_TOOL_NAME,
+        mode,
+        multiple_choice_request_args(),
+        /*expect_is_other*/ true,
+        mode == ModeKind::Default,
+    )
+    .await
+}
+
+async fn question_round_trip_for_mode(mode: ModeKind) -> anyhow::Result<()> {
+    interactive_question_round_trip_for_mode(
+        QUESTION_TOOL_NAME,
+        mode,
+        freeform_question_request_args(),
+        /*expect_is_other*/ false,
+        /*enable_default_mode_request_user_input*/ false,
+    )
+    .await
+}
+
+async fn interactive_question_round_trip_for_mode(
+    tool_name: &str,
+    mode: ModeKind,
+    request_args: Value,
+    expect_is_other: bool,
+    enable_default_mode_request_user_input: bool,
+) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -87,36 +118,25 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
         ..
     } = builder
         .with_config(move |config| {
-            if mode == ModeKind::Default {
-                config
-                    .features
-                    .enable(Feature::DefaultModeRequestUserInput)
-                    .expect("test config should allow feature update");
+            if enable_default_mode_request_user_input {
+                assert!(
+                    config
+                        .features
+                        .enable(Feature::DefaultModeRequestUserInput)
+                        .is_ok(),
+                    "test config should allow feature update"
+                );
             }
         })
         .build(&server)
         .await?;
 
-    let call_id = "user-input-call";
-    let request_args = json!({
-        "questions": [{
-            "id": "confirm_path",
-            "header": "Confirm",
-            "question": "Proceed with the plan?",
-            "options": [{
-                "label": "Yes (Recommended)",
-                "description": "Continue the current plan."
-            }, {
-                "label": "No",
-                "description": "Stop and revisit the approach."
-            }]
-        }]
-    })
-    .to_string();
+    let call_id = format!("{tool_name}-call");
+    let request_args = request_args.to_string();
 
     let first_response = sse(vec![
         ev_response_created("resp-1"),
-        ev_function_call(call_id, "request_user_input", &request_args),
+        ev_function_call(&call_id, tool_name, &request_args),
         ev_completed("resp-1"),
     ]);
     responses::mount_sse_once(&server, first_response).await;
@@ -163,7 +183,7 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
     .await;
     assert_eq!(request.call_id, call_id);
     assert_eq!(request.questions.len(), 1);
-    assert_eq!(request.questions[0].is_other, true);
+    assert_eq!(request.questions[0].is_other, expect_is_other);
 
     let mut answers = HashMap::new();
     answers.insert(
@@ -183,7 +203,7 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let req = second_mock.single_request();
-    let output_text = call_output(&req, call_id);
+    let output_text = call_output(&req, &call_id);
     let output_json: Value = serde_json::from_str(&output_text)?;
     assert_eq!(
         output_json,
@@ -201,39 +221,75 @@ async fn assert_request_user_input_rejected<F>(mode_name: &str, build_mode: F) -
 where
     F: FnOnce(String) -> CollaborationMode,
 {
+    assert_interactive_question_rejected(
+        REQUEST_USER_INPUT_TOOL_NAME,
+        mode_name,
+        multiple_choice_request_args(),
+        format!("request_user_input is unavailable in {mode_name} mode"),
+        /*enable_default_mode_request_user_input*/ false,
+        build_mode,
+    )
+    .await
+}
+
+async fn assert_question_rejected<F>(mode_name: &str, build_mode: F) -> anyhow::Result<()>
+where
+    F: FnOnce(String) -> CollaborationMode,
+{
+    assert_interactive_question_rejected(
+        QUESTION_TOOL_NAME,
+        mode_name,
+        freeform_question_request_args(),
+        format!("question is unavailable in {mode_name} mode"),
+        /*enable_default_mode_request_user_input*/ false,
+        build_mode,
+    )
+    .await
+}
+
+async fn assert_interactive_question_rejected<F>(
+    tool_name: &str,
+    mode_name: &str,
+    request_args: Value,
+    expected_output: String,
+    enable_default_mode_request_user_input: bool,
+    build_mode: F,
+) -> anyhow::Result<()>
+where
+    F: FnOnce(String) -> CollaborationMode,
+{
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex();
+    let builder = test_codex();
     let TestCodex {
         codex,
         cwd,
         session_configured,
         ..
-    } = builder.build(&server).await?;
+    } = builder
+        .with_config(move |config| {
+            if enable_default_mode_request_user_input {
+                assert!(
+                    config
+                        .features
+                        .enable(Feature::DefaultModeRequestUserInput)
+                        .is_ok(),
+                    "test config should allow feature update"
+                );
+            }
+        })
+        .build(&server)
+        .await?;
 
     let mode_slug = mode_name.to_lowercase().replace(' ', "-");
-    let call_id = format!("user-input-{mode_slug}-call");
-    let request_args = json!({
-        "questions": [{
-            "id": "confirm_path",
-            "header": "Confirm",
-            "question": "Proceed with the plan?",
-            "options": [{
-                "label": "Yes (Recommended)",
-                "description": "Continue the current plan."
-            }, {
-                "label": "No",
-                "description": "Stop and revisit the approach."
-            }]
-        }]
-    })
-    .to_string();
+    let call_id = format!("{tool_name}-{mode_slug}-call");
+    let request_args = request_args.to_string();
 
     let first_response = sse(vec![
         ev_response_created("resp-1"),
-        ev_function_call(&call_id, "request_user_input", &request_args),
+        ev_function_call(&call_id, tool_name, &request_args),
         ev_completed("resp-1"),
     ]);
     responses::mount_sse_once(&server, first_response).await;
@@ -272,12 +328,36 @@ where
     let req = second_mock.single_request();
     let (output, success) = call_output_content_and_success(&req, &call_id);
     assert_eq!(success, None);
-    assert_eq!(
-        output,
-        format!("request_user_input is unavailable in {mode_name} mode")
-    );
+    assert_eq!(output, expected_output);
 
     Ok(())
+}
+
+fn multiple_choice_request_args() -> Value {
+    json!({
+        "questions": [{
+            "id": "confirm_path",
+            "header": "Confirm",
+            "question": "Proceed with the plan?",
+            "options": [{
+                "label": "Yes (Recommended)",
+                "description": "Continue the current plan."
+            }, {
+                "label": "No",
+                "description": "Stop and revisit the approach."
+            }]
+        }]
+    })
+}
+
+fn freeform_question_request_args() -> Value {
+    json!({
+        "questions": [{
+            "id": "details",
+            "header": "Details",
+            "question": "What should we keep?"
+        }]
+    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -314,6 +394,42 @@ async fn request_user_input_round_trip_in_default_mode_with_feature() -> anyhow:
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_user_input_rejected_in_pair_mode_alias() -> anyhow::Result<()> {
     assert_request_user_input_rejected("Pair Programming", |model| CollaborationMode {
+        mode: ModeKind::PairProgramming,
+        settings: Settings {
+            model,
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn question_round_trip_resolves_pending_in_plan_mode() -> anyhow::Result<()> {
+    question_round_trip_for_mode(ModeKind::Plan).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn question_round_trip_resolves_pending_in_default_mode() -> anyhow::Result<()> {
+    question_round_trip_for_mode(ModeKind::Default).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn question_rejected_in_execute_mode_alias() -> anyhow::Result<()> {
+    assert_question_rejected("Execute", |model| CollaborationMode {
+        mode: ModeKind::Execute,
+        settings: Settings {
+            model,
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn question_rejected_in_pair_mode_alias() -> anyhow::Result<()> {
+    assert_question_rejected("Pair Programming", |model| CollaborationMode {
         mode: ModeKind::PairProgramming,
         settings: Settings {
             model,

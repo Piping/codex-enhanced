@@ -971,8 +971,6 @@ async fn run_ratatui_app(
     let remote_mode = matches!(&app_server_target, AppServerTarget::Remote { .. });
     color_eyre::install()?;
 
-    tooltips::announcement::prewarm();
-
     // Forward panic reports through tracing so they appear in the UI status
     // line, but do not swallow the default/color-eyre panic handler.
     // Chain to the previous hook so users still get a rich panic report
@@ -982,6 +980,9 @@ async fn run_ratatui_app(
         tracing::error!("panic: {info}");
         prev_hook(info);
     }));
+
+    tooltips::announcement::prewarm();
+
     let mut terminal = tui::init()?;
     terminal.clear()?;
 
@@ -1003,6 +1004,7 @@ async fn run_ratatui_app(
                         thread_id: None,
                         thread_name: None,
                         update_action: Some(action),
+                        respawn_with_yolo: false,
                         exit_reason: ExitReason::UserRequested,
                     });
                 }
@@ -1076,6 +1078,7 @@ async fn run_ratatui_app(
                 thread_id: None,
                 thread_name: None,
                 update_action: None,
+                respawn_with_yolo: false,
                 exit_reason: ExitReason::UserRequested,
             });
         }
@@ -1122,6 +1125,7 @@ async fn run_ratatui_app(
             thread_id: None,
             thread_name: None,
             update_action: None,
+            respawn_with_yolo: false,
             exit_reason: ExitReason::Fatal(format!(
                 "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
             )),
@@ -1209,6 +1213,7 @@ async fn run_ratatui_app(
                         thread_id: None,
                         thread_name: None,
                         update_action: None,
+                        respawn_with_yolo: false,
                         exit_reason: ExitReason::UserRequested,
                     });
                 }
@@ -1270,6 +1275,7 @@ async fn run_ratatui_app(
                     thread_id: None,
                     thread_name: None,
                     update_action: None,
+                    respawn_with_yolo: false,
                     exit_reason: ExitReason::UserRequested,
                 });
             }
@@ -1316,6 +1322,7 @@ async fn run_ratatui_app(
                             thread_id: None,
                             thread_name: None,
                             update_action: None,
+                            respawn_with_yolo: false,
                             exit_reason: ExitReason::UserRequested,
                         });
                     }

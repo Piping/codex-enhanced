@@ -1,4 +1,5 @@
 use crate::CommandToolOptions;
+use crate::QUESTION_TOOL_NAME;
 use crate::REQUEST_USER_INPUT_TOOL_NAME;
 use crate::ShellToolOptions;
 use crate::SpawnAgentToolOptions;
@@ -23,6 +24,7 @@ use crate::create_close_agent_tool_v2;
 use crate::create_code_mode_tool;
 use crate::create_exec_command_tool;
 use crate::create_followup_task_tool;
+use crate::create_grep_files_tool;
 use crate::create_image_generation_tool;
 use crate::create_js_repl_reset_tool;
 use crate::create_js_repl_tool;
@@ -31,6 +33,8 @@ use crate::create_list_dir_tool;
 use crate::create_list_mcp_resource_templates_tool;
 use crate::create_list_mcp_resources_tool;
 use crate::create_local_shell_tool;
+use crate::create_question_tool;
+use crate::create_read_file_tool;
 use crate::create_read_mcp_resource_tool;
 use crate::create_report_agent_job_result_tool;
 use crate::create_request_permissions_tool;
@@ -55,6 +59,7 @@ use crate::create_web_search_tool;
 use crate::create_write_stdin_tool;
 use crate::dynamic_tool_to_responses_api_tool;
 use crate::mcp_tool_to_responses_api_tool;
+use crate::question_tool_description;
 use crate::request_permissions_tool_description;
 use crate::request_user_input_tool_description;
 use crate::tool_registry_plan_types::agent_type_description;
@@ -206,6 +211,14 @@ pub fn build_tool_registry_plan(
 
     if config.request_user_input {
         plan.push_spec(
+            create_question_tool(question_tool_description(
+                config.default_mode_request_user_input,
+            )),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        plan.register_handler(QUESTION_TOOL_NAME, ToolHandlerKind::RequestUserInput);
+        plan.push_spec(
             create_request_user_input_tool(request_user_input_tool_description(
                 config.default_mode_request_user_input,
             )),
@@ -283,6 +296,32 @@ pub fn build_tool_registry_plan(
             }
         }
         plan.register_handler("apply_patch", ToolHandlerKind::ApplyPatch);
+    }
+
+    if config
+        .experimental_supported_tools
+        .iter()
+        .any(|tool| tool == "grep_files")
+    {
+        plan.push_spec(
+            create_grep_files_tool(),
+            /*supports_parallel_tool_calls*/ true,
+            config.code_mode_enabled,
+        );
+        plan.register_handler("grep_files", ToolHandlerKind::GrepFiles);
+    }
+
+    if config
+        .experimental_supported_tools
+        .iter()
+        .any(|tool| tool == "read_file")
+    {
+        plan.push_spec(
+            create_read_file_tool(),
+            /*supports_parallel_tool_calls*/ true,
+            config.code_mode_enabled,
+        );
+        plan.register_handler("read_file", ToolHandlerKind::ReadFile);
     }
 
     if config

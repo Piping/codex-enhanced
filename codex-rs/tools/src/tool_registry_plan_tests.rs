@@ -81,6 +81,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         }),
         create_write_stdin_tool(),
         create_update_plan_tool(),
+        question_tool_spec(/*default_mode_request_user_input*/ false),
         request_user_input_tool_spec(/*default_mode_request_user_input*/ false),
         create_apply_patch_freeform_tool(),
         ToolSpec::WebSearch {
@@ -176,6 +177,7 @@ fn test_build_specs_collab_tools_enabled() {
         panic!("spawn_agent should use object params");
     };
     assert!(properties.contains_key("fork_context"));
+    assert!(properties.contains_key("cwd"));
     assert!(!properties.contains_key("fork_turns"));
 }
 
@@ -234,6 +236,7 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
     assert!(properties.contains_key("task_name"));
     assert!(properties.contains_key("message"));
     assert!(properties.contains_key("fork_turns"));
+    assert!(properties.contains_key("cwd"));
     assert!(!properties.contains_key("items"));
     assert!(!properties.contains_key("fork_context"));
     assert_eq!(
@@ -491,11 +494,12 @@ fn test_build_specs_agent_job_worker_tools_enabled() {
             "report_agent_job_result",
         ],
     );
+    assert_lacks_tool_name(&tools, QUESTION_TOOL_NAME);
     assert_lacks_tool_name(&tools, "request_user_input");
 }
 
 #[test]
-fn request_user_input_description_reflects_default_mode_feature_flag() {
+fn interactive_question_tools_reflect_default_mode_feature_flag() {
     let model_info = model_info();
     let mut features = Features::with_defaults();
     let available_models = Vec::new();
@@ -513,6 +517,11 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
         /*mcp_tools*/ None,
         /*app_tools*/ None,
         &[],
+    );
+    let question_tool = find_tool(&tools, QUESTION_TOOL_NAME);
+    assert_eq!(
+        question_tool.spec,
+        question_tool_spec(/*default_mode_request_user_input*/ false)
     );
     let request_user_input_tool = find_tool(&tools, REQUEST_USER_INPUT_TOOL_NAME);
     assert_eq!(
@@ -535,6 +544,11 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
         /*mcp_tools*/ None,
         /*app_tools*/ None,
         &[],
+    );
+    let question_tool = find_tool(&tools, QUESTION_TOOL_NAME);
+    assert_eq!(
+        question_tool.spec,
+        question_tool_spec(/*default_mode_request_user_input*/ true)
     );
     let request_user_input_tool = find_tool(&tools, REQUEST_USER_INPUT_TOOL_NAME);
     assert_eq!(
@@ -1022,6 +1036,33 @@ fn test_test_model_info_includes_sync_tool() {
     );
 
     assert!(tools.iter().any(|tool| tool.name() == "test_sync_tool"));
+}
+
+#[test]
+fn test_model_info_includes_read_and_grep_tools() {
+    let mut model_info = model_info();
+    model_info.experimental_supported_tools =
+        vec!["read_file".to_string(), "grep_files".to_string()];
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    );
+
+    assert!(tools.iter().any(|tool| tool.name() == "read_file"));
+    assert!(tools.iter().any(|tool| tool.name() == "grep_files"));
 }
 
 #[test]
@@ -1808,6 +1849,10 @@ fn assert_lacks_tool_name(tools: &[ConfiguredToolSpec], expected_absent: &str) {
         !names.contains(&expected_absent),
         "expected tool {expected_absent} to be absent; had: {names:?}"
     );
+}
+
+fn question_tool_spec(default_mode_request_user_input: bool) -> ToolSpec {
+    create_question_tool(question_tool_description(default_mode_request_user_input))
 }
 
 fn request_user_input_tool_spec(default_mode_request_user_input: bool) -> ToolSpec {
