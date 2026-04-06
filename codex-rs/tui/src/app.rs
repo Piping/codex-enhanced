@@ -5131,19 +5131,6 @@ impl App {
             AppEvent::ShowWorkflowBackgroundTasks => {
                 self.chat_widget.add_ps_output();
             }
-            AppEvent::RetryLastUserTurnWithProfileFallback {
-                action,
-                error_message,
-            } => {
-                self.retry_last_user_turn_with_profile_fallback(
-                    tui,
-                    app_server,
-                    action,
-                    error_message,
-                )
-                .await;
-            }
-            }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
                     tui.frame_requester().schedule_frame();
@@ -7209,6 +7196,7 @@ mod tests {
     use crate::chatwidget::ChatWidgetInit;
     use crate::chatwidget::create_initial_user_message;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
+    use crate::chatwidget::tests::render_bottom_popup;
     use crate::chatwidget::tests::set_chatgpt_auth;
     use crate::chatwidget::tests::set_fast_mode_test_catalog;
     use crate::file_search::FileSearchManager;
@@ -7295,8 +7283,7 @@ mod tests {
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
-    use ratatui::buffer::Buffer;
-    use ratatui::layout::Rect;
+
     use ratatui::prelude::Line;
     use std::path::Path;
     use std::path::PathBuf;
