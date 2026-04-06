@@ -146,7 +146,7 @@ jobs:
         shell: bash
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev protobuf-compiler
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev protobuf-compiler libprotobuf-dev
       - name: Run argument comment lint on codex-rs via source wrapper
         if: ${{ runner.os == 'Linux' && github.repository != 'openai/codex' }}
         shell: bash
