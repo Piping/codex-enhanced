@@ -835,8 +835,8 @@ mod tests {
     use super::clawbot_session_item;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
-    use crate::bottom_pane::ListSelectionView;
     use crate::bottom_pane::SelectionViewParams;
+    use crate::bottom_pane::list_selection_view::ListSelectionView;
     use crate::render::renderable::Renderable;
 
     fn render_selection_popup(view: &ListSelectionView, width: u16, height: u16) -> String {
