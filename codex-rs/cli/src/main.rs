@@ -491,8 +491,7 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
             eprintln!("ERROR: {message}");
             std::process::exit(1);
         }
-        ExitReason::UserRequested => { /* normal exit */ }
-        ExitReason::RespawnRequested => unreachable!("respawn should be handled before formatting"),
+        ExitReason::UserRequested | ExitReason::RespawnRequested => { /* normal exit */ }
     }
 
     let update_action = exit_info.update_action;
