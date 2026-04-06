@@ -1,0 +1,36 @@
+---
+source: tui/src/app/clawbot_controls.rs
+expression: "render_selection_popup(&view, 92, 14)"
+---
+TestBackend { buffer: Buffer {
+    area: Rect { x: 0, y: 0, width: 92, height: 14 },
+    content: [
+        "                                                                                            ",
+        "  Clawbot                                                                                   ",
+        "  Session Jump                                                                              ",
+        "                                                                                            ",
+        "› 1. tracker  Jump to bound thread 019d607a-cf72-72e1-a5b7-0dc17ad019ad to continue or      ",
+        "              manage Feishu session chat_bound.                                             ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 9, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 14, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 4, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 86, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 5, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 47, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}, scrollback: Buffer {
+    area: Rect { x: 0, y: 0, width: 92, height: 0 }
+}, cursor: false, pos: (0, 0) }
