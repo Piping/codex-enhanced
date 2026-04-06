@@ -8,7 +8,7 @@ expression: popup
 › 1. Turn Mode                  Switch clawbot-originated turns into non-interactive mode so
                                 remote sessions do not block on prompts.
      Feishu Sessions            2 total · 1 bound · 1 unbound
-  3. Scan Feishu Sessions       Discover private Feishu chats using the persisted workspace
+  3. Scan Feishu Sessions       Discover Feishu chats and bot groups using the persisted workspace
                                 credentials.
   4. Clear Unbound Sessions     Remove 1 unbound sessions and 1 cached unread messages.
      Alice                      bound · 0 unread

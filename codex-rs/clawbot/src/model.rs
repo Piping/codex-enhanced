@@ -10,6 +10,7 @@ pub const CLAWBOT_BINDINGS_RELATIVE_PATH: &str = ".codex/clawbot/bindings.json";
 pub const CLAWBOT_UNREAD_MESSAGES_RELATIVE_PATH: &str = ".codex/clawbot/unread_messages.jsonl";
 pub const CLAWBOT_RUNTIME_RELATIVE_PATH: &str = ".codex/clawbot/runtime.json";
 pub const CLAWBOT_INBOUND_RECEIPTS_RELATIVE_PATH: &str = ".codex/clawbot/inbound_receipts.json";
+pub const CLAWBOT_DIAGNOSTICS_RELATIVE_PATH: &str = ".codex/clawbot/diagnostics.jsonl";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ClawbotSnapshot {
