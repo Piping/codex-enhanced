@@ -152,15 +152,15 @@ jobs:
         shell: bash
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
-      - name: Run argument comment lint on codex-rs via source wrapper
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev protobuf-compiler libprotobuf-dev
+      - name: Run argument comment lint on codex-rs via prebuilt wrapper
         if: ${{ runner.os == 'Linux' && github.repository != 'openai/codex' }}
         shell: bash
         run: |
           heartbeat() {
             while true; do
               sleep 60
-              echo "argument comment lint still running via source wrapper ($(date -u '+%Y-%m-%dT%H:%M:%SZ'))"
+              echo "argument comment lint still running via prebuilt wrapper ($(date -u '+%Y-%m-%dT%H:%M:%SZ'))"
             done
           }
 
@@ -177,16 +177,15 @@ jobs:
             --component rustc-dev \
             --component rust-src \
             --no-self-update
-          cargo install --locked cargo-dylint dylint-link
 
           set +e
           timeout --foreground --signal=TERM --kill-after=30s 110m \
-            ./tools/argument-comment-lint/run.py
+            ./tools/argument-comment-lint/run-prebuilt-linter.py
           status=$?
           set -e
 
           if [[ $status -eq 124 ]]; then
-            echo "argument comment lint source-wrapper step exceeded 110 minutes; failing explicitly before the 120-minute job timeout so shared CI follow-up can diagnose it."
+            echo "argument comment lint prebuilt-wrapper step exceeded 110 minutes; failing explicitly before the 120-minute job timeout so shared CI follow-up can diagnose it."
           fi
 
           exit "$status"
