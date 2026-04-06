@@ -5,6 +5,7 @@ use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 use crate::app_event::FeedbackCategory;
 use crate::app_event::RealtimeAudioDeviceKind;
+use crate::app_event::RuntimeProfileTarget;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -25,6 +26,11 @@ use crate::chatwidget::ReplayKind;
 use crate::chatwidget::ThreadInputState;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
+use crate::display_preferences::DisplayPreferences;
+use crate::display_preferences::display_preference_edit;
+use crate::display_preferences::set_display_preference_in_config;
+use crate::display_preferences_menu::DISPLAY_PREFERENCES_SELECTION_VIEW_ID;
+use crate::display_preferences_menu::display_preferences_panel_params;
 use crate::exec_command::split_command_string;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::external_editor;
@@ -42,10 +48,7 @@ use crate::multi_agents::format_agent_picker_item_name;
 use crate::multi_agents::next_agent_shortcut_matches;
 use crate::multi_agents::previous_agent_shortcut_matches;
 use crate::pager_overlay::Overlay;
-use crate::profile_router::DefaultProfileRouter;
 use crate::profile_router::PROFILE_ROUTER_STATE_RELATIVE_PATH;
-use crate::profile_router::ProfileFallbackAction;
-use crate::profile_router::ProfileRouterStore;
 use crate::read_session_model;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
@@ -136,6 +139,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
@@ -159,8 +163,13 @@ use uuid::Uuid;
 mod agent_navigation;
 mod app_server_adapter;
 mod app_server_requests;
+mod btw;
+mod jump_navigation;
+mod key_chord;
 mod loaded_threads;
 mod pending_interactive_replay;
+mod profile_management;
+mod thread_menu;
 mod workflow_controls;
 mod workflow_definition;
 mod workflow_history;
@@ -170,6 +179,10 @@ mod workflow_scheduler;
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
+use self::btw::BtwSessionState;
+use self::key_chord::KeyChordAction;
+use self::key_chord::KeyChordResolution;
+use self::key_chord::KeyChordState;
 use self::loaded_threads::find_loaded_subagent_threads_for_primary;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 use self::workflow_history::WorkflowHistoryState;
@@ -1040,6 +1053,8 @@ pub(crate) struct App {
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
+    key_chord: KeyChordState,
+    display_preferences: DisplayPreferences,
     /// When set, the next draw re-renders the transcript into terminal scrollback once.
     ///
     /// This is used after a confirmed thread rollback to ensure scrollback reflects the trimmed
@@ -1078,6 +1093,8 @@ pub(crate) struct App {
         HashMap<ThreadId, mpsc::UnboundedSender<ServerNotification>>,
     workflow_scheduler: WorkflowSchedulerState,
     workflow_history: WorkflowHistoryState,
+    btw_session: Option<BtwSessionState>,
+    btw_closing_thread_ids: HashSet<ThreadId>,
 }
 
 #[derive(Default)]
@@ -1155,6 +1172,7 @@ impl App {
     ) -> crate::chatwidget::ChatWidgetInit {
         crate::chatwidget::ChatWidgetInit {
             config: cfg,
+            display_preferences: self.display_preferences.clone(),
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
             // Fork/resume bootstraps here don't carry any prefilled message content.
@@ -1194,6 +1212,7 @@ impl App {
         self.apply_runtime_policy_overrides(&mut config);
         self.active_profile = config.active_profile.clone();
         self.config = config;
+        self.display_preferences.sync_from_config(&self.config);
         self.chat_widget.sync_plugin_mentions_config(&self.config);
         Ok(())
     }
@@ -1208,17 +1227,6 @@ impl App {
         }
     }
 
-    fn profile_router_store(&self) -> ProfileRouterStore {
-        ProfileRouterStore::new(self.config.codex_home.clone())
-    }
-
-    fn routed_profile_runtime_changed(current_config: &Config, next_config: &Config) -> bool {
-        current_config.active_profile != next_config.active_profile
-            || current_config.model_provider_id != next_config.model_provider_id
-            || current_config.model_provider != next_config.model_provider
-            || current_config.chatgpt_base_url != next_config.chatgpt_base_url
-    }
-
     async fn apply_runtime_config_change(
         &mut self,
         tui: &mut tui::Tui,
@@ -1229,6 +1237,7 @@ impl App {
         if !reload_live_thread || self.chat_widget.thread_id().is_none() {
             self.active_profile = next_config.active_profile.clone();
             self.config = next_config;
+            self.display_preferences.sync_from_config(&self.config);
             self.chat_widget
                 .sync_config_for_profile_switch(&self.config);
             tui.set_notification_method(self.config.tui_notification_method);
@@ -1265,9 +1274,9 @@ impl App {
                 format!("Failed to start a fresh session after switching profiles: {err}")
             })?
         };
-
         self.active_profile = next_config.active_profile.clone();
         self.config = next_config;
+        self.display_preferences.sync_from_config(&self.config);
         tui.set_notification_method(self.config.tui_notification_method);
         self.file_search
             .update_search_dir(self.config.cwd.to_path_buf());
@@ -1275,61 +1284,6 @@ impl App {
             .await
             .map_err(|err| err.to_string())?;
         self.chat_widget.restore_thread_input_state(input_state);
-        Ok(())
-    }
-
-    async fn close_active_thread_for_profile_reload(
-        &mut self,
-        app_server: &mut AppServerSession,
-        thread_id: ThreadId,
-    ) -> std::result::Result<(), String> {
-        self.backtrack.pending_rollback = None;
-        app_server
-            .thread_unsubscribe(thread_id)
-            .await
-            .map_err(|err| {
-                format!("Failed to unload current session before switching profiles: {err}")
-            })?;
-
-        let close_wait = async {
-            loop {
-                match app_server.next_event().await {
-                    Some(codex_app_server_client::AppServerEvent::ServerNotification(
-                        ServerNotification::ThreadClosed(notification),
-                    )) if notification.thread_id == thread_id.to_string() => {
-                        break Ok(());
-                    }
-                    Some(codex_app_server_client::AppServerEvent::Disconnected { message }) => {
-                        self.chat_widget.add_error_message(message.clone());
-                        self.app_event_tx
-                            .send(AppEvent::FatalExitRequest(message.clone()));
-                        break Err(format!(
-                            "App-server disconnected while closing current session: {message}"
-                        ));
-                    }
-                    Some(event) => {
-                        self.handle_app_server_event(app_server, event).await;
-                    }
-                    None => {
-                        break Err(
-                            "App-server event stream closed while closing current session."
-                                .to_string(),
-                        );
-                    }
-                }
-            }
-        };
-
-        tokio::time::timeout(PROFILE_SWITCH_THREAD_CLOSE_TIMEOUT, close_wait)
-            .await
-            .map_err(|_| {
-                format!(
-                    "Timed out waiting for current session `{thread_id}` to close before switching profiles."
-                )
-            })??;
-
-        self.clear_active_thread().await;
-        self.abort_thread_event_listener(thread_id);
         Ok(())
     }
 
@@ -1366,147 +1320,6 @@ impl App {
         }
         Ok(())
     }
-
-    async fn switch_runtime_profile(
-        &mut self,
-        tui: &mut tui::Tui,
-        app_server: &mut AppServerSession,
-        profile_id: &str,
-    ) -> std::result::Result<(), String> {
-        if self.active_profile.as_deref() == Some(profile_id) {
-            return Ok(());
-        }
-
-        let previous_override = self.harness_overrides.config_profile.clone();
-        let previous_active_profile = self.active_profile.clone();
-        self.harness_overrides.config_profile = Some(profile_id.to_string());
-
-        let current_cwd = self.chat_widget.config_ref().cwd.to_path_buf();
-        let mut next_config = match self.rebuild_config_for_cwd(current_cwd).await {
-            Ok(config) => config,
-            Err(err) => {
-                self.harness_overrides.config_profile = previous_override;
-                self.active_profile = previous_active_profile;
-                return Err(err.to_string());
-            }
-        };
-        self.apply_runtime_policy_overrides(&mut next_config);
-
-        if let Err(err) = self
-            .apply_runtime_config_change(
-                tui,
-                app_server,
-                next_config,
-                /*reload_live_thread*/ true,
-            )
-            .await
-        {
-            self.harness_overrides.config_profile = previous_override;
-            self.active_profile = previous_active_profile;
-            return Err(err);
-        }
-        Ok(())
-    }
-
-    async fn retry_last_user_turn_with_profile_fallback(
-        &mut self,
-        tui: &mut tui::Tui,
-        app_server: &mut AppServerSession,
-        action: ProfileFallbackAction,
-        error_message: String,
-    ) {
-        if !self.chat_widget.has_retryable_user_turn() {
-            self.chat_widget.add_error_message(error_message);
-            return;
-        }
-        let retry_user_message = self.chat_widget.last_submitted_user_turn();
-
-        match action {
-            ProfileFallbackAction::RetrySameProfileFirst => {
-                let profile_label = self
-                    .chat_widget
-                    .active_profile_label()
-                    .unwrap_or_else(|| "current".to_string());
-                if self.chat_widget.profile_retry_attempted()
-                    || !self
-                        .chat_widget
-                        .retry_last_user_turn_for_profile_fallback(format!(
-                            "Retrying the last turn on profile `{profile_label}`."
-                        ))
-                {
-                    let router_state = self.profile_router_store().load().unwrap_or_default();
-                    let Some(next_profile_id) = DefaultProfileRouter
-                        .fallback_profile(&router_state, self.active_profile.as_deref())
-                    else {
-                        self.chat_widget.add_error_message(error_message);
-                        return;
-                    };
-                    self.chat_widget.finish_failed_turn_for_profile_fallback();
-                    if let Err(err) = self
-                        .switch_runtime_profile(tui, app_server, &next_profile_id)
-                        .await
-                    {
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to switch to fallback profile `{next_profile_id}`: {err}"
-                        ));
-                        return;
-                    }
-                    if let Err(err) = self.profile_router_store().update(|state| {
-                        state.set_active_profile(&next_profile_id);
-                    }) {
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to persist fallback profile `{next_profile_id}` in {PROFILE_ROUTER_STATE_RELATIVE_PATH}: {err}"
-                        ));
-                        return;
-                    }
-                    if let Some(user_message) = retry_user_message.clone() {
-                        self.chat_widget.submit_profile_fallback_retry(
-                            user_message,
-                            format!("Retrying the last turn with profile `{next_profile_id}`."),
-                        );
-                    } else {
-                        self.chat_widget.add_error_message(error_message);
-                    }
-                }
-            }
-            ProfileFallbackAction::SwitchProfileImmediately => {
-                let router_state = self.profile_router_store().load().unwrap_or_default();
-                let Some(next_profile_id) = DefaultProfileRouter
-                    .fallback_profile(&router_state, self.active_profile.as_deref())
-                else {
-                    self.chat_widget.add_error_message(error_message);
-                    return;
-                };
-                self.chat_widget.finish_failed_turn_for_profile_fallback();
-                if let Err(err) = self
-                    .switch_runtime_profile(tui, app_server, &next_profile_id)
-                    .await
-                {
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to switch to fallback profile `{next_profile_id}`: {err}"
-                    ));
-                    return;
-                }
-                if let Err(err) = self.profile_router_store().update(|state| {
-                    state.set_active_profile(&next_profile_id);
-                }) {
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to persist fallback profile `{next_profile_id}` in {PROFILE_ROUTER_STATE_RELATIVE_PATH}: {err}"
-                    ));
-                    return;
-                }
-                if let Some(user_message) = retry_user_message {
-                    self.chat_widget.submit_profile_fallback_retry(
-                        user_message,
-                        format!("Retrying the last turn with profile `{next_profile_id}`."),
-                    );
-                } else {
-                    self.chat_widget.add_error_message(error_message);
-                }
-            }
-        }
-    }
-
     async fn rebuild_config_for_resume_or_fallback(
         &mut self,
         current_cwd: &Path,
@@ -3413,6 +3226,22 @@ impl App {
         });
     }
 
+    fn open_display_preferences_panel(&mut self) {
+        let initial_selected_idx = self
+            .chat_widget
+            .selected_index_for_active_view(DISPLAY_PREFERENCES_SELECTION_VIEW_ID);
+        if !self.chat_widget.replace_selection_view_if_active(
+            DISPLAY_PREFERENCES_SELECTION_VIEW_ID,
+            display_preferences_panel_params(&self.display_preferences, initial_selected_idx),
+        ) {
+            self.chat_widget
+                .show_selection_view(display_preferences_panel_params(
+                    &self.display_preferences,
+                    initial_selected_idx,
+                ));
+        }
+    }
+
     fn is_terminal_thread_read_error(err: &color_eyre::Report) -> bool {
         err.chain()
             .any(|cause| cause.to_string().contains("thread not loaded:"))
@@ -4180,6 +4009,7 @@ impl App {
 
         let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
         let terminal_title_invalid_items_warned = Arc::new(AtomicBool::new(false));
+        let display_preferences = DisplayPreferences::from_config(&config);
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =
@@ -4192,6 +4022,7 @@ impl App {
                         .await;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
+                    display_preferences: display_preferences.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
@@ -4226,6 +4057,7 @@ impl App {
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
+                    display_preferences: display_preferences.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
@@ -4265,6 +4097,7 @@ impl App {
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
+                    display_preferences: display_preferences.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
@@ -4307,6 +4140,7 @@ impl App {
             app_event_tx,
             chat_widget,
             config,
+            display_preferences,
             active_profile,
             cli_kv_overrides,
             harness_overrides,
@@ -4322,6 +4156,7 @@ impl App {
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
             terminal_title_invalid_items_warned: terminal_title_invalid_items_warned.clone(),
             backtrack: BacktrackState::default(),
+            key_chord: KeyChordState::default(),
             backtrack_render_pending: false,
             feedback: feedback.clone(),
             feedback_audience,
@@ -4343,6 +4178,8 @@ impl App {
             workflow_thread_notification_channels: HashMap::new(),
             workflow_scheduler: WorkflowSchedulerState::default(),
             workflow_history: WorkflowHistoryState::default(),
+            btw_session: None,
+            btw_closing_thread_ids: HashSet::new(),
         };
         if let Some(started) = initial_started_thread {
             app.enqueue_primary_thread_session(started.session, started.turns)
@@ -4699,6 +4536,31 @@ impl App {
                 // Leaving alt-screen may blank the inline viewport; force a redraw either way.
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::OpenDisplayPreferencesPanel => {
+                self.open_display_preferences_panel();
+            }
+            AppEvent::OpenProfileManagementPanel => {
+                self.open_profile_management_panel();
+            }
+            AppEvent::OpenThreadPanel => {
+                self.open_thread_panel();
+            }
+            AppEvent::OpenJumpToMessagePanel => {
+                self.open_jump_to_message_panel();
+            }
+            AppEvent::JumpToTranscriptCell { cell_index } => {
+                self.reset_backtrack_state();
+                self.backtrack.overlay_preview_active = false;
+                if !matches!(self.overlay, Some(Overlay::Transcript(_))) {
+                    self.open_transcript_overlay(tui);
+                }
+                if let Some(Overlay::Transcript(overlay)) = &mut self.overlay
+                    && cell_index < self.transcript_cells.len()
+                {
+                    overlay.set_highlight_cell(Some(cell_index));
+                    tui.frame_requester().schedule_frame();
+                }
+            }
             AppEvent::ForkCurrentSession => {
                 self.session_telemetry.counter(
                     "codex.thread.fork",
@@ -4758,6 +4620,41 @@ impl App {
 
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::UndoLastUserMessage => {
+                self.undo_last_user_message();
+            }
+            AppEvent::SwitchRuntimeProfile { target } => {
+                let is_default_target = matches!(&target, RuntimeProfileTarget::Default);
+                let target_profile = match &target {
+                    RuntimeProfileTarget::Default => None,
+                    RuntimeProfileTarget::Named(profile_id) => Some(profile_id.as_str()),
+                };
+                let target_label = target_profile.unwrap_or("default");
+                if let Err(err) = self
+                    .switch_runtime_profile(tui, app_server, target_profile)
+                    .await
+                {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to switch to profile `{target_label}`: {err}"
+                    ));
+                } else if let Err(err) = self.profile_router_store().update(|state| {
+                    state.set_runtime_active_profile(target_profile);
+                }) {
+                    self.chat_widget.add_error_message(format!(
+                        "Switched to profile `{target_label}`, but failed to persist {PROFILE_ROUTER_STATE_RELATIVE_PATH}: {err}"
+                    ));
+                } else if is_default_target {
+                    self.chat_widget.add_info_message(
+                        "Switched to the default config profile.".to_string(),
+                        /*hint*/ None,
+                    );
+                } else {
+                    self.chat_widget.add_info_message(
+                        format!("Switched to profile `{target_label}`."),
+                        /*hint*/ None,
+                    );
+                }
+            }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
                 self.insert_visible_history_cell(tui, cell);
@@ -4795,6 +4692,25 @@ impl App {
             AppEvent::UnregisterWorkflowThreadNotificationForwarder { thread_id } => {
                 self.workflow_thread_notification_channels
                     .remove(&thread_id);
+            }
+            AppEvent::StartBtwDiscussion { prompt } => {
+                self.start_btw_discussion(app_server, prompt).await;
+            }
+            AppEvent::BtwCompleted { thread_id, result } => {
+                let is_error = result.is_err();
+                self.finish_btw_discussion(thread_id, result);
+                if is_error {
+                    self.close_btw_session(app_server).await;
+                }
+            }
+            AppEvent::BtwInsertSummary => {
+                self.insert_btw_summary(app_server).await;
+            }
+            AppEvent::BtwInsertFull => {
+                self.insert_btw_full(app_server).await;
+            }
+            AppEvent::BtwDiscard => {
+                self.discard_btw_session(app_server).await;
             }
             AppEvent::RetryLastUserTurnWithProfileFallback {
                 action,
@@ -5739,6 +5655,27 @@ impl App {
             AppEvent::UpdateFeatureFlags { updates } => {
                 self.update_feature_flags(updates).await;
             }
+            AppEvent::ToggleDisplayPreference(key) => {
+                let enabled = !self.display_preferences.is_enabled(key);
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(self.active_profile.as_deref())
+                    .with_edits([display_preference_edit(key, enabled)])
+                    .apply()
+                    .await
+                {
+                    tracing::error!(
+                        error = %err,
+                        ?key,
+                        "failed to persist display preference update"
+                    );
+                    self.chat_widget
+                        .add_error_message(format!("Failed to save UI preference: {err}"));
+                } else {
+                    self.display_preferences.set_enabled(key, enabled);
+                    set_display_preference_in_config(&mut self.config, key, enabled);
+                    self.open_display_preferences_panel();
+                }
+            }
             AppEvent::SkipNextWorldWritableScan => {
                 self.windows_sandbox.skip_world_writable_scan_once = true;
             }
@@ -6458,12 +6395,57 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
+    fn handle_key_chord_key_event(&mut self, key_event: KeyEvent) -> Option<KeyEvent> {
+        if self.overlay.is_some()
+            || !self.chat_widget.no_modal_or_popup_active()
+            || self.chat_widget.external_editor_state() != ExternalEditorState::Closed
+        {
+            self.key_chord.clear();
+            return Some(key_event);
+        }
+
+        match self.key_chord.handle_key_event(key_event) {
+            KeyChordResolution::NoMatch => Some(key_event),
+            KeyChordResolution::AwaitingSecondKey | KeyChordResolution::Cancelled => None,
+            KeyChordResolution::Forward(forwarded_key_event) => Some(forwarded_key_event),
+            KeyChordResolution::Matched(action) => {
+                match action {
+                    KeyChordAction::UndoLastUserMessage => {
+                        self.undo_last_user_message();
+                    }
+                    KeyChordAction::CopyLatestOutput => {
+                        self.chat_widget.copy_latest_output_to_clipboard();
+                    }
+                    KeyChordAction::RespawnCurrentSession => {
+                        if self.chat_widget.can_run_respawn_now() {
+                            self.app_event_tx
+                                .send(AppEvent::Exit(ExitMode::RespawnImmediate));
+                        }
+                    }
+                }
+                None
+            }
+        }
+    }
+
     async fn handle_key_event(
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         key_event: KeyEvent,
     ) {
+        let mut key_event = key_event;
+        if matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && key_event.code != KeyCode::Esc
+            && self.backtrack.primed
+        {
+            self.reset_backtrack_state();
+        }
+        let Some(forwarded_key_event) = self.handle_key_chord_key_event(key_event) else {
+            return;
+        };
+        key_event = forwarded_key_event;
+
         // Some terminals, especially on macOS, encode Option+Left/Right as Option+b/f unless
         // enhanced keyboard reporting is available. We only treat those word-motion fallbacks as
         // agent-switch shortcuts when the composer is empty so we never steal the expected
@@ -6582,12 +6564,6 @@ impl App {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
-                // Any non-Esc key press should cancel a primed backtrack.
-                // This avoids stale "Esc-primed" state after the user starts typing
-                // (even if they later backspace to empty).
-                if key_event.code != KeyCode::Esc && self.backtrack.primed {
-                    self.reset_backtrack_state();
-                }
                 self.chat_widget.handle_key_event(key_event);
             }
             _ => {
@@ -6878,6 +6854,7 @@ mod tests {
     use codex_app_server_protocol::ThreadTokenUsage;
     use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
     use codex_app_server_protocol::TokenUsageBreakdown;
+    use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnCompletedNotification;
     use codex_app_server_protocol::TurnError as AppServerTurnError;
@@ -7174,6 +7151,7 @@ mod tests {
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         app.chat_widget = ChatWidget::new_with_app_event(ChatWidgetInit {
             config,
+            display_preferences: app.display_preferences.clone(),
             frame_requester: crate::tui::FrameRequester::test_dummy(),
             app_event_tx: app.app_event_tx.clone(),
             initial_user_message: create_initial_user_message(
@@ -9689,6 +9667,7 @@ guardian_approval = true
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
+        let display_preferences = DisplayPreferences::from_config(&config);
         let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
@@ -9699,6 +9678,7 @@ guardian_approval = true
             app_event_tx,
             chat_widget,
             config,
+            display_preferences,
             active_profile: None,
             cli_kv_overrides: Vec::new(),
             harness_overrides: ConfigOverrides::default(),
@@ -9714,6 +9694,7 @@ guardian_approval = true
             status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            key_chord: KeyChordState::default(),
             backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
             feedback_audience: FeedbackAudience::External,
@@ -9735,6 +9716,8 @@ guardian_approval = true
             workflow_thread_notification_channels: HashMap::new(),
             workflow_scheduler: WorkflowSchedulerState::default(),
             workflow_history: WorkflowHistoryState::default(),
+            btw_session: None,
+            btw_closing_thread_ids: HashSet::new(),
         }
     }
 
@@ -9745,6 +9728,7 @@ guardian_approval = true
     ) {
         let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
+        let display_preferences = DisplayPreferences::from_config(&config);
         let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
@@ -9756,6 +9740,7 @@ guardian_approval = true
                 app_event_tx,
                 chat_widget,
                 config,
+                display_preferences,
                 active_profile: None,
                 cli_kv_overrides: Vec::new(),
                 harness_overrides: ConfigOverrides::default(),
@@ -9771,6 +9756,7 @@ guardian_approval = true
                 status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
                 terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
                 backtrack: BacktrackState::default(),
+                key_chord: KeyChordState::default(),
                 backtrack_render_pending: false,
                 feedback: codex_feedback::CodexFeedback::new(),
                 feedback_audience: FeedbackAudience::External,
@@ -9792,6 +9778,8 @@ guardian_approval = true
                 workflow_thread_notification_channels: HashMap::new(),
                 workflow_scheduler: WorkflowSchedulerState::default(),
                 workflow_history: WorkflowHistoryState::default(),
+                btw_session: None,
+                btw_closing_thread_ids: HashSet::new(),
             },
             rx,
             op_rx,
@@ -10068,6 +10056,22 @@ jobs:
                 proposed_execpolicy_amendment: None,
                 proposed_network_policy_amendments: None,
                 available_decisions: None,
+            },
+        }
+    }
+
+    fn request_user_input_request(
+        thread_id: ThreadId,
+        turn_id: &str,
+        item_id: &str,
+    ) -> ServerRequest {
+        ServerRequest::ToolRequestUserInput {
+            request_id: AppServerRequestId::Integer(99),
+            params: ToolRequestUserInputParams {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                item_id: item_id.to_string(),
+                questions: Vec::new(),
             },
         }
     }
@@ -11198,6 +11202,155 @@ model = "gpt-5.2"
     }
 
     #[tokio::test]
+    async fn undo_last_user_message_restores_latest_user_input_and_rolls_back_one_turn() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+
+        let remote_image_url = "https://example.com/latest.png".to_string();
+        app.transcript_cells = vec![
+            Arc::new(UserHistoryCell {
+                message: "first".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "latest".to_string(),
+                text_elements: vec![TextElement::new(
+                    codex_protocol::user_input::ByteRange { start: 0, end: 6 },
+                    Some("latest".to_string()),
+                )],
+                local_image_paths: Vec::new(),
+                remote_image_urls: vec![remote_image_url.clone()],
+            }) as Arc<dyn HistoryCell>,
+        ];
+        app.chat_widget
+            .set_composer_text("stale draft".to_string(), Vec::new(), Vec::new());
+
+        assert!(app.undo_last_user_message());
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "latest");
+        assert_eq!(app.chat_widget.remote_image_urls(), vec![remote_image_url]);
+
+        let mut rollback_turns = None;
+        while let Ok(op) = op_rx.try_recv() {
+            if let Op::ThreadRollback { num_turns } = op {
+                rollback_turns = Some(num_turns);
+            }
+        }
+
+        assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn ctrl_x_ctrl_u_triggers_undo_last_user_message() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        app.transcript_cells = vec![
+            Arc::new(UserHistoryCell {
+                message: "first".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "latest".to_string(),
+                text_elements: vec![TextElement::new(
+                    codex_protocol::user_input::ByteRange { start: 0, end: 6 },
+                    Some("latest".to_string()),
+                )],
+                local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+        ];
+
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('x'),
+                KeyModifiers::CONTROL,
+            )),
+            None
+        );
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('u'),
+                KeyModifiers::CONTROL,
+            )),
+            None
+        );
+
+        let mut rollback_turns = None;
+        while let Ok(op) = op_rx.try_recv() {
+            if let Op::ThreadRollback { num_turns } = op {
+                rollback_turns = Some(num_turns);
+            }
+        }
+
+        assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn ctrl_x_unknown_second_key_falls_through_to_composer_input() {
+        let mut app = make_test_app().await;
+
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('x'),
+                KeyModifiers::CONTROL,
+            )),
+            None
+        );
+        let forwarded =
+            app.handle_key_chord_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert_eq!(
+            forwarded,
+            Some(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE))
+        );
+    }
+
+    #[tokio::test]
+    async fn ctrl_x_ctrl_y_runs_copy_action_without_inserting_y_into_the_composer() {
+        let mut app = make_test_app().await;
+
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('x'),
+                KeyModifiers::CONTROL,
+            )),
+            None
+        );
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('y'),
+                KeyModifiers::CONTROL,
+            )),
+            None
+        );
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "");
+    }
+
+    #[tokio::test]
     async fn replay_thread_snapshot_replays_turn_history_in_order() {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
@@ -11407,6 +11560,7 @@ model = "gpt-5.2"
 
         let replacement = ChatWidget::new_with_app_event(ChatWidgetInit {
             config: app.config.clone(),
+            display_preferences: app.display_preferences.clone(),
             frame_requester: crate::tui::FrameRequester::test_dummy(),
             app_event_tx: app.app_event_tx.clone(),
             initial_user_message: None,
@@ -11793,7 +11947,6 @@ model = "gpt-5.2"
         assert!(rendered_cells[0].contains("Workflow job completed"));
         Ok(())
     }
-
     #[tokio::test]
     async fn active_primary_turn_complete_waits_for_consumption_before_after_turn() -> Result<()> {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
@@ -12138,6 +12291,112 @@ model = "gpt-5.2"
     }
 
     #[tokio::test]
+    async fn btw_completion_notification_emits_completion_event_and_is_swallowed() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        app.btw_session = Some(BtwSessionState {
+            thread_id,
+            final_message: None,
+            last_status: None,
+        });
+
+        let swallowed = app.handle_btw_notification(
+            thread_id,
+            &turn_completed_notification_with_agent_message(
+                thread_id,
+                "turn-btw",
+                TurnStatus::Completed,
+                "Temporary answer",
+            ),
+        );
+
+        assert!(swallowed);
+        match app_event_rx.try_recv() {
+            Ok(AppEvent::BtwCompleted {
+                thread_id: actual_thread_id,
+                result: Ok(message),
+            }) => {
+                assert_eq!(actual_thread_id, thread_id);
+                assert_eq!(message, "Temporary answer");
+            }
+            other => panic!("expected BtwCompleted event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn btw_loading_popup_surfaces_hidden_hook_status() {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.btw_session = Some(BtwSessionState {
+            thread_id,
+            final_message: None,
+            last_status: None,
+        });
+
+        let swallowed = app
+            .handle_btw_notification(thread_id, &hook_started_notification(thread_id, "turn-btw"));
+
+        assert!(swallowed);
+        let popup = render_bottom_popup(&app.chat_widget, /*width*/ 100);
+        assert!(
+            popup.contains("Current hidden status:")
+                && popup.contains("Running UserPromptSubmit hook: checking")
+                && popup.contains("go-workflow input policy"),
+            "expected hidden hook status in /btw popup: {popup}"
+        );
+    }
+
+    #[tokio::test]
+    async fn btw_request_user_input_opens_failure_popup_instead_of_hanging() {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.btw_session = Some(BtwSessionState {
+            thread_id,
+            final_message: None,
+            last_status: None,
+        });
+
+        let reason = app.reject_btw_request(
+            thread_id,
+            &request_user_input_request(thread_id, "turn-btw", "call-1"),
+        );
+
+        assert_eq!(
+            reason,
+            Some(
+                "the hidden temporary discussion asked for interactive user input. Run the prompt in the main thread instead.".to_string()
+            )
+        );
+        let popup = render_bottom_popup(&app.chat_widget, /*width*/ 100);
+        assert!(
+            popup.contains("asked for interactive user input"),
+            "expected /btw failure popup for hidden request_user_input: {popup}"
+        );
+    }
+
+    #[tokio::test]
+    async fn btw_insert_summary_appends_to_existing_composer() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let thread_id = ThreadId::new();
+        app.btw_session = Some(BtwSessionState {
+            thread_id,
+            final_message: Some("First point.\n\nSecond point.".to_string()),
+            last_status: None,
+        });
+        app.chat_widget
+            .set_composer_text("Existing draft".to_string(), Vec::new(), Vec::new());
+
+        app.insert_btw_summary(&mut app_server).await;
+
+        assert_eq!(
+            app.chat_widget.composer_text_with_pending(),
+            "Existing draft\n\nBTW summary:\nFirst point.\nSecond point."
+        );
+        assert!(app.btw_session.is_none());
+        Ok(())
+    }
     async fn shutdown_first_exit_returns_immediate_exit_when_shutdown_submit_fails() {
         let mut app = make_test_app().await;
         let thread_id = ThreadId::new();

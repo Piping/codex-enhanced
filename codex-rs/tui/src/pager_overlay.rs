@@ -477,10 +477,11 @@ impl TranscriptOverlay {
             .enumerate()
             .flat_map(|(i, c)| {
                 let mut v: Vec<Box<dyn Renderable>> = Vec::new();
+                let highlighted = highlight_cell == Some(i);
                 let mut cell_renderable = if c.as_any().is::<UserHistoryCell>() {
                     Box::new(CachedRenderable::new(CellRenderable {
                         cell: c.clone(),
-                        style: if highlight_cell == Some(i) {
+                        style: if highlighted {
                             user_message_style().reversed()
                         } else {
                             user_message_style()
@@ -489,7 +490,11 @@ impl TranscriptOverlay {
                 } else {
                     Box::new(CachedRenderable::new(CellRenderable {
                         cell: c.clone(),
-                        style: Style::default(),
+                        style: if highlighted {
+                            Style::default().reversed()
+                        } else {
+                            Style::default()
+                        },
                     })) as Box<dyn Renderable>
                 };
                 if !c.is_stream_continuation() && i > 0 {
@@ -717,6 +722,11 @@ impl TranscriptOverlay {
     pub(crate) fn committed_cell_count(&self) -> usize {
         self.cells.len()
     }
+
+    #[cfg(test)]
+    pub(crate) fn highlighted_cell(&self) -> Option<usize> {
+        self.highlight_cell
+    }
 }
 
 pub(crate) struct StaticOverlay {
@@ -875,6 +885,7 @@ mod tests {
             lines: vec![Line::from("hello")],
         })]);
         overlay.set_highlight_cell(Some(0));
+        assert_eq!(overlay.highlighted_cell(), Some(0));
 
         // Render into a wide buffer so the footer hints aren't truncated.
         let area = Rect::new(0, 0, 120, 10);
@@ -986,7 +997,11 @@ mod tests {
                 content: "hello\nworld\n".to_string(),
             },
         );
-        let approval_cell: Arc<dyn HistoryCell> = Arc::new(new_patch_event(approval_changes, &cwd));
+        let approval_cell: Arc<dyn HistoryCell> = Arc::new(new_patch_event(
+            approval_changes,
+            &cwd,
+            crate::display_preferences::DisplayPreferences::default(),
+        ));
         cells.push(approval_cell);
 
         let mut apply_changes = HashMap::new();
@@ -996,7 +1011,11 @@ mod tests {
                 content: "hello\nworld\n".to_string(),
             },
         );
-        let apply_begin_cell: Arc<dyn HistoryCell> = Arc::new(new_patch_event(apply_changes, &cwd));
+        let apply_begin_cell: Arc<dyn HistoryCell> = Arc::new(new_patch_event(
+            apply_changes,
+            &cwd,
+            crate::display_preferences::DisplayPreferences::default(),
+        ));
         cells.push(apply_begin_cell);
 
         let apply_end_cell: Arc<dyn HistoryCell> = history_cell::new_approval_decision_cell(

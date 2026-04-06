@@ -36,6 +36,7 @@ pub(crate) struct CommandPopupFlags {
     pub(crate) fast_command_enabled: bool,
     pub(crate) personality_command_enabled: bool,
     pub(crate) realtime_conversation_enabled: bool,
+    #[allow(dead_code)]
     pub(crate) audio_device_selection_enabled: bool,
     pub(crate) windows_degraded_sandbox_active: bool,
 }
@@ -49,7 +50,6 @@ impl From<CommandPopupFlags> for slash_commands::BuiltinCommandFlags {
             fast_command_enabled: value.fast_command_enabled,
             personality_command_enabled: value.personality_command_enabled,
             realtime_conversation_enabled: value.realtime_conversation_enabled,
-            audio_device_selection_enabled: value.audio_device_selection_enabled,
             allow_elevate_sandbox: value.windows_degraded_sandbox_active,
         }
     }
@@ -436,7 +436,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_command_hidden_when_audio_device_selection_is_disabled() {
+    fn settings_command_remains_visible_when_audio_device_selection_is_disabled() {
         let mut popup = CommandPopup::new(CommandPopupFlags {
             collaboration_modes_enabled: false,
             connectors_enabled: false,
@@ -447,7 +447,7 @@ mod tests {
             audio_device_selection_enabled: false,
             windows_degraded_sandbox_active: false,
         });
-        popup.on_composer_text_change("/aud".to_string());
+        popup.on_composer_text_change("/set".to_string());
 
         let cmds: Vec<&str> = popup
             .filtered_items()
@@ -458,8 +458,8 @@ mod tests {
             .collect();
 
         assert!(
-            !cmds.contains(&"settings"),
-            "expected '/settings' to be hidden when audio device selection is disabled, got {cmds:?}"
+            cmds.contains(&"settings"),
+            "expected '/settings' to stay visible when audio device selection is disabled, got {cmds:?}"
         );
     }
 

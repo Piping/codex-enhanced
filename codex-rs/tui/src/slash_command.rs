@@ -27,6 +27,8 @@ pub enum SlashCommand {
     New,
     Resume,
     Fork,
+    Thread,
+    Profile,
     Init,
     Compact,
     Plan,
@@ -45,6 +47,7 @@ pub enum SlashCommand {
     Apps,
     Plugins,
     Workflow,
+    Btw,
     Logout,
     Quit,
     Exit,
@@ -80,6 +83,8 @@ impl SlashCommand {
             SlashCommand::Resume => "resume a saved chat",
             SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Fork => "fork the current chat",
+            SlashCommand::Thread => "open thread actions for the current conversation",
+            SlashCommand::Profile => "show and switch routed API profiles",
             // SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
@@ -99,7 +104,7 @@ impl SlashCommand {
             SlashCommand::Fast => "toggle Fast mode to enable fastest inference at 2X plan usage",
             SlashCommand::Personality => "choose a communication style for Codex",
             SlashCommand::Realtime => "toggle realtime voice mode (experimental)",
-            SlashCommand::Settings => "configure realtime microphone/speaker",
+            SlashCommand::Settings => "configure UI visibility and realtime devices",
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
@@ -114,6 +119,7 @@ impl SlashCommand {
             SlashCommand::Apps => "manage apps",
             SlashCommand::Plugins => "browse plugins",
             SlashCommand::Workflow => "inspect and trigger workspace workflows",
+            SlashCommand::Btw => "run a hidden read-only temporary discussion",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
@@ -134,6 +140,7 @@ impl SlashCommand {
                 | SlashCommand::Rename
                 | SlashCommand::Plan
                 | SlashCommand::Fast
+                | SlashCommand::Btw
                 | SlashCommand::SandboxReadRoot
         )
     }
@@ -157,6 +164,7 @@ impl SlashCommand {
             | SlashCommand::Experimental
             | SlashCommand::Review
             | SlashCommand::Plan
+            | SlashCommand::Btw
             | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
@@ -174,6 +182,8 @@ impl SlashCommand {
             | SlashCommand::Apps
             | SlashCommand::Plugins
             | SlashCommand::Workflow
+            | SlashCommand::Thread
+            | SlashCommand::Profile
             | SlashCommand::Feedback
             | SlashCommand::Quit
             | SlashCommand::Exit => true,

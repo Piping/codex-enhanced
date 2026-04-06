@@ -31,6 +31,7 @@ use crate::app::workflow_runtime::BackgroundWorkflowRunResult;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
+use crate::display_preferences::DisplayPreferenceKey;
 use crate::history_cell::HistoryCell;
 use crate::profile_router::ProfileFallbackAction;
 
@@ -63,6 +64,12 @@ impl RealtimeAudioDeviceKind {
             Self::Speaker => "speaker",
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RuntimeProfileTarget {
+    Default,
+    Named(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,8 +115,33 @@ pub(crate) enum AppEvent {
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
 
+    /// Open the local TUI display preferences panel.
+    OpenDisplayPreferencesPanel,
+
+    /// Open the routed profile management panel.
+    OpenProfileManagementPanel,
+
+    /// Open thread-specific actions for the current conversation.
+    OpenThreadPanel,
+
+    /// Open the committed transcript jump picker.
+    OpenJumpToMessagePanel,
+
+    /// Open the transcript overlay and jump to the selected committed cell.
+    JumpToTranscriptCell {
+        cell_index: usize,
+    },
+
     /// Fork the current session into a new thread.
     ForkCurrentSession,
+
+    /// Restore the last user input and roll back one committed turn.
+    UndoLastUserMessage,
+
+    /// Switch the current runtime to the selected config profile.
+    SwitchRuntimeProfile {
+        target: RuntimeProfileTarget,
+    },
 
     /// Request to exit the application.
     ///
@@ -302,6 +334,21 @@ pub(crate) enum AppEvent {
     },
 
     ShowWorkflowBackgroundTasks,
+
+    StartBtwDiscussion {
+        prompt: String,
+    },
+
+    BtwCompleted {
+        thread_id: ThreadId,
+        result: Result<String, String>,
+    },
+
+    BtwInsertSummary,
+
+    BtwInsertFull,
+
+    BtwDiscard,
     /// Retry the last turn using the routed profile fallback policy.
     RetryLastUserTurnWithProfileFallback {
         action: ProfileFallbackAction,
@@ -463,6 +510,9 @@ pub(crate) enum AppEvent {
     UpdateFeatureFlags {
         updates: Vec<(Feature, bool)>,
     },
+
+    /// Toggle one local TUI display preference and persist the updated config.
+    ToggleDisplayPreference(DisplayPreferenceKey),
 
     /// Update whether the full access warning prompt has been acknowledged.
     UpdateFullAccessWarningAcknowledged(bool),

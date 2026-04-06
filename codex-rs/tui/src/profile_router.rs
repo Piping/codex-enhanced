@@ -1,5 +1,4 @@
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
-#[cfg(test)]
 use codex_protocol::protocol::CodexErrorInfo;
 use serde::Deserialize;
 use serde::Serialize;
@@ -15,7 +14,6 @@ pub(crate) enum ProfileFallbackAction {
     RetrySameProfileFirst,
     SwitchProfileImmediately,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProfileRouteEntry {
@@ -52,6 +50,19 @@ impl ProfileRouterState {
             return false;
         }
         let next = Some(profile_id.to_string());
+
+        if self.active_profile_id == next {
+            false
+        } else {
+            self.active_profile_id = next;
+            true
+        }
+    }
+
+    pub(crate) fn set_runtime_active_profile(&mut self, profile_id: Option<&str>) -> bool {
+        let next = profile_id
+            .filter(|profile_id| self.contains_profile(profile_id))
+            .map(ToOwned::to_owned);
         if self.active_profile_id == next {
             false
         } else {
@@ -77,7 +88,6 @@ impl DefaultProfileRouter {
             .map(|route| route.profile_id.clone())
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProfileRouterStore {
     codex_home: PathBuf,
@@ -121,7 +131,6 @@ impl ProfileRouterStore {
     }
 }
 
-#[cfg(test)]
 pub(crate) fn core_profile_fallback_action(info: &CodexErrorInfo) -> Option<ProfileFallbackAction> {
     match info {
         CodexErrorInfo::UsageLimitExceeded | CodexErrorInfo::Unauthorized => {
@@ -242,5 +251,19 @@ mod tests {
         );
 
         assert_eq!(action, Some(ProfileFallbackAction::RetrySameProfileFirst));
+    }
+
+    #[test]
+    fn runtime_active_profile_clears_when_selected_profile_is_not_routed() {
+        let mut state = ProfileRouterState {
+            version: 1,
+            active_profile_id: Some("secondary".to_string()),
+            routes: vec![ProfileRouteEntry {
+                profile_id: "secondary".to_string(),
+            }],
+        };
+
+        assert!(state.set_runtime_active_profile(Some("missing")));
+        assert_eq!(state.active_profile_id, None);
     }
 }

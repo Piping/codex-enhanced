@@ -80,6 +80,58 @@ async fn slash_init_skips_when_project_doc_exists() {
 }
 
 #[tokio::test]
+async fn slash_btw_requires_prompt() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Btw);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one error message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Usage: /btw <temporary discussion prompt>"),
+        "expected usage message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_thread_dispatches_open_thread_panel_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Thread);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenThreadPanel));
+}
+
+#[tokio::test]
+async fn slash_profile_dispatches_open_profile_management_panel_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Profile);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenProfileManagementPanel));
+}
+
+#[tokio::test]
+async fn slash_btw_dispatches_start_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.bottom_pane.set_composer_text(
+        "/btw compare the two approaches".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    match rx.try_recv() {
+        Ok(AppEvent::StartBtwDiscussion { prompt }) => {
+            assert_eq!(prompt, "compare the two approaches");
+        }
+        other => panic!("expected StartBtwDiscussion event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn slash_quit_requests_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
