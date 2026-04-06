@@ -199,6 +199,12 @@ const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue."
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 const PROFILE_SWITCH_THREAD_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[derive(Clone, Copy)]
+enum ThreadLivenessRefreshMode {
+    Picker,
+    Selection,
+}
+
 enum ThreadInteractiveRequest {
     Approval(ApprovalRequest),
     McpServerElicitation(McpServerElicitationFormRequest),
@@ -3176,7 +3182,11 @@ impl App {
         }
         for thread_id in thread_ids {
             if !self
-                .refresh_agent_picker_thread_liveness(app_server, thread_id)
+                .refresh_agent_picker_thread_liveness(
+                    app_server,
+                    thread_id,
+                    ThreadLivenessRefreshMode::Picker,
+                )
                 .await
             {
                 continue;
@@ -3268,6 +3278,18 @@ impl App {
         Self::is_terminal_thread_read_error(err) || existing_is_closed.unwrap_or(false)
     }
 
+    fn closed_state_for_thread_read_status(
+        status: &codex_app_server_protocol::ThreadStatus,
+        mode: ThreadLivenessRefreshMode,
+    ) -> bool {
+        match mode {
+            ThreadLivenessRefreshMode::Picker => {
+                matches!(status, codex_app_server_protocol::ThreadStatus::NotLoaded)
+            }
+            ThreadLivenessRefreshMode::Selection => false,
+        }
+    }
+
     fn can_fallback_from_include_turns_error(err: &color_eyre::Report) -> bool {
         err.chain().any(|cause| {
             let message = cause.to_string();
@@ -3310,6 +3332,7 @@ impl App {
         &mut self,
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
+        mode: ThreadLivenessRefreshMode,
     ) -> bool {
         let existing_entry = self.agent_navigation.get(&thread_id).cloned();
         let has_replay_channel = self.thread_event_channels.contains_key(&thread_id);
@@ -3330,17 +3353,29 @@ impl App {
                             .as_ref()
                             .and_then(|entry| entry.agent_role.clone())
                     }),
-                    matches!(
-                        thread.status,
-                        codex_app_server_protocol::ThreadStatus::NotLoaded
-                    ),
+                    Self::closed_state_for_thread_read_status(&thread.status, mode),
                 );
                 true
             }
             Err(err) => {
                 if Self::is_terminal_thread_read_error(&err) && !has_replay_channel {
-                    self.agent_navigation.remove(thread_id);
-                    return false;
+                    match mode {
+                        ThreadLivenessRefreshMode::Picker => {
+                            self.agent_navigation.remove(thread_id);
+                            return false;
+                        }
+                        ThreadLivenessRefreshMode::Selection => {
+                            if let Some(entry) = existing_entry {
+                                self.upsert_agent_picker_thread(
+                                    thread_id,
+                                    entry.agent_nickname,
+                                    entry.agent_role,
+                                    /*is_closed*/ false,
+                                );
+                            }
+                            return true;
+                        }
+                    }
                 }
                 let is_closed = Self::closed_state_for_thread_read_error(
                     &err,
@@ -3505,7 +3540,11 @@ impl App {
         }
 
         if !self
-            .refresh_agent_picker_thread_liveness(app_server, thread_id)
+            .refresh_agent_picker_thread_liveness(
+                app_server,
+                thread_id,
+                ThreadLivenessRefreshMode::Selection,
+            )
             .await
         {
             self.chat_widget
@@ -8254,6 +8293,22 @@ mod tests {
     }
 
     #[test]
+    fn closed_state_for_thread_read_status_marks_not_loaded_picker_threads_closed() {
+        assert!(App::closed_state_for_thread_read_status(
+            &codex_app_server_protocol::ThreadStatus::NotLoaded,
+            ThreadLivenessRefreshMode::Picker,
+        ));
+    }
+
+    #[test]
+    fn closed_state_for_thread_read_status_keeps_not_loaded_selection_threads_open() {
+        assert!(!App::closed_state_for_thread_read_status(
+            &codex_app_server_protocol::ThreadStatus::NotLoaded,
+            ThreadLivenessRefreshMode::Selection,
+        ));
+    }
+
+    #[test]
     fn include_turns_fallback_detection_handles_unmaterialized_and_ephemeral_threads() {
         let unmaterialized = color_eyre::eyre::eyre!(
             "thread/read failed during TUI session lookup: thread/read failed: thread thr_123 is not materialized yet; includeTurns is unavailable before first user message"
@@ -8400,12 +8455,44 @@ mod tests {
         );
 
         let is_available = app
-            .refresh_agent_picker_thread_liveness(&mut app_server, thread_id)
+            .refresh_agent_picker_thread_liveness(
+                &mut app_server,
+                thread_id,
+                ThreadLivenessRefreshMode::Picker,
+            )
             .await;
 
         assert!(!is_available);
         assert_eq!(app.agent_navigation.get(&thread_id), None);
         assert!(!app.thread_event_channels.contains_key(&thread_id));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_agent_picker_thread_liveness_keeps_unloaded_selection_targets_attachable()
+    -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await?;
+        let thread_id = started.session.thread_id;
+        app_server.thread_unsubscribe(thread_id).await?;
+
+        let is_available = app
+            .refresh_agent_picker_thread_liveness(
+                &mut app_server,
+                thread_id,
+                ThreadLivenessRefreshMode::Selection,
+            )
+            .await;
+
+        assert!(is_available);
+        assert!(app.agent_navigation.get(&thread_id).is_none());
+        assert!(app.should_attach_live_thread_for_selection(thread_id));
         Ok(())
     }
 
