@@ -58,7 +58,7 @@ impl ClawbotFeishuConfigField {
         if self.is_secret() {
             format!("Configured: {}", mask_secret(&value))
         } else {
-            format!("Configured: {}", truncate_value(&value, 28))
+            format!("Configured: {}", truncate_value(&value, /*max_chars*/ 28))
         }
     }
 
@@ -81,7 +81,7 @@ impl ClawbotFeishuConfigField {
                 format!("Current: {}", mask_secret(&value))
             }
             Some(value) => {
-                format!("Current: {}", truncate_value(&value, 40))
+                format!("Current: {}", truncate_value(&value, /*max_chars*/ 40))
             }
             None => "Current: not set".to_string(),
         }
@@ -684,7 +684,7 @@ fn connection_description(state: &ProviderRuntimeState) -> String {
     };
     match state.last_error.as_deref() {
         Some(error) if !error.trim().is_empty() => {
-            format!("{status}: {}", truncate_value(error, 48))
+            format!("{status}: {}", truncate_value(error, /*max_chars*/ 48))
         }
         _ => status.to_string(),
     }
@@ -835,8 +835,8 @@ mod tests {
     use super::clawbot_session_item;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
-    use crate::bottom_pane::ListSelectionView;
     use crate::bottom_pane::SelectionViewParams;
+    use crate::bottom_pane::list_selection_view::ListSelectionView;
     use crate::render::renderable::Renderable;
 
     fn render_selection_popup(view: &ListSelectionView, width: u16, height: u16) -> String {
@@ -863,7 +863,7 @@ mod tests {
                 bound_thread_id: Some("019d607a-cf72-72e1-a5b7-0dc17ad019ad".to_string()),
             },
             Some("019d607a-cf72-72e1-a5b7-0dc17ad019ae"),
-            None,
+            /*current_binding_session_id*/ None,
         );
 
         assert!(!item.is_disabled);
@@ -896,7 +896,7 @@ mod tests {
                 bound_thread_id: Some("019d607a-cf72-72e1-a5b7-0dc17ad019ad".to_string()),
             },
             Some("019d607a-cf72-72e1-a5b7-0dc17ad019ae"),
-            None,
+            /*current_binding_session_id*/ None,
         );
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -913,7 +913,7 @@ mod tests {
 
         assert_snapshot!(
             "bound_session_jump_item",
-            render_selection_popup(&view, 92, 14)
+            render_selection_popup(&view, /*width*/ 92, /*height*/ 14)
         );
     }
 }

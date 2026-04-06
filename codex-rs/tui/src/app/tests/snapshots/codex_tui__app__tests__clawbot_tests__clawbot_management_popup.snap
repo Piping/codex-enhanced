@@ -1,5 +1,6 @@
 ---
-source: tui/src/app.rs
+source: tui/src/app/tests/clawbot_tests.rs
+assertion_line: 413
 expression: popup
 ---
   Clawbot
