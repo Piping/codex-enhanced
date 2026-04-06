@@ -16,6 +16,7 @@ use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
+use codex_app_server_protocol::ServerNotification;
 use codex_chatgpt::connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
@@ -26,6 +27,7 @@ use codex_protocol::protocol::RateLimitSnapshot;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
 
+use crate::app::workflow_runtime::BackgroundWorkflowRunResult;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
@@ -267,6 +269,39 @@ pub(crate) enum AppEvent {
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 
+    /// Replay stored workflow-only transcript cells for a specific thread after its turn replay.
+    ReplayWorkflowHistory {
+        thread_id: ThreadId,
+    },
+
+    /// Final result for one background workflow execution.
+    BackgroundWorkflowRunCompleted {
+        run_id: String,
+        result: Box<BackgroundWorkflowRunResult>,
+    },
+
+    RegisterWorkflowThreadNotificationForwarder {
+        thread_id: ThreadId,
+        sender: tokio::sync::mpsc::UnboundedSender<ServerNotification>,
+        ready_tx: tokio::sync::oneshot::Sender<()>,
+    },
+
+    UnregisterWorkflowThreadNotificationForwarder {
+        thread_id: ThreadId,
+    },
+    OpenWorkflowControls,
+
+    StartManualWorkflowTrigger {
+        workflow_name: String,
+        trigger_id: String,
+    },
+
+    StartManualWorkflowJob {
+        workflow_name: String,
+        job_name: String,
+    },
+
+    ShowWorkflowBackgroundTasks,
     /// Retry the last turn using the routed profile fallback policy.
     RetryLastUserTurnWithProfileFallback {
         action: ProfileFallbackAction,

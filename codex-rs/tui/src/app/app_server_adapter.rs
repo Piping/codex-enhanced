@@ -153,7 +153,7 @@ impl App {
 
     async fn handle_server_notification_event(
         &mut self,
-        _app_server_client: &AppServerSession,
+        app_server_client: &AppServerSession,
         notification: ServerNotification,
     ) {
         match &notification {
@@ -192,14 +192,34 @@ impl App {
                 let result = if self.primary_thread_id == Some(thread_id)
                     || self.primary_thread_id.is_none()
                 {
-                    self.enqueue_primary_thread_notification(notification).await
+                    self.enqueue_primary_thread_notification(notification.clone())
+                        .await
                 } else {
-                    self.enqueue_thread_notification(thread_id, notification)
+                    self.enqueue_thread_notification(thread_id, notification.clone())
                         .await
                 };
 
                 if let Err(err) = result {
                     tracing::warn!("failed to enqueue app-server notification: {err}");
+                } else if self.active_thread_id != Some(thread_id)
+                    && let Some(last_agent_message) = super::workflow_after_turn_last_agent_message(
+                        self.primary_thread_id,
+                        thread_id,
+                        &notification,
+                    )
+                {
+                    let _ = self
+                        .handle_primary_thread_turn_complete_for_workflows(
+                            app_server_client,
+                            last_agent_message,
+                        )
+                        .await;
+                }
+                if let Some(sender) = self.workflow_thread_notification_channels.get(&thread_id)
+                    && sender.send(notification.clone()).is_err()
+                {
+                    self.workflow_thread_notification_channels
+                        .remove(&thread_id);
                 }
                 return;
             }

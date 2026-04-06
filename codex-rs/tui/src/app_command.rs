@@ -279,6 +279,10 @@ impl AppCommand {
         self.0
     }
 
+    pub(crate) fn from_core(op: Op) -> Self {
+        Self(op)
+    }
+
     pub(crate) fn is_review(&self) -> bool {
         matches!(self.view(), AppCommandView::Review { .. })
     }

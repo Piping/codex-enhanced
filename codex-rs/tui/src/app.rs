@@ -152,6 +152,8 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinHandle;
+#[cfg(test)]
+use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
 use uuid::Uuid;
 mod agent_navigation;
@@ -159,12 +161,19 @@ mod app_server_adapter;
 mod app_server_requests;
 mod loaded_threads;
 mod pending_interactive_replay;
+mod workflow_controls;
+mod workflow_definition;
+mod workflow_history;
+pub(crate) mod workflow_runtime;
+mod workflow_scheduler;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
 use self::loaded_threads::find_loaded_subagent_threads_for_primary;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
+use self::workflow_history::WorkflowHistoryState;
+use self::workflow_scheduler::WorkflowSchedulerState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
@@ -239,6 +248,36 @@ fn collab_receiver_thread_ids(notification: &ServerNotification) -> Option<&[Str
         },
         _ => None,
     }
+}
+
+fn workflow_after_turn_last_agent_message(
+    primary_thread_id: Option<ThreadId>,
+    thread_id: ThreadId,
+    notification: &ServerNotification,
+) -> Option<Option<String>> {
+    if primary_thread_id != Some(thread_id) {
+        return None;
+    }
+    let ServerNotification::TurnCompleted(notification) = notification else {
+        return None;
+    };
+    if !matches!(
+        notification.turn.status,
+        TurnStatus::Completed | TurnStatus::Failed
+    ) {
+        return None;
+    }
+    Some(last_agent_message_for_turn(&notification.turn))
+}
+
+fn last_agent_message_for_turn(turn: &Turn) -> Option<String> {
+    turn.items.iter().fold(None, |_, item| match item {
+        ThreadItem::AgentMessage { text, .. } => {
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        _ => None,
+    })
 }
 
 fn default_exec_approval_decisions(
@@ -1035,6 +1074,10 @@ pub(crate) struct App {
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
+    workflow_thread_notification_channels:
+        HashMap<ThreadId, mpsc::UnboundedSender<ServerNotification>>,
+    workflow_scheduler: WorkflowSchedulerState,
+    workflow_history: WorkflowHistoryState,
 }
 
 #[derive(Default)]
@@ -1872,13 +1915,136 @@ impl App {
 
     async fn shutdown_current_thread(&mut self, app_server: &mut AppServerSession) {
         if let Some(thread_id) = self.chat_widget.thread_id() {
+            let shutting_down_primary = self.primary_thread_id == Some(thread_id);
             // Clear any in-flight rollback guard when switching threads.
             self.backtrack.pending_rollback = None;
             if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
                 tracing::warn!("failed to unsubscribe thread {thread_id}: {err}");
             }
             self.abort_thread_event_listener(thread_id);
+            if shutting_down_primary {
+                let stopped_count = self.workflow_scheduler.stop_active_workflow_runs().await;
+                if stopped_count > 0 {
+                    self.sync_background_workflow_status();
+                }
+            }
         }
+    }
+
+    fn background_workflow_labels(&self) -> Vec<String> {
+        self.workflow_scheduler.background_workflow_labels()
+    }
+
+    fn queued_trigger_labels(&self) -> Vec<String> {
+        self.workflow_scheduler.queued_trigger_labels()
+    }
+
+    fn sync_background_workflow_status(&mut self) {
+        self.chat_widget.sync_background_workflow_status(
+            self.background_workflow_labels(),
+            self.queued_trigger_labels(),
+        );
+        self.refresh_workflow_controls_if_active();
+    }
+
+    fn insert_visible_history_cell(&mut self, tui: &mut tui::Tui, cell: Arc<dyn HistoryCell>) {
+        if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+            t.insert_cell(cell.clone());
+            tui.frame_requester().schedule_frame();
+        }
+        self.transcript_cells.push(cell.clone());
+        let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+        if display.is_empty() {
+            return;
+        }
+        if !cell.is_stream_continuation() {
+            if self.has_emitted_history_lines {
+                display.insert(0, Line::from(""));
+            } else {
+                self.has_emitted_history_lines = true;
+            }
+        }
+        if self.overlay.is_some() {
+            self.deferred_history_lines.extend(display);
+        } else {
+            tui.insert_history_lines(display);
+        }
+    }
+
+    #[cfg(test)]
+    fn start_test_background_workflow_run(
+        &mut self,
+        workflow_name: String,
+        target_name: String,
+        is_trigger: bool,
+    ) -> String {
+        let run_id = self
+            .workflow_scheduler
+            .next_background_run_id(&workflow_name, &target_name);
+        let handle = tokio::spawn(async {
+            std::future::pending::<()>().await;
+        });
+        let target = if is_trigger {
+            workflow_runtime::BackgroundWorkflowRunTarget::Trigger {
+                workflow_name,
+                trigger_id: target_name,
+            }
+        } else {
+            workflow_runtime::BackgroundWorkflowRunTarget::Job {
+                workflow_name,
+                job_name: target_name,
+            }
+        };
+        self.workflow_scheduler.register_background_workflow_run(
+            run_id.clone(),
+            target,
+            CancellationToken::new(),
+            handle,
+        );
+        self.sync_background_workflow_status();
+        run_id
+    }
+
+    #[cfg(test)]
+    fn start_test_manual_workflow_trigger_run(
+        &mut self,
+        workflow_name: String,
+        trigger_id: String,
+    ) -> Option<String> {
+        if self.workflow_scheduler.has_running_trigger_run() {
+            self.workflow_scheduler
+                .enqueue_trigger_run(workflow_name, trigger_id);
+            self.sync_background_workflow_status();
+            None
+        } else {
+            Some(self.start_test_background_workflow_run(
+                workflow_name,
+                trigger_id,
+                /*is_trigger*/ true,
+            ))
+        }
+    }
+
+    #[cfg(test)]
+    async fn finish_test_background_workflow_run(&mut self, run_id: String) {
+        let Some(run) = self
+            .workflow_scheduler
+            .take_background_workflow_run(&run_id)
+        else {
+            return;
+        };
+        run.handle.abort();
+        let _ = run.handle.await;
+        if run.is_trigger
+            && let Some(next) = self.workflow_scheduler.dequeue_trigger_run()
+        {
+            self.start_test_background_workflow_run(
+                next.workflow_name,
+                next.trigger_id,
+                /*is_trigger*/ true,
+            );
+        }
+        self.sync_background_workflow_status();
     }
 
     fn abort_thread_event_listener(&mut self, thread_id: ThreadId) {
@@ -2177,6 +2343,9 @@ impl App {
         thread_id: ThreadId,
         op: AppCommand,
     ) -> Result<()> {
+        let (op, workflow_cells) = self
+            .augment_primary_thread_op_with_before_turn_workflows(app_server, thread_id, op)
+            .await;
         crate::session_log::log_outbound_op(&op);
 
         if self.try_handle_local_history_op(thread_id, &op).await? {
@@ -2203,6 +2372,11 @@ impl App {
             if ThreadEventStore::op_can_change_pending_replay_state(&op) {
                 self.note_thread_outbound_op(thread_id, &op).await;
                 self.refresh_pending_thread_approvals().await;
+            }
+            for cell in workflow_cells {
+                if let Some(visible_cell) = self.record_workflow_history_cell(thread_id, cell) {
+                    self.insert_visible_history_cell(tui, visible_cell);
+                }
             }
             return Ok(());
         }
@@ -3059,6 +3233,7 @@ impl App {
         self.chat_widget.handle_thread_session(session);
         self.chat_widget
             .replay_thread_turns(turns, ReplayKind::ResumeInitialMessages);
+        self.queue_workflow_history_replay_for_thread(thread_id);
         let pending = std::mem::take(&mut self.pending_primary_events);
         for pending_event in pending {
             match pending_event {
@@ -3563,7 +3738,7 @@ impl App {
             };
             self.chat_widget.add_info_message(message, /*hint*/ None);
         }
-        self.drain_active_thread_events(tui).await?;
+        self.drain_active_thread_events(tui, app_server).await?;
         self.refresh_pending_thread_approvals().await;
 
         Ok(())
@@ -3780,7 +3955,11 @@ impl App {
         config
     }
 
-    async fn drain_active_thread_events(&mut self, tui: &mut tui::Tui) -> Result<()> {
+    async fn drain_active_thread_events(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &AppServerSession,
+    ) -> Result<()> {
         let Some(mut rx) = self.active_thread_rx.take() else {
             return Ok(());
         };
@@ -3788,7 +3967,32 @@ impl App {
         let mut disconnected = false;
         loop {
             match rx.try_recv() {
-                Ok(event) => self.handle_thread_event_now(event),
+                Ok(event) => {
+                    let after_turn =
+                        self.active_thread_id
+                            .and_then(|active_thread_id| match &event {
+                                ThreadBufferedEvent::Notification(notification) => {
+                                    workflow_after_turn_last_agent_message(
+                                        self.primary_thread_id,
+                                        active_thread_id,
+                                        notification,
+                                    )
+                                }
+                                _ => None,
+                            });
+                    self.handle_thread_event_now(event);
+                    if let Some(last_agent_message) = after_turn {
+                        for cell in self
+                            .handle_primary_thread_turn_complete_for_workflows(
+                                app_server,
+                                last_agent_message,
+                            )
+                            .await
+                        {
+                            self.insert_visible_history_cell(tui, cell);
+                        }
+                    }
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     disconnected = true;
@@ -3853,6 +4057,9 @@ impl App {
         }
         for event in snapshot.events {
             self.handle_thread_event_replay(event);
+        }
+        if let Some(thread_id) = self.active_thread_id {
+            self.queue_workflow_history_replay_for_thread(thread_id);
         }
         self.chat_widget
             .set_queue_autosend_suppressed(/*suppressed*/ false);
@@ -4133,6 +4340,9 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            workflow_thread_notification_channels: HashMap::new(),
+            workflow_scheduler: WorkflowSchedulerState::default(),
+            workflow_history: WorkflowHistoryState::default(),
         };
         if let Some(started) = initial_started_thread {
             app.enqueue_primary_thread_session(started.session, started.turns)
@@ -4550,29 +4760,41 @@ impl App {
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
-                if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_cell(cell.clone());
-                    tui.frame_requester().schedule_frame();
-                }
-                self.transcript_cells.push(cell.clone());
-                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
-                if !display.is_empty() {
-                    // Only insert a separating blank line for new cells that are not
-                    // part of an ongoing stream. Streaming continuations should not
-                    // accrue extra blank lines between chunks.
-                    if !cell.is_stream_continuation() {
-                        if self.has_emitted_history_lines {
-                            display.insert(0, Line::from(""));
-                        } else {
-                            self.has_emitted_history_lines = true;
-                        }
-                    }
+                self.insert_visible_history_cell(tui, cell);
+            }
+            AppEvent::ReplayWorkflowHistory { thread_id } => {
+                if self.active_thread_id == Some(thread_id) {
+                    let lines = self.replay_workflow_history_cells_for_thread(
+                        thread_id,
+                        tui.terminal.last_known_screen_size.width,
+                    );
                     if self.overlay.is_some() {
-                        self.deferred_history_lines.extend(display);
-                    } else {
-                        tui.insert_history_lines(display);
+                        self.deferred_history_lines.extend(lines);
+                    } else if !lines.is_empty() {
+                        tui.insert_history_lines(lines);
                     }
                 }
+            }
+            AppEvent::BackgroundWorkflowRunCompleted { run_id, result } => {
+                let cells = self
+                    .finish_background_workflow_run(app_server, run_id, *result)
+                    .await;
+                for cell in cells {
+                    self.insert_visible_history_cell(tui, cell);
+                }
+            }
+            AppEvent::RegisterWorkflowThreadNotificationForwarder {
+                thread_id,
+                sender,
+                ready_tx,
+            } => {
+                self.workflow_thread_notification_channels
+                    .insert(thread_id, sender);
+                let _ = ready_tx.send(());
+            }
+            AppEvent::UnregisterWorkflowThreadNotificationForwarder { thread_id } => {
+                self.workflow_thread_notification_channels
+                    .remove(&thread_id);
             }
             AppEvent::RetryLastUserTurnWithProfileFallback {
                 action,
@@ -4585,6 +4807,31 @@ impl App {
                     error_message,
                 )
                 .await;
+            }
+            AppEvent::OpenWorkflowControls => {
+                self.open_workflow_controls_popup();
+            }
+            AppEvent::StartManualWorkflowTrigger {
+                workflow_name,
+                trigger_id,
+            } => {
+                let cell = self.start_manual_workflow_trigger_from_ui(
+                    app_server,
+                    workflow_name,
+                    trigger_id,
+                );
+                self.insert_visible_history_cell(tui, cell);
+            }
+            AppEvent::StartManualWorkflowJob {
+                workflow_name,
+                job_name,
+            } => {
+                let cell =
+                    self.start_manual_workflow_job_from_ui(app_server, workflow_name, job_name);
+                self.insert_visible_history_cell(tui, cell);
+            }
+            AppEvent::ShowWorkflowBackgroundTasks => {
+                self.chat_widget.add_ps_output();
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
@@ -6056,7 +6303,27 @@ impl App {
                 .await;
         }
 
+        let after_turn = self
+            .active_thread_id
+            .and_then(|active_thread_id| match &event {
+                ThreadBufferedEvent::Notification(notification) => {
+                    workflow_after_turn_last_agent_message(
+                        self.primary_thread_id,
+                        active_thread_id,
+                        notification,
+                    )
+                }
+                _ => None,
+            });
         self.handle_thread_event_now(event);
+        if let Some(last_agent_message) = after_turn {
+            for cell in self
+                .handle_primary_thread_turn_complete_for_workflows(app_server, last_agent_message)
+                .await
+            {
+                self.insert_visible_history_cell(tui, cell);
+            }
+        }
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();
         }
@@ -6566,6 +6833,7 @@ mod tests {
     use crate::chatwidget::ChatWidgetInit;
     use crate::chatwidget::create_initial_user_message;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
+    use crate::chatwidget::tests::render_bottom_popup;
     use crate::chatwidget::tests::set_chatgpt_auth;
     use crate::file_search::FileSearchManager;
     use crate::history_cell::AgentMessageCell;
@@ -6574,6 +6842,7 @@ mod tests {
     use crate::history_cell::new_session_info;
     use crate::multi_agents::AgentPickerThreadEntry;
     use assert_matches::assert_matches;
+    use codex_app_server_client::AppServerEvent;
 
     use codex_app_server_protocol::AdditionalFileSystemPermissions;
     use codex_app_server_protocol::AdditionalNetworkPermissions;
@@ -6591,6 +6860,7 @@ mod tests {
     use codex_app_server_protocol::HookRunSummary as AppServerHookRunSummary;
     use codex_app_server_protocol::HookScope as AppServerHookScope;
     use codex_app_server_protocol::HookStartedNotification;
+    use codex_app_server_protocol::ItemCompletedNotification;
     use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::NetworkApprovalContext as AppServerNetworkApprovalContext;
     use codex_app_server_protocol::NetworkApprovalProtocol as AppServerNetworkApprovalProtocol;
@@ -6647,7 +6917,9 @@ mod tests {
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
+
     use ratatui::prelude::Line;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -9460,6 +9732,9 @@ guardian_approval = true
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            workflow_thread_notification_channels: HashMap::new(),
+            workflow_scheduler: WorkflowSchedulerState::default(),
+            workflow_history: WorkflowHistoryState::default(),
         }
     }
 
@@ -9514,10 +9789,92 @@ guardian_approval = true
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),
+                workflow_thread_notification_channels: HashMap::new(),
+                workflow_scheduler: WorkflowSchedulerState::default(),
+                workflow_history: WorkflowHistoryState::default(),
             },
             rx,
             op_rx,
         )
+    }
+
+    fn write_test_before_turn_workflow(workspace_cwd: &Path) -> Result<()> {
+        let workflows_dir = workspace_cwd.join(".codex/workflows");
+        std::fs::create_dir_all(&workflows_dir)?;
+        std::fs::write(
+            workflows_dir.join("before_turn.yaml"),
+            r#"name: director
+
+triggers:
+  - type: before_turn
+    jobs: [augment]
+
+jobs:
+  augment:
+    context: embed
+    steps:
+      - prompt: |
+          added by before_turn
+"#,
+        )?;
+        Ok(())
+    }
+
+    fn write_test_after_turn_workflow(workspace_cwd: &Path) -> Result<()> {
+        let workflows_dir = workspace_cwd.join(".codex/workflows");
+        std::fs::create_dir_all(&workflows_dir)?;
+        std::fs::write(
+            workflows_dir.join("after_turn.yaml"),
+            r#"name: director
+
+triggers:
+  - type: after_turn
+    jobs: [followup]
+
+jobs:
+  followup:
+    context: embed
+    steps:
+      - prompt: |
+          follow up from workflow
+"#,
+        )?;
+        Ok(())
+    }
+
+    fn write_test_manual_workflow(workspace_cwd: &Path) -> Result<()> {
+        let workflows_dir = workspace_cwd.join(".codex/workflows");
+        std::fs::create_dir_all(&workflows_dir)?;
+        std::fs::write(
+            workflows_dir.join("manual.yaml"),
+            r#"name: director
+
+triggers:
+  - type: manual
+    id: review_backlog
+    jobs: [summarize]
+  - type: manual
+    id: triage
+    jobs: [notify]
+  - type: after_turn
+    id: followup
+    jobs: [notify]
+
+jobs:
+  summarize:
+    context: embed
+    steps:
+      - prompt: |
+          summarize the backlog
+  notify:
+    context: embed
+    response: user
+    steps:
+      - prompt: |
+          send workflow update
+"#,
+        )?;
+        Ok(())
     }
 
     fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {
@@ -9564,6 +9921,27 @@ guardian_approval = true
         ServerNotification::TurnCompleted(TurnCompletedNotification {
             thread_id: thread_id.to_string(),
             turn: test_turn(turn_id, status, Vec::new()),
+        })
+    }
+
+    fn turn_completed_notification_with_agent_message(
+        thread_id: ThreadId,
+        turn_id: &str,
+        status: TurnStatus,
+        message: &str,
+    ) -> ServerNotification {
+        ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: thread_id.to_string(),
+            turn: test_turn(
+                turn_id,
+                status,
+                vec![ThreadItem::AgentMessage {
+                    id: "agent-1".to_string(),
+                    text: message.to_string(),
+                    phase: None,
+                    memory_citation: None,
+                }],
+            ),
         })
     }
 
@@ -10892,6 +11270,130 @@ model = "gpt-5.2"
     }
 
     #[tokio::test]
+    async fn replay_thread_snapshot_queues_workflow_history_after_turn_replay() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
+        let stored_cell: Arc<dyn HistoryCell> = Arc::new(history_cell::new_info_event(
+            "Workflow reply".to_string(),
+            Some("director/review_backlog".to_string()),
+        ));
+        let _ = app.record_workflow_history_cell(thread_id, stored_cell);
+
+        app.replay_thread_snapshot(
+            ThreadEventSnapshot {
+                session: Some(test_thread_session(
+                    thread_id,
+                    PathBuf::from("/home/user/project"),
+                )),
+                turns: vec![test_turn(
+                    "turn-1",
+                    TurnStatus::Completed,
+                    vec![ThreadItem::UserMessage {
+                        id: "user-1".to_string(),
+                        content: vec![AppServerUserInput::Text {
+                            text: "first prompt".to_string(),
+                            text_elements: Vec::new(),
+                        }],
+                    }],
+                )],
+                events: Vec::new(),
+                input_state: None,
+            },
+            /*resume_restored_queue*/ false,
+        );
+
+        let mut replay_order = Vec::new();
+        while let Ok(event) = app_event_rx.try_recv() {
+            match event {
+                AppEvent::InsertHistoryCell(cell) => {
+                    let cell: Arc<dyn HistoryCell> = cell.into();
+                    let transcript = lines_to_single_string(&cell.transcript_lines(/*width*/ 80));
+                    if transcript.contains("first prompt") {
+                        replay_order.push("turn");
+                    }
+                    app.transcript_cells.push(cell);
+                }
+                AppEvent::ReplayWorkflowHistory {
+                    thread_id: replay_thread_id,
+                } => {
+                    assert_eq!(replay_thread_id, thread_id);
+                    replay_order.push("workflow");
+                    let lines = app.replay_workflow_history_cells_for_thread(
+                        replay_thread_id,
+                        /*width*/ 80,
+                    );
+                    assert!(lines_to_single_string(&lines).contains("Workflow reply"));
+                }
+                _ => {}
+            }
+        }
+
+        assert_eq!(replay_order, vec!["turn", "workflow"]);
+        let transcript: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .map(|cell| lines_to_single_string(&cell.transcript_lines(/*width*/ 80)))
+            .collect();
+        assert!(transcript.iter().any(|cell| cell.contains("first prompt")));
+        assert!(
+            transcript
+                .last()
+                .is_some_and(|cell| cell.contains("Workflow reply"))
+        );
+    }
+
+    #[tokio::test]
+    async fn enqueue_primary_thread_session_queues_workflow_history_after_turn_replay() -> Result<()>
+    {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let stored_cell: Arc<dyn HistoryCell> = Arc::new(history_cell::new_info_event(
+            "Workflow reply".to_string(),
+            Some("director/review_backlog".to_string()),
+        ));
+        let _ = app.record_workflow_history_cell(thread_id, stored_cell);
+
+        app.enqueue_primary_thread_session(
+            test_thread_session(thread_id, PathBuf::from("/tmp/project")),
+            vec![test_turn(
+                "turn-1",
+                TurnStatus::Completed,
+                vec![ThreadItem::UserMessage {
+                    id: "user-1".to_string(),
+                    content: vec![AppServerUserInput::Text {
+                        text: "earlier prompt".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                }],
+            )],
+        )
+        .await?;
+
+        let mut replay_order = Vec::new();
+        while let Ok(event) = app_event_rx.try_recv() {
+            match event {
+                AppEvent::InsertHistoryCell(cell) => {
+                    let transcript = lines_to_single_string(&cell.transcript_lines(/*width*/ 80));
+                    if transcript.contains("earlier prompt") {
+                        replay_order.push("turn");
+                    }
+                }
+                AppEvent::ReplayWorkflowHistory {
+                    thread_id: replay_thread_id,
+                } => {
+                    assert_eq!(replay_thread_id, thread_id);
+                    replay_order.push("workflow");
+                }
+                _ => {}
+            }
+        }
+
+        assert_eq!(replay_order, vec!["turn", "workflow"]);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let receiver_thread_id =
@@ -11171,6 +11673,468 @@ model = "gpt-5.2"
             op_rx.try_recv().is_err(),
             "shutdown should not submit Op::Shutdown"
         );
+    }
+
+    #[tokio::test]
+    async fn shutting_down_primary_thread_stops_background_workflow_runs() {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start thread");
+        let thread_id = started.session.thread_id;
+        app.primary_thread_id = Some(thread_id);
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: started.session.forked_from_id,
+                thread_name: started.session.thread_name.clone(),
+                model: started.session.model.clone(),
+                model_provider_id: started.session.model_provider_id.clone(),
+                service_tier: started.session.service_tier,
+                approval_policy: started.session.approval_policy,
+                approvals_reviewer: started.session.approvals_reviewer,
+                sandbox_policy: started.session.sandbox_policy.clone(),
+                cwd: started.session.cwd.clone(),
+                reasoning_effort: started.session.reasoning_effort,
+                history_log_id: started.session.history_log_id,
+                history_entry_count: usize::try_from(started.session.history_entry_count)
+                    .expect("history entry count fits usize"),
+                initial_messages: None,
+                network_proxy: started.session.network_proxy.clone(),
+                rollout_path: started.session.rollout_path.clone(),
+            }),
+        });
+
+        let _run_id = app.start_test_background_workflow_run(
+            "director".to_string(),
+            "review_backlog".to_string(),
+            /*is_trigger*/ false,
+        );
+        assert_eq!(
+            app.background_workflow_labels(),
+            vec!["director · review_backlog".to_string()]
+        );
+
+        app.shutdown_current_thread(&mut app_server).await;
+
+        assert!(app.background_workflow_labels().is_empty());
+        assert!(app.queued_trigger_labels().is_empty());
+    }
+
+    #[tokio::test]
+    async fn before_turn_workflow_augments_primary_user_turn() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+        write_test_before_turn_workflow(app.config.cwd.as_path())?;
+
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start thread");
+        let thread_id = started.session.thread_id;
+        app.primary_thread_id = Some(thread_id);
+
+        let (op, cells) = app
+            .augment_primary_thread_op_with_before_turn_workflows(
+                &app_server,
+                thread_id,
+                AppCommand::from_core(Op::UserTurn {
+                    items: vec![UserInput::Text {
+                        text: "original prompt".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    cwd: app.config.cwd.to_path_buf(),
+                    approval_policy: AskForApproval::Never,
+                    approvals_reviewer: Some(ApprovalsReviewer::User),
+                    sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                    model: "gpt-test".to_string(),
+                    effort: None,
+                    summary: None,
+                    service_tier: None,
+                    final_output_json_schema: None,
+                    collaboration_mode: None,
+                    personality: None,
+                }),
+            )
+            .await;
+
+        let AppCommandView::UserTurn { items, .. } = op.view() else {
+            panic!("expected user turn");
+        };
+        assert_eq!(
+            items,
+            &[
+                UserInput::Text {
+                    text: "original prompt".to_string(),
+                    text_elements: Vec::new(),
+                },
+                UserInput::Text {
+                    text: "added by before_turn".to_string(),
+                    text_elements: Vec::new(),
+                }
+            ]
+        );
+        let rendered_cells: Vec<String> = cells
+            .iter()
+            .map(|cell| lines_to_single_string(&cell.transcript_lines(/*width*/ 80)))
+            .collect();
+        assert_eq!(rendered_cells.len(), 1);
+        assert!(rendered_cells[0].contains("Workflow job completed"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_primary_turn_complete_waits_for_consumption_before_after_turn() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+        write_test_after_turn_workflow(app.config.cwd.as_path())?;
+
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start thread");
+        let thread_id = started.session.thread_id;
+        app.enqueue_primary_thread_session(started.session, Vec::new())
+            .await?;
+        while app_event_rx.try_recv().is_ok() {}
+
+        app.enqueue_thread_notification(
+            thread_id,
+            turn_completed_notification_with_agent_message(
+                thread_id,
+                "turn-1",
+                TurnStatus::Completed,
+                "final reply",
+            ),
+        )
+        .await?;
+
+        assert!(
+            app_event_rx.try_recv().is_err(),
+            "after_turn should not run before the active thread consumes TurnCompleted"
+        );
+
+        let queued_event = app
+            .active_thread_rx
+            .as_mut()
+            .expect("active thread receiver")
+            .recv()
+            .await
+            .expect("queued active-thread event");
+        app.handle_thread_event_now(queued_event);
+
+        assert!(
+            app_event_rx.try_recv().is_err(),
+            "after_turn should not run before event consumption finishes"
+        );
+
+        let visible_cells = app
+            .handle_primary_thread_turn_complete_for_workflows(
+                &app_server,
+                Some("final reply".to_string()),
+            )
+            .await;
+        assert_eq!(visible_cells.len(), 2);
+
+        match app_event_rx
+            .try_recv()
+            .expect("expected workflow follow-up submission")
+        {
+            AppEvent::SubmitThreadOp {
+                thread_id: submit_thread_id,
+                op: Op::UserTurn { items, .. },
+            } => {
+                assert_eq!(submit_thread_id, thread_id);
+                assert_eq!(
+                    items,
+                    vec![UserInput::Text {
+                        text: "follow up from workflow".to_string(),
+                        text_elements: Vec::new(),
+                    }]
+                );
+            }
+            other => panic!("expected workflow follow-up submission, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn inactive_primary_turn_complete_still_runs_after_turn_continuity() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+        write_test_after_turn_workflow(app.config.cwd.as_path())?;
+
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start thread");
+        let thread_id = started.session.thread_id;
+        app.enqueue_primary_thread_session(started.session, Vec::new())
+            .await?;
+        let agent_thread_id = ThreadId::new();
+        app.active_thread_id = Some(agent_thread_id);
+        while app_event_rx.try_recv().is_ok() {}
+
+        app.handle_app_server_event(
+            &app_server,
+            AppServerEvent::ServerNotification(turn_completed_notification_with_agent_message(
+                thread_id,
+                "turn-1",
+                TurnStatus::Completed,
+                "final reply",
+            )),
+        )
+        .await;
+
+        match app_event_rx
+            .try_recv()
+            .expect("expected inactive primary workflow follow-up submission")
+        {
+            AppEvent::SubmitThreadOp {
+                thread_id: submit_thread_id,
+                op: Op::UserTurn { items, .. },
+            } => {
+                assert_eq!(submit_thread_id, thread_id);
+                assert_eq!(
+                    items,
+                    vec![UserInput::Text {
+                        text: "follow up from workflow".to_string(),
+                        text_elements: Vec::new(),
+                    }]
+                );
+            }
+            other => panic!("expected workflow follow-up submission, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn workflow_ui_popup_snapshot() -> Result<()> {
+        let mut app = make_test_app().await;
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+        write_test_manual_workflow(app.config.cwd.as_path())?;
+
+        let slow_run = app
+            .start_test_manual_workflow_trigger_run(
+                "director".to_string(),
+                "review_backlog".to_string(),
+            )
+            .expect("running manual trigger");
+        let queued_run = app
+            .start_test_manual_workflow_trigger_run("director".to_string(), "triage".to_string());
+        assert!(queued_run.is_none());
+
+        app.open_workflow_controls_popup();
+
+        let popup = render_bottom_popup(&app.chat_widget, /*width*/ 100);
+        assert_snapshot!("workflow_controls_popup", popup);
+
+        app.finish_test_background_workflow_run(slow_run).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn workflow_ui_manual_trigger_action_updates_scheduler_status() -> Result<()> {
+        let mut app = make_test_app().await;
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+        write_test_manual_workflow(app.config.cwd.as_path())?;
+
+        let started_app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let cell = app.start_manual_workflow_trigger_from_ui(
+            &started_app_server,
+            "director".to_string(),
+            "review_backlog".to_string(),
+        );
+        let rendered = cell
+            .display_lines(/*width*/ 100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Workflow trigger started"));
+        assert_eq!(
+            app.background_workflow_labels(),
+            vec!["director · review_backlog".to_string()]
+        );
+
+        let stopped = app.workflow_scheduler.stop_active_workflow_runs().await;
+        assert_eq!(stopped, 1);
+        app.sync_background_workflow_status();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn manual_triggers_use_a_global_fifo_queue() {
+        let mut app = make_test_app().await;
+
+        let slow_run =
+            app.start_test_manual_workflow_trigger_run("director".to_string(), "slow".to_string());
+        let fast_run =
+            app.start_test_manual_workflow_trigger_run("director".to_string(), "fast".to_string());
+
+        assert!(slow_run.is_some());
+        assert!(fast_run.is_none());
+        assert_eq!(
+            app.background_workflow_labels(),
+            vec!["director · slow".to_string()]
+        );
+        assert_eq!(
+            app.queued_trigger_labels(),
+            vec!["director · fast".to_string()]
+        );
+
+        app.finish_test_background_workflow_run(slow_run.expect("slow run id"))
+            .await;
+
+        assert_eq!(
+            app.background_workflow_labels(),
+            vec!["director · fast".to_string()]
+        );
+        assert!(app.queued_trigger_labels().is_empty());
+    }
+
+    #[tokio::test]
+    async fn workflow_follow_up_completion_submits_to_primary_thread() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start thread");
+        let thread_id = started.session.thread_id;
+        app.primary_thread_id = Some(thread_id);
+        app.primary_session_configured = Some(started.session);
+        app.active_thread_id = Some(thread_id);
+
+        let run_id = app
+            .workflow_scheduler
+            .next_background_run_id("director", "review_backlog");
+        let target = workflow_runtime::BackgroundWorkflowRunTarget::Job {
+            workflow_name: "director".to_string(),
+            job_name: "review_backlog".to_string(),
+        };
+        app.workflow_scheduler.register_background_workflow_run(
+            run_id.clone(),
+            target.clone(),
+            CancellationToken::new(),
+            tokio::spawn(async {}),
+        );
+
+        let cells = app
+            .finish_background_workflow_run(
+                &app_server,
+                run_id,
+                workflow_runtime::BackgroundWorkflowRunResult {
+                    target,
+                    outcome: workflow_runtime::BackgroundWorkflowRunOutcome::Completed(vec![
+                        workflow_runtime::WorkflowJobRunResult {
+                            delivery: workflow_runtime::WorkflowOutputDelivery::UserFollowup,
+                            workflow_name: "director".to_string(),
+                            trigger_id: "job:review_backlog".to_string(),
+                            job_name: "review_backlog".to_string(),
+                            message: Some("workflow follow-up".to_string()),
+                        },
+                    ]),
+                },
+            )
+            .await;
+
+        let rendered_cells: Vec<String> = cells
+            .iter()
+            .map(|cell| lines_to_single_string(&cell.transcript_lines(/*width*/ 80)))
+            .collect();
+        assert_eq!(rendered_cells.len(), 2);
+        assert!(rendered_cells[0].contains("Workflow job completed"));
+        assert!(rendered_cells[1].contains("Workflow reply"));
+
+        match app_event_rx
+            .try_recv()
+            .expect("expected queued workflow follow-up")
+        {
+            AppEvent::SubmitThreadOp {
+                thread_id: submit_thread_id,
+                op: Op::UserTurn { items, .. },
+            } => {
+                assert_eq!(submit_thread_id, thread_id);
+                assert_eq!(
+                    items,
+                    vec![UserInput::Text {
+                        text: "workflow follow-up".to_string(),
+                        text_elements: Vec::new(),
+                    }]
+                );
+            }
+            other => panic!("expected workflow follow-up submission, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn app_server_notifications_forward_to_workflow_thread_receivers() -> Result<()> {
+        let mut app = make_test_app().await;
+        let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+            .await
+            .expect("embedded app server");
+        let thread_id = ThreadId::new();
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        app.workflow_thread_notification_channels
+            .insert(thread_id, sender);
+
+        let notification = ServerNotification::ItemCompleted(ItemCompletedNotification {
+            item: ThreadItem::AgentMessage {
+                id: "msg-1".to_string(),
+                text: "workflow reply".to_string(),
+                phase: None,
+                memory_citation: None,
+            },
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-1".to_string(),
+        });
+
+        app.handle_app_server_event(
+            &app_server,
+            AppServerEvent::ServerNotification(notification.clone()),
+        )
+        .await;
+
+        match receiver.recv().await {
+            Some(ServerNotification::ItemCompleted(received)) => {
+                assert_eq!(received.thread_id, thread_id.to_string());
+                assert_eq!(received.turn_id, "turn-1");
+                let ThreadItem::AgentMessage { text, .. } = received.item else {
+                    panic!("expected forwarded workflow agent message");
+                };
+                assert_eq!(text, "workflow reply");
+            }
+            other => panic!("expected forwarded workflow notification, got {other:?}"),
+        }
+        Ok(())
     }
 
     #[tokio::test]

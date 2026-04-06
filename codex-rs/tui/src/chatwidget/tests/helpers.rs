@@ -219,6 +219,8 @@ pub(super) async fn make_chatwidget_manual(
         turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
         task_complete_pending: false,
         unified_exec_processes: Vec::new(),
+        background_workflow_labels: Vec::new(),
+        queued_workflow_labels: Vec::new(),
         agent_turn_running: false,
         mcp_startup_status: None,
         mcp_startup_expected_servers: None,
@@ -671,7 +673,7 @@ pub(super) fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {
     String::new()
 }
 
-pub(super) fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
+pub(crate) fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     let height = chat.desired_height(width);
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
