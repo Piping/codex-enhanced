@@ -4833,19 +4833,6 @@ impl App {
             AppEvent::ShowWorkflowBackgroundTasks => {
                 self.chat_widget.add_ps_output();
             }
-            AppEvent::RetryLastUserTurnWithProfileFallback {
-                action,
-                error_message,
-            } => {
-                self.retry_last_user_turn_with_profile_fallback(
-                    tui,
-                    app_server,
-                    action,
-                    error_message,
-                )
-                .await;
-            }
-            }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
                     tui.frame_requester().schedule_frame();
