@@ -1568,7 +1568,7 @@ jobs:
             &app_server,
             crate::app_event_sender::AppEventSender::new(app_event_tx),
             config,
-            None,
+            /*primary_thread_id*/ None,
         );
         let (sender, receiver) = mpsc::unbounded_channel();
         let thread = WorkflowThreadSession {
