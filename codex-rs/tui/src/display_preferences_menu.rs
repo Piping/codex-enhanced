@@ -134,7 +134,10 @@ mod tests {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let view = ListSelectionView::new(
-            display_preferences_panel_params(&DisplayPreferences::default(), None),
+            display_preferences_panel_params(
+                &DisplayPreferences::default(),
+                /*initial_selected_idx*/ None,
+            ),
             tx,
         );
 

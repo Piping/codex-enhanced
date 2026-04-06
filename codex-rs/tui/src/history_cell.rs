@@ -3883,7 +3883,7 @@ mod tests {
         let display_preferences = DisplayPreferences::default();
         display_preferences.set_enabled(
             crate::display_preferences::DisplayPreferenceKey::ToolResults,
-            false,
+            /*enabled*/ false,
         );
         let mut cell = new_active_mcp_tool_call(
             "call-image-hidden".into(),
@@ -3977,7 +3977,7 @@ mod tests {
         let display_preferences = DisplayPreferences::default();
         display_preferences.set_enabled(
             crate::display_preferences::DisplayPreferenceKey::ToolResults,
-            false,
+            /*enabled*/ false,
         );
         let mut cell = new_active_mcp_tool_call(
             "call-hidden-text".into(),
@@ -4053,7 +4053,7 @@ mod tests {
         let display_preferences = DisplayPreferences::default();
         display_preferences.set_enabled(
             crate::display_preferences::DisplayPreferenceKey::PatchDiffs,
-            false,
+            /*enabled*/ false,
         );
 
         let cell = new_patch_event(changes, Path::new("/tmp/project"), display_preferences);
@@ -4066,7 +4066,7 @@ mod tests {
         let display_preferences = DisplayPreferences::default();
         display_preferences.set_enabled(
             crate::display_preferences::DisplayPreferenceKey::PatchDiffs,
-            false,
+            /*enabled*/ false,
         );
 
         let cell =
@@ -4979,7 +4979,7 @@ mod tests {
         let display_preferences = DisplayPreferences::default();
         display_preferences.set_enabled(
             crate::display_preferences::DisplayPreferenceKey::RawThinking,
-            true,
+            /*enabled*/ true,
         );
         let cell = new_reasoning_raw_block(
             "secret chain of thought".to_string(),
