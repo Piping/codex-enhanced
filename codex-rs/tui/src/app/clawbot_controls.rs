@@ -10,12 +10,15 @@ use codex_clawbot::ProviderKind;
 use codex_clawbot::ProviderRuntimeState;
 use codex_clawbot::ProviderSession;
 use codex_clawbot::ProviderSessionRef;
+use codex_protocol::ThreadId;
 
 use super::App;
 use crate::app_event::AppEvent;
 use crate::app_event::ClawbotFeishuConfigField;
 use crate::app_event::ClawbotForwardingChannel;
+use crate::app_event_sender::AppEventSender;
 use crate::app_server_session::AppServerSession;
+use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
@@ -700,41 +703,64 @@ fn clawbot_session_item(
     } else {
         format!("unbound · {} unread", session.unread_count)
     };
-    let selected_description = match active_thread_id {
-        Some(thread_id) if is_current => {
+    let jump_target = session
+        .bound_thread_id
+        .as_deref()
+        .and_then(|thread_id| ThreadId::from_string(thread_id).ok());
+    let selected_description = match (active_thread_id, session.bound_thread_id.as_deref()) {
+        (Some(thread_id), Some(bound_thread_id)) if thread_id == bound_thread_id => {
+            format!(
+                "Current thread {thread_id} is already bound to Feishu session {}.",
+                session.session_id
+            )
+        }
+        (_, Some(bound_thread_id)) if jump_target.is_some() => {
+            format!(
+                "Jump to bound thread {bound_thread_id} to continue or manage Feishu session {}.",
+                session.session_id
+            )
+        }
+        (_, Some(bound_thread_id)) => format!(
+            "Feishu session {} is bound to invalid thread id {bound_thread_id}.",
+            session.session_id
+        ),
+        (Some(thread_id), None) if is_current => {
             format!(
                 "Thread {thread_id} is already bound to Feishu session {}.",
                 session.session_id
             )
         }
-        Some(thread_id) => match session.bound_thread_id.as_deref() {
-            Some(bound_thread_id) if bound_thread_id != thread_id => {
-                format!(
-                    "Bind current thread {thread_id} to Feishu session {} and move it from thread {bound_thread_id}.",
-                    session.session_id
-                )
-            }
-            _ => format!(
-                "Bind current thread {thread_id} directly to Feishu session {}.",
-                session.session_id
-            ),
-        },
-        None => format!(
+        (Some(thread_id), None) => format!(
+            "Bind current thread {thread_id} directly to Feishu session {}.",
+            session.session_id
+        ),
+        (None, None) => format!(
             "Open a Codex thread before binding Feishu session {}.",
             session.session_id
         ),
     };
     let session_id = session.session_id.clone();
+    let actions: Vec<SelectionAction> = if let Some(thread_id) = jump_target {
+        vec![Box::new(move |tx: &AppEventSender| {
+            tx.send(AppEvent::SelectAgentThread(thread_id));
+        })]
+    } else {
+        vec![Box::new(move |tx: &AppEventSender| {
+            tx.send(AppEvent::SaveClawbotManualBindSessionId {
+                session_id: session_id.clone(),
+            });
+        })]
+    };
+    let is_disabled = match session.bound_thread_id.as_deref() {
+        Some(bound_thread_id) => active_thread_id == Some(bound_thread_id) || jump_target.is_none(),
+        None => active_thread_id.is_none() || is_current,
+    };
     SelectionItem {
         name: session_title(session),
         description: Some(description),
         selected_description: Some(selected_description),
-        is_disabled: active_thread_id.is_none() || is_current,
-        actions: vec![Box::new(move |tx| {
-            tx.send(AppEvent::SaveClawbotManualBindSessionId {
-                session_id: session_id.clone(),
-            });
-        })],
+        is_disabled,
+        actions,
         dismiss_on_select: false,
         ..Default::default()
     }
@@ -793,4 +819,101 @@ fn truncate_value(value: &str, max_chars: usize) -> String {
         .take(max_chars.saturating_sub(1))
         .collect::<String>();
     format!("{prefix}…")
+}
+
+#[cfg(test)]
+mod tests {
+    use codex_clawbot::ProviderKind;
+    use codex_clawbot::ProviderSession;
+    use codex_protocol::ThreadId;
+    use insta::assert_snapshot;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::layout::Rect;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    use super::clawbot_session_item;
+    use crate::app_event::AppEvent;
+    use crate::app_event_sender::AppEventSender;
+    use crate::bottom_pane::ListSelectionView;
+    use crate::bottom_pane::SelectionViewParams;
+    use crate::render::renderable::Renderable;
+
+    fn render_selection_popup(view: &ListSelectionView, width: u16, height: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                let area = Rect::new(0, 0, width, height);
+                view.render(area, frame.buffer_mut());
+            })
+            .expect("draw popup");
+        format!("{:?}", terminal.backend())
+    }
+
+    #[test]
+    fn bound_session_item_jumps_to_bound_thread() {
+        let item = clawbot_session_item(
+            &ProviderSession {
+                provider: ProviderKind::Feishu,
+                session_id: "chat_bound".to_string(),
+                display_name: Some("tracker".to_string()),
+                unread_count: 2,
+                last_message_at: None,
+                status: codex_clawbot::SessionStatus::Bound,
+                bound_thread_id: Some("019d607a-cf72-72e1-a5b7-0dc17ad019ad".to_string()),
+            },
+            Some("019d607a-cf72-72e1-a5b7-0dc17ad019ae"),
+            None,
+        );
+
+        assert!(!item.is_disabled);
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        (item.actions[0])(&tx);
+
+        assert!(
+            matches!(
+                rx.try_recv().expect("event"),
+                AppEvent::SelectAgentThread(thread_id)
+                    if thread_id
+                        == ThreadId::from_string("019d607a-cf72-72e1-a5b7-0dc17ad019ad")
+                            .expect("thread id")
+            ),
+            "expected bound session item to jump to the bound thread"
+        );
+    }
+
+    #[test]
+    fn bound_session_jump_item_snapshot() {
+        let item = clawbot_session_item(
+            &ProviderSession {
+                provider: ProviderKind::Feishu,
+                session_id: "chat_bound".to_string(),
+                display_name: Some("tracker".to_string()),
+                unread_count: 2,
+                last_message_at: None,
+                status: codex_clawbot::SessionStatus::Bound,
+                bound_thread_id: Some("019d607a-cf72-72e1-a5b7-0dc17ad019ad".to_string()),
+            },
+            Some("019d607a-cf72-72e1-a5b7-0dc17ad019ae"),
+            None,
+        );
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Clawbot".to_string()),
+                subtitle: Some("Session Jump".to_string()),
+                items: vec![item],
+                initial_selected_idx: Some(0),
+                ..Default::default()
+            },
+            tx,
+        );
+
+        assert_snapshot!(
+            "bound_session_jump_item",
+            render_selection_popup(&view, 92, 14)
+        );
+    }
 }
