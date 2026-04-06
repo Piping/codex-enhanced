@@ -426,7 +426,7 @@ mod indentation {
         let section_end = lines.len() - 1;
         let mut selection = block_range(&lines, actual_start, section_end, options.include_header);
         if options.include_siblings
-            && let Some(parent_start) = find_ancestor_start(&lines, actual_start, 1)
+            && let Some(parent_start) = find_ancestor_start(&lines, actual_start, /*levels*/ 1)
         {
             let parent_scope = block_range(
                 &lines,

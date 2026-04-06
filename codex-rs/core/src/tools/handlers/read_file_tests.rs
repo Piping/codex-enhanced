@@ -16,7 +16,7 @@ gamma
 "
     )?;
 
-    let lines = read(temp.path(), 2, 2).await?;
+    let lines = read(temp.path(), /*offset*/ 2, /*limit*/ 2).await?;
     assert_eq!(lines, vec!["L2: beta".to_string(), "L3: gamma".to_string()]);
     Ok(())
 }
@@ -27,7 +27,7 @@ async fn errors_when_offset_exceeds_length() -> anyhow::Result<()> {
     use std::io::Write as _;
     writeln!(temp, "only")?;
 
-    let err = read(temp.path(), 3, 1)
+    let err = read(temp.path(), /*offset*/ 3, /*limit*/ 1)
         .await
         .expect_err("offset exceeds length");
     assert_eq!(
@@ -43,7 +43,7 @@ async fn reads_non_utf8_lines() -> anyhow::Result<()> {
     use std::io::Write as _;
     temp.as_file_mut().write_all(b"\xff\xfe\nplain\n")?;
 
-    let lines = read(temp.path(), 1, 2).await?;
+    let lines = read(temp.path(), /*offset*/ 1, /*limit*/ 2).await?;
     let expected_first = format!("L1: {}{}", '\u{FFFD}', '\u{FFFD}');
     assert_eq!(lines, vec![expected_first, "L2: plain".to_string()]);
     Ok(())
@@ -55,7 +55,7 @@ async fn trims_crlf_endings() -> anyhow::Result<()> {
     use std::io::Write as _;
     write!(temp, "one\r\ntwo\r\n")?;
 
-    let lines = read(temp.path(), 1, 2).await?;
+    let lines = read(temp.path(), /*offset*/ 1, /*limit*/ 2).await?;
     assert_eq!(lines, vec!["L1: one".to_string(), "L2: two".to_string()]);
     Ok(())
 }
@@ -72,7 +72,7 @@ third
 "
     )?;
 
-    let lines = read(temp.path(), 1, 2).await?;
+    let lines = read(temp.path(), /*offset*/ 1, /*limit*/ 2).await?;
     assert_eq!(
         lines,
         vec!["L1: first".to_string(), "L2: second".to_string()]
@@ -87,7 +87,7 @@ async fn truncates_lines_longer_than_max_length() -> anyhow::Result<()> {
     let long_line = "x".repeat(MAX_LINE_LENGTH + 50);
     writeln!(temp, "{long_line}")?;
 
-    let lines = read(temp.path(), 1, 1).await?;
+    let lines = read(temp.path(), /*offset*/ 1, /*limit*/ 1).await?;
     let expected = "x".repeat(MAX_LINE_LENGTH);
     assert_eq!(lines, vec![format!("L1: {expected}")]);
     Ok(())
@@ -115,7 +115,7 @@ async fn indentation_mode_captures_block() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let lines = read_block(temp.path(), 3, 10, options).await?;
+    let lines = read_block(temp.path(), /*offset*/ 3, /*limit*/ 10, options).await?;
 
     assert_eq!(
         lines,
@@ -150,7 +150,13 @@ async fn indentation_mode_expands_parents() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let lines = read_block(temp.path(), 4, 50, options.clone()).await?;
+    let lines = read_block(
+        temp.path(),
+        /*offset*/ 4,
+        /*limit*/ 50,
+        options.clone(),
+    )
+    .await?;
     assert_eq!(
         lines,
         vec![
@@ -163,7 +169,7 @@ async fn indentation_mode_expands_parents() -> anyhow::Result<()> {
     );
 
     options.max_levels = 3;
-    let expanded = read_block(temp.path(), 4, 50, options).await?;
+    let expanded = read_block(temp.path(), /*offset*/ 4, /*limit*/ 50, options).await?;
     assert_eq!(
         expanded,
         vec![
@@ -203,7 +209,13 @@ async fn indentation_mode_respects_sibling_flag() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let lines = read_block(temp.path(), 3, 50, options.clone()).await?;
+    let lines = read_block(
+        temp.path(),
+        /*offset*/ 3,
+        /*limit*/ 50,
+        options.clone(),
+    )
+    .await?;
     assert_eq!(
         lines,
         vec![
@@ -214,7 +226,7 @@ async fn indentation_mode_respects_sibling_flag() -> anyhow::Result<()> {
     );
 
     options.include_siblings = true;
-    let with_siblings = read_block(temp.path(), 3, 50, options).await?;
+    let with_siblings = read_block(temp.path(), /*offset*/ 3, /*limit*/ 50, options).await?;
     assert_eq!(
         with_siblings,
         vec![
@@ -257,7 +269,7 @@ class Bar:
         ..Default::default()
     };
 
-    let lines = read_block(temp.path(), 1, 200, options).await?;
+    let lines = read_block(temp.path(), /*offset*/ 1, /*limit*/ 200, options).await?;
     assert_eq!(
         lines,
         vec![
@@ -313,7 +325,7 @@ export function other() {{
         ..Default::default()
     };
 
-    let lines = read_block(temp.path(), 15, 200, options).await?;
+    let lines = read_block(temp.path(), /*offset*/ 15, /*limit*/ 200, options).await?;
     assert_eq!(
         lines,
         vec![
@@ -385,7 +397,7 @@ async fn indentation_mode_handles_cpp_sample_shallow() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let lines = read_block(temp.path(), 18, 200, options).await?;
+    let lines = read_block(temp.path(), /*offset*/ 18, /*limit*/ 200, options).await?;
     assert_eq!(
         lines,
         vec![
@@ -413,7 +425,7 @@ async fn indentation_mode_handles_cpp_sample() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let lines = read_block(temp.path(), 18, 200, options).await?;
+    let lines = read_block(temp.path(), /*offset*/ 18, /*limit*/ 200, options).await?;
     assert_eq!(
         lines,
         vec![
@@ -445,7 +457,7 @@ async fn indentation_mode_handles_cpp_sample_no_headers() -> anyhow::Result<()> 
         ..Default::default()
     };
 
-    let lines = read_block(temp.path(), 18, 200, options).await?;
+    let lines = read_block(temp.path(), /*offset*/ 18, /*limit*/ 200, options).await?;
     assert_eq!(
         lines,
         vec![
@@ -476,7 +488,7 @@ async fn indentation_mode_handles_cpp_sample_siblings() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let lines = read_block(temp.path(), 18, 200, options).await?;
+    let lines = read_block(temp.path(), /*offset*/ 18, /*limit*/ 200, options).await?;
     assert_eq!(
         lines,
         vec![
