@@ -64,10 +64,7 @@ use crate::multi_agents::format_agent_picker_item_name;
 use crate::multi_agents::next_agent_shortcut_matches;
 use crate::multi_agents::previous_agent_shortcut_matches;
 use crate::pager_overlay::Overlay;
-use crate::profile_router::DefaultProfileRouter;
 use crate::profile_router::PROFILE_ROUTER_STATE_RELATIVE_PATH;
-use crate::profile_router::ProfileFallbackAction;
-use crate::profile_router::ProfileRouterStore;
 use crate::read_session_model;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
@@ -1201,17 +1198,6 @@ impl App {
         }
     }
 
-    fn profile_router_store(&self) -> ProfileRouterStore {
-        ProfileRouterStore::new(self.config.codex_home.clone())
-    }
-
-    fn routed_profile_runtime_changed(current_config: &Config, next_config: &Config) -> bool {
-        current_config.active_profile != next_config.active_profile
-            || current_config.model_provider_id != next_config.model_provider_id
-            || current_config.model_provider != next_config.model_provider
-            || current_config.chatgpt_base_url != next_config.chatgpt_base_url
-    }
-
     async fn apply_runtime_config_change(
         &mut self,
         tui: &mut tui::Tui,
@@ -1272,61 +1258,6 @@ impl App {
         Ok(())
     }
 
-    async fn close_active_thread_for_profile_reload(
-        &mut self,
-        app_server: &mut AppServerSession,
-        thread_id: ThreadId,
-    ) -> std::result::Result<(), String> {
-        self.backtrack.pending_rollback = None;
-        app_server
-            .thread_unsubscribe(thread_id)
-            .await
-            .map_err(|err| {
-                format!("Failed to unload current session before switching profiles: {err}")
-            })?;
-
-        let close_wait = async {
-            loop {
-                match app_server.next_event().await {
-                    Some(codex_app_server_client::AppServerEvent::ServerNotification(
-                        ServerNotification::ThreadClosed(notification),
-                    )) if notification.thread_id == thread_id.to_string() => {
-                        break Ok(());
-                    }
-                    Some(codex_app_server_client::AppServerEvent::Disconnected { message }) => {
-                        self.chat_widget.add_error_message(message.clone());
-                        self.app_event_tx
-                            .send(AppEvent::FatalExitRequest(message.clone()));
-                        break Err(format!(
-                            "App-server disconnected while closing current session: {message}"
-                        ));
-                    }
-                    Some(event) => {
-                        self.handle_app_server_event(app_server, event).await;
-                    }
-                    None => {
-                        break Err(
-                            "App-server event stream closed while closing current session."
-                                .to_string(),
-                        );
-                    }
-                }
-            }
-        };
-
-        tokio::time::timeout(PROFILE_SWITCH_THREAD_CLOSE_TIMEOUT, close_wait)
-            .await
-            .map_err(|_| {
-                format!(
-                    "Timed out waiting for current session `{thread_id}` to close before switching profiles."
-                )
-            })??;
-
-        self.clear_active_thread().await;
-        self.abort_thread_event_listener(thread_id);
-        Ok(())
-    }
-
     async fn reload_user_config_for_app_server_runtime(
         &mut self,
         tui: &mut tui::Tui,
@@ -1359,145 +1290,6 @@ impl App {
             .map_err(|err| color_eyre::eyre::eyre!(err))?;
         }
         Ok(())
-    }
-    async fn switch_runtime_profile(
-        &mut self,
-        tui: &mut tui::Tui,
-        app_server: &mut AppServerSession,
-        profile_id: Option<&str>,
-    ) -> std::result::Result<(), String> {
-        if self.active_profile.as_deref() == profile_id {
-            return Ok(());
-        }
-
-        let previous_override = self.harness_overrides.config_profile.clone();
-        let previous_active_profile = self.active_profile.clone();
-        self.harness_overrides.config_profile = profile_id.map(ToOwned::to_owned);
-
-        let current_cwd = self.chat_widget.config_ref().cwd.to_path_buf();
-        let mut next_config = match self.rebuild_config_for_cwd(current_cwd).await {
-            Ok(config) => config,
-            Err(err) => {
-                self.harness_overrides.config_profile = previous_override;
-                self.active_profile = previous_active_profile;
-                return Err(err.to_string());
-            }
-        };
-        self.apply_runtime_policy_overrides(&mut next_config);
-
-        if let Err(err) = self
-            .apply_runtime_config_change(
-                tui,
-                app_server,
-                next_config,
-                /*reload_live_thread*/ true,
-            )
-            .await
-        {
-            self.harness_overrides.config_profile = previous_override;
-            self.active_profile = previous_active_profile;
-            return Err(err);
-        }
-        Ok(())
-    }
-
-    async fn retry_last_user_turn_with_profile_fallback(
-        &mut self,
-        tui: &mut tui::Tui,
-        app_server: &mut AppServerSession,
-        action: ProfileFallbackAction,
-        error_message: String,
-    ) {
-        if !self.chat_widget.has_retryable_user_turn() {
-            self.chat_widget.add_error_message(error_message);
-            return;
-        }
-        let retry_user_message = self.chat_widget.last_submitted_user_turn();
-
-        match action {
-            ProfileFallbackAction::RetrySameProfileFirst => {
-                let profile_label = self
-                    .chat_widget
-                    .active_profile_label()
-                    .unwrap_or_else(|| "current".to_string());
-                if self.chat_widget.profile_retry_attempted()
-                    || !self
-                        .chat_widget
-                        .retry_last_user_turn_for_profile_fallback(format!(
-                            "Retrying the last turn on profile `{profile_label}`."
-                        ))
-                {
-                    let router_state = self.profile_router_store().load().unwrap_or_default();
-                    let Some(next_profile_id) = DefaultProfileRouter
-                        .fallback_profile(&router_state, self.active_profile.as_deref())
-                    else {
-                        self.chat_widget.add_error_message(error_message);
-                        return;
-                    };
-                    self.chat_widget.finish_failed_turn_for_profile_fallback();
-                    if let Err(err) = self
-                        .switch_runtime_profile(tui, app_server, &next_profile_id)
-                        .await
-                    {
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to switch to fallback profile `{next_profile_id}`: {err}"
-                        ));
-                        return;
-                    }
-                    if let Err(err) = self.profile_router_store().update(|state| {
-                        state.set_active_profile(&next_profile_id);
-                    }) {
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to persist fallback profile `{next_profile_id}` in {PROFILE_ROUTER_STATE_RELATIVE_PATH}: {err}"
-                        ));
-                        return;
-                    }
-                    if let Some(user_message) = retry_user_message.clone() {
-                        self.chat_widget.submit_profile_fallback_retry(
-                            user_message,
-                            format!("Retrying the last turn with profile `{next_profile_id}`."),
-                        );
-                    } else {
-                        self.chat_widget.add_error_message(error_message);
-                    }
-                }
-            }
-            ProfileFallbackAction::SwitchProfileImmediately => {
-                let router_state = self.profile_router_store().load().unwrap_or_default();
-                let Some(next_profile_id) = DefaultProfileRouter
-                    .fallback_profile(&router_state, self.active_profile.as_deref())
-                else {
-                    self.chat_widget.add_error_message(error_message);
-                    return;
-                };
-                self.chat_widget.finish_failed_turn_for_profile_fallback();
-                if let Err(err) = self
-                    .switch_runtime_profile(tui, app_server, &next_profile_id)
-                    .await
-                {
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to switch to fallback profile `{next_profile_id}`: {err}"
-                    ));
-                    return;
-                }
-                if let Err(err) = self.profile_router_store().update(|state| {
-                    state.set_active_profile(&next_profile_id);
-                }) {
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to persist fallback profile `{next_profile_id}` in {PROFILE_ROUTER_STATE_RELATIVE_PATH}: {err}"
-                    ));
-                    return;
-                }
-                if let Some(user_message) = retry_user_message {
-                    self.chat_widget.submit_profile_fallback_retry(
-                        user_message,
-                        format!("Retrying the last turn with profile `{next_profile_id}`."),
-                    );
-                } else {
-                    self.chat_widget.add_error_message(error_message);
-                }
-            }
-        }
     }
     async fn rebuild_config_for_resume_or_fallback(
         &mut self,
@@ -7436,6 +7228,7 @@ mod tests {
     use codex_app_server_protocol::ThreadTokenUsage;
     use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
     use codex_app_server_protocol::TokenUsageBreakdown;
+    use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnCompletedNotification;
     use codex_app_server_protocol::TurnError as AppServerTurnError;
@@ -12825,7 +12618,6 @@ model = "gpt-5.2"
         assert!(rendered_cells[0].contains("Workflow job completed"));
         Ok(())
     }
-
     #[tokio::test]
     async fn active_primary_turn_complete_waits_for_consumption_before_after_turn() -> Result<()> {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
