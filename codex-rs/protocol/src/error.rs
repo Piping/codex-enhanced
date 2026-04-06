@@ -220,6 +220,16 @@ impl CodexErr {
             CodexErr::RetryLimit(_) => CodexErrorInfo::ResponseTooManyFailedAttempts {
                 http_status_code: self.http_status_code_value(),
             },
+            CodexErr::UnexpectedStatus(err) => match err.status.as_u16() {
+                401 | 403 => CodexErrorInfo::Unauthorized,
+                429 => CodexErrorInfo::ResponseTooManyFailedAttempts {
+                    http_status_code: Some(429),
+                },
+                500..=599 => CodexErrorInfo::ResponseTooManyFailedAttempts {
+                    http_status_code: Some(err.status.as_u16()),
+                },
+                _ => CodexErrorInfo::Other,
+            },
             CodexErr::ConnectionFailed(_) => CodexErrorInfo::HttpConnectionFailed {
                 http_status_code: self.http_status_code_value(),
             },
