@@ -324,7 +324,7 @@ impl App {
             serde_json::json!({
                 "session_id": session.session_id,
                 "thread_id": thread_id,
-                "turn_id": turn_id.clone(),
+                "turn_id": turn_id,
                 "message_id": message.message_id.clone(),
                 "text": message.text.clone(),
             }),
@@ -425,11 +425,11 @@ impl App {
                 session.sandbox_policy,
                 session.model,
                 session.reasoning_effort,
-                None,
+                /*summary*/ None,
                 Some(session.service_tier),
-                None,
+                /*collaboration_mode*/ None,
                 self.config.personality,
-                None,
+                /*output_schema*/ None,
             )
             .await
             .map_err(|err| {
@@ -468,7 +468,7 @@ impl App {
                 serde_json::json!({
                     "reason": "missing_binding",
                     "session_id": session.session_id,
-                    "text": text.clone(),
+                    "text": text,
                 }),
             );
             return Ok(());
@@ -481,7 +481,7 @@ impl App {
                     "reason": "outbound_forwarding_disabled",
                     "session_id": session.session_id,
                     "thread_id": binding.thread_id,
-                    "text": text.clone(),
+                    "text": text,
                 }),
             );
             return Ok(());
@@ -704,11 +704,20 @@ fn clawbot_outbound_text_for_turn(turn: &codex_app_server_protocol::Turn) -> Opt
             .as_ref()
             .map(|error| feishu_failure_reply_text(&error.message)),
         codex_app_server_protocol::TurnStatus::Interrupted => {
-            super::last_agent_message_for_turn(turn)
-                .or_else(|| Some("Request interrupted.".to_string()))
+            last_agent_message_for_turn(turn).or_else(|| Some("Request interrupted.".to_string()))
         }
         codex_app_server_protocol::TurnStatus::InProgress => None,
     }
+}
+
+fn last_agent_message_for_turn(turn: &codex_app_server_protocol::Turn) -> Option<String> {
+    turn.items.iter().rev().find_map(|item| {
+        let codex_app_server_protocol::ThreadItem::AgentMessage { text, .. } = item else {
+            return None;
+        };
+        let trimmed = text.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
 }
 
 fn next_unread_message_for_session(
@@ -726,4 +735,48 @@ fn next_unread_message_for_session(
                 .cmp(&right.received_at)
                 .then(left.message_id.cmp(&right.message_id))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use codex_app_server_protocol::ThreadItem;
+    use codex_app_server_protocol::Turn;
+    use codex_app_server_protocol::TurnStatus;
+    use pretty_assertions::assert_eq;
+
+    use super::clawbot_outbound_text_for_turn;
+
+    #[test]
+    fn interrupted_turn_uses_last_agent_message_for_reply() {
+        let turn = Turn {
+            id: "turn-1".to_string(),
+            status: TurnStatus::Interrupted,
+            items: vec![
+                ThreadItem::AgentMessage {
+                    id: "agent-1".to_string(),
+                    text: "first reply".to_string(),
+                    phase: None,
+                    memory_citation: None,
+                },
+                ThreadItem::AgentMessage {
+                    id: "agent-2".to_string(),
+                    text: "  ".to_string(),
+                    phase: None,
+                    memory_citation: None,
+                },
+                ThreadItem::AgentMessage {
+                    id: "agent-3".to_string(),
+                    text: "last reply".to_string(),
+                    phase: None,
+                    memory_citation: None,
+                },
+            ],
+            error: None,
+        };
+
+        assert_eq!(
+            clawbot_outbound_text_for_turn(&turn),
+            Some("last reply".to_string())
+        );
+    }
 }

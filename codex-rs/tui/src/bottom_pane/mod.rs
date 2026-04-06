@@ -80,7 +80,7 @@ pub mod custom_prompt_view;
 mod experimental_features_view;
 mod file_search_popup;
 mod footer;
-mod list_selection_view;
+pub(crate) mod list_selection_view;
 mod prompt_args;
 mod skill_popup;
 mod skills_toggle_view;
