@@ -14,6 +14,7 @@ use codex_clawbot::ProviderMessageRef;
 use codex_clawbot::ProviderOutboundReaction;
 use codex_clawbot::ProviderOutboundTextMessage;
 use codex_clawbot::ProviderSessionRef;
+use codex_clawbot::append_diagnostic_event;
 use codex_clawbot::feishu_failure_reply_text;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::AskForApproval;
@@ -88,6 +89,7 @@ impl App {
         self.abort_clawbot_provider_runtime();
         let app_event_tx = self.app_event_tx.clone();
         let workspace = workspace_root.display().to_string();
+        let workspace_root = workspace_root.to_path_buf();
         self.clawbot_provider_task = Some(tokio::spawn(async move {
             let (provider_event_tx, mut provider_event_rx) = mpsc::unbounded_channel();
             let forward_task = tokio::spawn(async move {
@@ -95,7 +97,7 @@ impl App {
                     app_event_tx.send(AppEvent::ClawbotProviderEvent { event });
                 }
             });
-            if let Err(err) = FeishuProviderRuntime::new(config)
+            if let Err(err) = FeishuProviderRuntime::new(workspace_root.to_path_buf(), config)
                 .run(provider_event_tx)
                 .await
             {
@@ -135,7 +137,18 @@ impl App {
             return Ok(());
         };
         let session_to_drain = match &event {
-            ProviderEvent::InboundMessage(message) => Some(message.session.clone()),
+            ProviderEvent::InboundMessage(message) => {
+                let _ = append_diagnostic_event(
+                    workspace_root.as_path(),
+                    "bridge.inbound_message_received",
+                    serde_json::json!({
+                        "session_id": message.session.session_id,
+                        "message_id": message.message_id,
+                        "text": message.text,
+                    }),
+                );
+                Some(message.session.clone())
+            }
             _ => None,
         };
         let mut runtime = ClawbotRuntime::load(workspace_root)?;
@@ -159,7 +172,48 @@ impl App {
         let next_session = if let Some(pending) =
             self.take_pending_clawbot_turn(thread_id, &turn.id)
         {
-            if let Some(text) = clawbot_outbound_text_for_turn(&turn) {
+            let reply_text = if let Some(text) = clawbot_outbound_text_for_turn(&turn) {
+                Some(text)
+            } else if matches!(
+                turn.status,
+                codex_app_server_protocol::TurnStatus::Completed
+                    | codex_app_server_protocol::TurnStatus::Failed
+                    | codex_app_server_protocol::TurnStatus::Interrupted
+            ) {
+                match app_server
+                    .thread_read(thread_id, /*include_turns*/ true)
+                    .await
+                {
+                    Ok(thread) => thread
+                        .turns
+                        .iter()
+                        .find(|thread_turn| thread_turn.id == turn.id)
+                        .and_then(clawbot_outbound_text_for_turn),
+                    Err(err) => {
+                        tracing::warn!(
+                            thread_id = %thread_id,
+                            turn_id = turn.id,
+                            error = %err,
+                            "failed to load full turn for clawbot outbound reply"
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let _ = append_diagnostic_event(
+                workspace_root.as_path(),
+                "bridge.turn_completed",
+                serde_json::json!({
+                    "session_id": pending.session.session_id.clone(),
+                    "thread_id": thread_id,
+                    "turn_id": turn.id,
+                    "status": format!("{:?}", turn.status),
+                    "reply_text": reply_text.clone(),
+                }),
+            );
+            if let Some(text) = reply_text {
                 self.send_clawbot_thread_reply(workspace_root.as_path(), &pending.session, text)
                     .await?;
             }
@@ -184,20 +238,55 @@ impl App {
         let Some(workspace_root) = self.clawbot_workspace_root.clone() else {
             return Ok(());
         };
-        let mut runtime = ClawbotRuntime::load(workspace_root)?;
+        let mut runtime = ClawbotRuntime::load(workspace_root.clone())?;
         let Some(binding) = runtime.load_binding_for_session(session)? else {
+            let _ = append_diagnostic_event(
+                workspace_root.as_path(),
+                "bridge.dispatch_skipped",
+                serde_json::json!({
+                    "reason": "missing_binding",
+                    "session_id": session.session_id,
+                }),
+            );
             return Ok(());
         };
         if !binding.inbound_forwarding_enabled {
+            let _ = append_diagnostic_event(
+                workspace_root.as_path(),
+                "bridge.dispatch_skipped",
+                serde_json::json!({
+                    "reason": "inbound_forwarding_disabled",
+                    "session_id": session.session_id,
+                    "thread_id": binding.thread_id,
+                }),
+            );
             return Ok(());
         }
         let thread_id = ThreadId::from_string(&binding.thread_id)
             .with_context(|| format!("invalid clawbot thread id `{}`", binding.thread_id))?;
         if self.active_turn_id_for_thread(thread_id).await.is_some() {
+            let _ = append_diagnostic_event(
+                workspace_root.as_path(),
+                "bridge.dispatch_skipped",
+                serde_json::json!({
+                    "reason": "thread_busy",
+                    "session_id": session.session_id,
+                    "thread_id": thread_id,
+                }),
+            );
             return Ok(());
         }
 
         let Some(message) = next_unread_message_for_session(&runtime, session) else {
+            let _ = append_diagnostic_event(
+                workspace_root.as_path(),
+                "bridge.dispatch_skipped",
+                serde_json::json!({
+                    "reason": "no_unread_message",
+                    "session_id": session.session_id,
+                    "thread_id": thread_id,
+                }),
+            );
             return Ok(());
         };
         let turn_mode = runtime.snapshot().config.turn_mode;
@@ -229,6 +318,17 @@ impl App {
                 turn_mode,
             )
             .await?;
+        let _ = append_diagnostic_event(
+            workspace_root.as_path(),
+            "bridge.thread_turn_started",
+            serde_json::json!({
+                "session_id": session.session_id,
+                "thread_id": thread_id,
+                "turn_id": turn_id.clone(),
+                "message_id": message.message_id.clone(),
+                "text": message.text.clone(),
+            }),
+        );
         self.register_pending_clawbot_turn(thread_id, session.clone(), turn_id, turn_mode);
         let removed = runtime.take_next_unread_message(session)?;
         if removed.as_ref().map(|entry| entry.message_id.as_str())
@@ -362,9 +462,28 @@ impl App {
     ) -> Result<()> {
         let runtime = ClawbotRuntime::load(workspace_root.to_path_buf())?;
         let Some(binding) = runtime.load_binding_for_session(session)? else {
+            let _ = append_diagnostic_event(
+                workspace_root,
+                "bridge.reply_skipped",
+                serde_json::json!({
+                    "reason": "missing_binding",
+                    "session_id": session.session_id,
+                    "text": text.clone(),
+                }),
+            );
             return Ok(());
         };
         if !binding.outbound_forwarding_enabled {
+            let _ = append_diagnostic_event(
+                workspace_root,
+                "bridge.reply_skipped",
+                serde_json::json!({
+                    "reason": "outbound_forwarding_disabled",
+                    "session_id": session.session_id,
+                    "thread_id": binding.thread_id,
+                    "text": text.clone(),
+                }),
+            );
             return Ok(());
         }
         self.send_clawbot_outbound_text(
@@ -395,7 +514,24 @@ impl App {
             let provider = runtime
                 .feishu_provider()
                 .context("missing Feishu config for clawbot outbound bridge")?;
-            provider.send_text(message).await
+            let session_id = message.session.session_id.clone();
+            let text = message.text.clone();
+            let send_result = provider.send_text(message).await;
+            let kind = if send_result.is_ok() {
+                "bridge.reply_forwarded"
+            } else {
+                "bridge.reply_forward_failed"
+            };
+            let _ = append_diagnostic_event(
+                workspace_root,
+                kind,
+                serde_json::json!({
+                    "session_id": session_id,
+                    "text": text,
+                    "error": send_result.as_ref().err().map(ToString::to_string),
+                }),
+            );
+            send_result
         }
     }
 
@@ -567,7 +703,10 @@ fn clawbot_outbound_text_for_turn(turn: &codex_app_server_protocol::Turn) -> Opt
             .error
             .as_ref()
             .map(|error| feishu_failure_reply_text(&error.message)),
-        codex_app_server_protocol::TurnStatus::Interrupted => None,
+        codex_app_server_protocol::TurnStatus::Interrupted => {
+            super::last_agent_message_for_turn(turn)
+                .or_else(|| Some("Request interrupted.".to_string()))
+        }
         codex_app_server_protocol::TurnStatus::InProgress => None,
     }
 }

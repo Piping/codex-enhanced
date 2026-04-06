@@ -10,7 +10,7 @@ use crate::model::ProviderKind;
 use crate::model::ProviderSession;
 use crate::model::SessionStatus;
 
-pub(super) async fn discover_private_sessions(
+pub(super) async fn discover_supported_sessions(
     config: &open_lark::openlark_core::config::Config,
 ) -> Result<Vec<ProviderSession>> {
     let mut sessions = Vec::new();
@@ -21,7 +21,7 @@ pub(super) async fn discover_private_sessions(
         let next_page_token = response.page_token.clone();
 
         for chat in response.items {
-            if let Some(session) = load_private_session(config, chat).await? {
+            if let Some(session) = load_supported_session(config, chat).await? {
                 sessions.push(session);
             }
         }
@@ -60,7 +60,7 @@ async fn list_chat_page(
     serde_json::from_value(response).context("failed to parse Feishu chat list response")
 }
 
-async fn load_private_session(
+async fn load_supported_session(
     config: &open_lark::openlark_core::config::Config,
     chat: FeishuChatListItem,
 ) -> Result<Option<ProviderSession>> {
@@ -74,7 +74,7 @@ async fn load_private_session(
     let details: FeishuChatDetails = serde_json::from_value(response)
         .with_context(|| format!("failed to parse Feishu chat details for {chat_id}"))?;
 
-    if !is_private_chat(&details) {
+    if !is_supported_chat(&details) {
         return Ok(None);
     }
 
@@ -97,10 +97,20 @@ fn first_non_empty(values: [Option<String>; 2]) -> Option<String> {
         .find(|value| !value.is_empty())
 }
 
+fn is_supported_chat(details: &FeishuChatDetails) -> bool {
+    is_private_chat(details) || is_group_chat(details)
+}
+
 fn is_private_chat(details: &FeishuChatDetails) -> bool {
     details.chat_type.as_deref() == Some("private")
         || details.chat_mode.as_deref() == Some("p2p")
         || details.r#type.as_deref() == Some("p2p")
+}
+
+fn is_group_chat(details: &FeishuChatDetails) -> bool {
+    details.chat_type.as_deref() == Some("group")
+        || details.chat_mode.as_deref() == Some("group")
+        || details.r#type.as_deref() == Some("group")
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -136,7 +146,9 @@ mod tests {
     use super::FeishuChatListItem;
     use super::FeishuChatListResponse;
     use super::first_non_empty;
+    use super::is_group_chat;
     use super::is_private_chat;
+    use super::is_supported_chat;
 
     #[test]
     fn parse_list_chat_response_with_items() {
@@ -204,6 +216,28 @@ mod tests {
             is_private_chat(&FeishuChatDetails {
                 name: Some("Alice".to_string()),
                 chat_mode: Some("p2p".to_string()),
+                chat_type: Some("group".to_string()),
+                r#type: None,
+            }),
+            true
+        );
+    }
+
+    #[test]
+    fn group_chat_detection_accepts_group_variants() {
+        assert_eq!(
+            is_group_chat(&FeishuChatDetails {
+                name: Some("tracker".to_string()),
+                chat_mode: Some("group".to_string()),
+                chat_type: Some("group".to_string()),
+                r#type: None,
+            }),
+            true
+        );
+        assert_eq!(
+            is_supported_chat(&FeishuChatDetails {
+                name: Some("tracker".to_string()),
+                chat_mode: None,
                 chat_type: Some("group".to_string()),
                 r#type: None,
             }),

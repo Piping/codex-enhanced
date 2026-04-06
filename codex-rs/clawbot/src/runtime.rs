@@ -49,11 +49,9 @@ impl ClawbotRuntime {
     }
 
     pub fn feishu_provider(&self) -> Option<FeishuProviderRuntime> {
-        self.snapshot
-            .config
-            .feishu
-            .clone()
-            .map(FeishuProviderRuntime::new)
+        self.snapshot.config.feishu.clone().map(|config| {
+            FeishuProviderRuntime::new(self.store.workspace_root().to_path_buf(), config)
+        })
     }
 
     pub fn update_feishu_config(
