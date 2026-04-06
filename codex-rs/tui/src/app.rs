@@ -1465,7 +1465,7 @@ impl App {
                     };
                     self.chat_widget.finish_failed_turn_for_profile_fallback();
                     if let Err(err) = self
-                        .switch_runtime_profile(tui, app_server, &next_profile_id)
+                        .switch_runtime_profile(tui, app_server, Some(&next_profile_id))
                         .await
                     {
                         self.chat_widget.add_error_message(format!(
@@ -1501,7 +1501,7 @@ impl App {
                 };
                 self.chat_widget.finish_failed_turn_for_profile_fallback();
                 if let Err(err) = self
-                    .switch_runtime_profile(tui, app_server, &next_profile_id)
+                    .switch_runtime_profile(tui, app_server, Some(&next_profile_id))
                     .await
                 {
                     self.chat_widget.add_error_message(format!(

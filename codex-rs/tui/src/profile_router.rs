@@ -1,5 +1,4 @@
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
-#[cfg(test)]
 use codex_protocol::protocol::CodexErrorInfo;
 use serde::Deserialize;
 use serde::Serialize;
@@ -132,7 +131,6 @@ impl ProfileRouterStore {
     }
 }
 
-#[cfg(test)]
 pub(crate) fn core_profile_fallback_action(info: &CodexErrorInfo) -> Option<ProfileFallbackAction> {
     match info {
         CodexErrorInfo::UsageLimitExceeded | CodexErrorInfo::Unauthorized => {
@@ -190,6 +188,7 @@ pub(crate) fn app_server_profile_fallback_action(
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::DefaultProfileRouter;
     use super::ProfileFallbackAction;
