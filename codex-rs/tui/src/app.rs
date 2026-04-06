@@ -7062,6 +7062,7 @@ mod tests {
     use codex_app_server_protocol::ThreadTokenUsage;
     use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
     use codex_app_server_protocol::TokenUsageBreakdown;
+    use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnCompletedNotification;
     use codex_app_server_protocol::TurnError as AppServerTurnError;
@@ -10283,6 +10284,27 @@ jobs:
         }
     }
 
+    fn turn_completed_notification_with_agent_message(
+        thread_id: ThreadId,
+        turn_id: &str,
+        status: TurnStatus,
+        message: &str,
+    ) -> ServerNotification {
+        ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: thread_id.to_string(),
+            turn: test_turn(
+                turn_id,
+                status,
+                vec![ThreadItem::AgentMessage {
+                    id: "agent-1".to_string(),
+                    text: message.to_string(),
+                    phase: None,
+                    memory_citation: None,
+                }],
+            ),
+        })
+    }
+
     #[test]
     fn thread_event_store_tracks_active_turn_lifecycle() {
         let mut store = ThreadEventStore::new(/*capacity*/ 8);
@@ -12154,7 +12176,6 @@ model = "gpt-5.2"
         assert!(rendered_cells[0].contains("Workflow job completed"));
         Ok(())
     }
-
     #[tokio::test]
     async fn active_primary_turn_complete_waits_for_consumption_before_after_turn() -> Result<()> {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;

@@ -284,12 +284,6 @@ impl App {
             return;
         }
 
-        if self
-            .maybe_auto_resolve_clawbot_server_request(app_server_client, thread_id, &request)
-            .await
-        {
-            return;
-        }
         let result =
             if self.primary_thread_id == Some(thread_id) || self.primary_thread_id.is_none() {
                 self.enqueue_primary_thread_request(request).await
