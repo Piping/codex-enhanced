@@ -92,3 +92,9 @@ CHANGELOG.ignore.md
 # Python bytecode files
 __pycache__/
 *.pyc
+
+.codex/
+.desloppify/
+scorecard.png
+site/
+docs/assets/
