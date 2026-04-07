@@ -9,7 +9,7 @@ expression: popup
 › Back                Return to the previous workflow menu.
   Edit workflow.yaml  Open manual.yaml in your editor.
   Run Now             Run this job immediately in a background workflow thread.
-  Disable Job         Prevent this job from running until it is enabled again.
+  Disable Job         Prevent triggers from including this job until it is enabled again.
   Context: Ephemeral  Toggle between embed and ephemeral execution context.
   Response: User      Toggle whether this job replies as assistant output or a user follow-up.
   Edit Needs          1 dependency

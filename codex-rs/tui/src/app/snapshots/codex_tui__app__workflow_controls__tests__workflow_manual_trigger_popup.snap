@@ -1,0 +1,15 @@
+---
+source: tui/src/app/workflow_controls.rs
+expression: popup
+---
+  Workflow Trigger
+  director · review_backlog · manual.yaml
+
+  Type to search trigger actions
+› Back                Return to the previous workflow menu.
+  Edit workflow.yaml  Open manual.yaml in your editor.
+  Run Now             Run this manual trigger immediately in a background workflow thread.
+  Disable Trigger     Prevent this trigger from starting until it is enabled again.
+  Target Jobs         1 job
+
+  Press enter to confirm or esc to go back

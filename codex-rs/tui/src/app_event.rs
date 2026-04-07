@@ -113,6 +113,10 @@ pub(crate) enum WorkflowControlsDestination {
     ManualTriggers {
         workflow_path: PathBuf,
     },
+    ManualTrigger {
+        workflow_path: PathBuf,
+        trigger_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -379,6 +383,11 @@ pub(crate) enum AppEvent {
     EditWorkflowFile {
         workflow_path: PathBuf,
         reopen: WorkflowControlsDestination,
+    },
+
+    ToggleWorkflowTriggerEnabled {
+        workflow_path: PathBuf,
+        trigger_id: String,
     },
 
     ToggleWorkflowJobEnabled {

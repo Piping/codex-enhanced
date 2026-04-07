@@ -95,6 +95,21 @@ pub(crate) fn toggle_job_enabled(workflow_path: &Path, job_name: &str) -> Result
     })
 }
 
+pub(crate) fn toggle_trigger_enabled(
+    workflow_path: &Path,
+    trigger_id: &str,
+) -> Result<bool, String> {
+    mutate_trigger(workflow_path, trigger_id, |trigger| {
+        let enabled = trigger
+            .get(string_key("enabled"))
+            .and_then(|value| serde_yaml::from_value::<bool>(value.clone()).ok())
+            .unwrap_or(true);
+        let next_enabled = !enabled;
+        trigger.insert(string_key("enabled"), YamlValue::Bool(next_enabled));
+        Ok(next_enabled)
+    })
+}
+
 pub(crate) fn cycle_job_context(
     workflow_path: &Path,
     job_name: &str,
@@ -269,6 +284,35 @@ fn workflow_job_mapping_mut<'a>(
         .ok_or_else(|| format!("workflow job `{job_name}` does not exist"))
 }
 
+fn workflow_trigger_mapping_mut<'a>(
+    document: &'a mut YamlValue,
+    trigger_id: &str,
+) -> Result<&'a mut Mapping, String> {
+    let document = document
+        .as_mapping_mut()
+        .ok_or_else(|| "workflow file root must be a YAML mapping".to_string())?;
+    let triggers = document
+        .get_mut(string_key("triggers"))
+        .and_then(YamlValue::as_sequence_mut)
+        .ok_or_else(|| "workflow file does not define a `triggers` sequence".to_string())?;
+
+    for (index, trigger) in triggers.iter_mut().enumerate() {
+        let Some(trigger_mapping) = trigger.as_mapping_mut() else {
+            continue;
+        };
+        let candidate_id = trigger_mapping
+            .get(string_key("id"))
+            .and_then(YamlValue::as_str)
+            .map(ToString::to_string)
+            .unwrap_or_else(|| format!("trigger-{}", index + 1));
+        if candidate_id == trigger_id {
+            return Ok(trigger_mapping);
+        }
+    }
+
+    Err(format!("workflow trigger `{trigger_id}` does not exist"))
+}
+
 fn mutate_job<T>(
     workflow_path: &Path,
     job_name: &str,
@@ -276,6 +320,17 @@ fn mutate_job<T>(
 ) -> Result<T, String> {
     let mut document = load_yaml_document(workflow_path)?;
     let result = mutator(workflow_job_mapping_mut(&mut document, job_name)?)?;
+    save_yaml_document(workflow_path, &document)?;
+    Ok(result)
+}
+
+fn mutate_trigger<T>(
+    workflow_path: &Path,
+    trigger_id: &str,
+    mutator: impl FnOnce(&mut Mapping) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut document = load_yaml_document(workflow_path)?;
+    let result = mutator(workflow_trigger_mapping_mut(&mut document, trigger_id)?)?;
     save_yaml_document(workflow_path, &document)?;
     Ok(result)
 }
@@ -343,6 +398,23 @@ jobs:
         assert!(disabled.contains("enabled: false"));
 
         let enabled_again = toggle_job_enabled(&path, "notify").unwrap();
+        assert!(enabled_again);
+        let enabled_text = fs::read_to_string(&path).unwrap();
+        assert!(enabled_text.contains("enabled: true"));
+    }
+
+    #[test]
+    fn toggle_trigger_enabled_writes_explicit_bool() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".codex/workflows/workflow.yaml");
+        write_workflow(&path);
+
+        let enabled = toggle_trigger_enabled(&path, "review").unwrap();
+        assert!(!enabled);
+        let disabled = fs::read_to_string(&path).unwrap();
+        assert!(disabled.contains("enabled: false"));
+
+        let enabled_again = toggle_trigger_enabled(&path, "review").unwrap();
         assert!(enabled_again);
         let enabled_text = fs::read_to_string(&path).unwrap();
         assert!(enabled_text.contains("enabled: true"));
