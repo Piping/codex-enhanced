@@ -263,6 +263,29 @@ def test_stage_runtime_release_copies_binary_and_sets_version(tmp_path: Path) ->
     assert 'version = "1.2.3"' in (staged / "pyproject.toml").read_text()
 
 
+def test_stage_enhanced_runtime_release_copies_binary_and_sets_version(
+    tmp_path: Path,
+) -> None:
+    script = _load_update_script_module()
+    fake_binary = tmp_path / script.runtime_binary_name()
+    fake_binary.write_text("fake codex\n")
+
+    staged = script.stage_python_runtime_package(
+        tmp_path / "runtime-stage",
+        "1.2.3",
+        fake_binary,
+        "enhanced",
+    )
+
+    assert staged == tmp_path / "runtime-stage"
+    assert (
+        script.staged_runtime_bin_path(staged, "enhanced").read_text() == "fake codex\n"
+    )
+    pyproject = (staged / "pyproject.toml").read_text()
+    assert 'name = "codex-enhanced"' in pyproject
+    assert 'version = "1.2.3"' in pyproject
+
+
 def test_stage_runtime_release_replaces_existing_staging_dir(tmp_path: Path) -> None:
     script = _load_update_script_module()
     staging_dir = tmp_path / "runtime-stage"
@@ -329,7 +352,10 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
         return tmp_path / "sdk-stage"
 
     def fake_stage_runtime_package(
-        _staging_dir: Path, _runtime_version: str, _runtime_binary: Path
+        _staging_dir: Path,
+        _runtime_version: str,
+        _runtime_binary: Path,
+        _runtime_package: str,
     ) -> Path:
         raise AssertionError("runtime staging should not run for stage-sdk")
 
@@ -372,7 +398,10 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
         raise AssertionError("sdk staging should not run for stage-runtime")
 
     def fake_stage_runtime_package(
-        _staging_dir: Path, _runtime_version: str, _runtime_binary: Path
+        _staging_dir: Path,
+        _runtime_version: str,
+        _runtime_binary: Path,
+        _runtime_package: str,
     ) -> Path:
         calls.append("stage_runtime")
         return tmp_path / "runtime-stage"
@@ -390,6 +419,55 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
     script.run_command(args, ops)
 
     assert calls == ["stage_runtime"]
+
+
+def test_stage_enhanced_runtime_passes_package_choice(tmp_path: Path) -> None:
+    script = _load_update_script_module()
+    fake_binary = tmp_path / script.runtime_binary_name()
+    fake_binary.write_text("fake codex\n")
+    calls: list[tuple[str, str]] = []
+    args = script.parse_args(
+        [
+            "stage-runtime",
+            str(tmp_path / "runtime-stage"),
+            str(fake_binary),
+            "--runtime-version",
+            "1.2.3",
+            "--runtime-package",
+            "enhanced",
+        ]
+    )
+
+    def fake_generate_types() -> None:
+        raise AssertionError("type generation should not run for stage-runtime")
+
+    def fake_stage_sdk_package(
+        _staging_dir: Path, _sdk_version: str, _runtime_version: str
+    ) -> Path:
+        raise AssertionError("sdk staging should not run for stage-runtime")
+
+    def fake_stage_runtime_package(
+        _staging_dir: Path,
+        _runtime_version: str,
+        _runtime_binary: Path,
+        runtime_package: str,
+    ) -> Path:
+        calls.append(("stage_runtime", runtime_package))
+        return tmp_path / "runtime-stage"
+
+    def fake_current_sdk_version() -> str:
+        return "0.2.0"
+
+    ops = script.CliOps(
+        generate_types=fake_generate_types,
+        stage_python_sdk_package=fake_stage_sdk_package,
+        stage_python_runtime_package=fake_stage_runtime_package,
+        current_sdk_version=fake_current_sdk_version,
+    )
+
+    script.run_command(args, ops)
+
+    assert calls == [("stage_runtime", "enhanced")]
 
 
 def test_default_runtime_is_resolved_from_installed_runtime_package(
