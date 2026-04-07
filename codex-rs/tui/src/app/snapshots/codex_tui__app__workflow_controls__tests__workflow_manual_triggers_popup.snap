@@ -1,0 +1,15 @@
+---
+source: tui/src/app/workflow_controls.rs
+expression: popup
+---
+  Manual Triggers
+  director · manual.yaml
+
+  Type to search triggers
+› Back                Return to the previous workflow menu.
+  Edit workflow.yaml  Open manual.yaml in your editor.
+  review_backlog      Enabled · Ready
+  triage (disabled)   Disabled · Ready (disabled: Enable this trigger in workflow.yaml before
+                      running it.)
+
+  Press enter to confirm or esc to go back

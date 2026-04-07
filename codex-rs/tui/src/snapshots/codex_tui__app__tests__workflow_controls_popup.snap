@@ -1,19 +1,13 @@
 ---
 source: tui/src/app.rs
-assertion_line: 12532
 expression: popup
 ---
   Workflow
-  Trigger workspace workflows and inspect current scheduler/runtime state.
+  Manage workflow files, browse jobs, and inspect current background status.
 
   Type to search workflows
-› Background Tasks           Insert a background task snapshot into the transcript. /ps shows the
-                             same live workflow state.
-  Manual Triggers            2 available
-  director · review_backlog  Manual trigger · Running
-  director · triage          Manual trigger · Queued
-  Jobs                       2 available
-  director · notify          Job run · Ready
-  director · summarize       Job run · Ready
+› Background Tasks  Insert a background task snapshot into the transcript. /ps shows the same live
+                    workflow state.
+  director          manual.yaml · 2 manual triggers · 2 jobs
 
   Press enter to confirm or esc to go back
