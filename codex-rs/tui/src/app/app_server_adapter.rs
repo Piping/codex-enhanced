@@ -228,10 +228,18 @@ impl App {
                         )
                         .await;
                 }
-                if let Some(sender) = self.workflow_thread_notification_channels.get(&thread_id)
+                let workflow_sender = self
+                    .workflow_thread_notification_channels
+                    .lock()
+                    .await
+                    .get(&thread_id)
+                    .cloned();
+                if let Some(sender) = workflow_sender
                     && sender.send(notification.clone()).is_err()
                 {
                     self.workflow_thread_notification_channels
+                        .lock()
+                        .await
                         .remove(&thread_id);
                 }
                 if let Some(turn) = clawbot_turn {

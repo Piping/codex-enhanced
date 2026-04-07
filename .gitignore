@@ -92,3 +92,8 @@ CHANGELOG.ignore.md
 __pycache__/
 *.pyc
 
+.codex/
+.desloppify/
+scorecard.png
+site/
+docs/assets/

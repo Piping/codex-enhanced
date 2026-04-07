@@ -552,9 +552,21 @@ async fn slash_stop_submits_background_terminal_cleanup() {
     assert_eq!(cells.len(), 1, "expected cleanup confirmation message");
     let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        rendered.contains("Stopping all background terminals."),
+        rendered.contains("Stopping all background tasks."),
         "expected cleanup confirmation, got {rendered:?}"
     );
+}
+
+#[tokio::test]
+async fn slash_stop_confirmation_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Stop);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one info message");
+    let rendered = lines_to_single_string(&cells[0]);
+    insta::assert_snapshot!(rendered);
 }
 
 #[tokio::test]

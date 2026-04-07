@@ -16,7 +16,8 @@ In the codex-rs folder where the rust code lives:
   - Use an exact `/*param_name*/` comment before opaque literal arguments such as `None`, booleans, and numeric literals when passing them by position.
   - Do not add these comments for string or char literals unless the comment adds real clarity; those literals are intentionally exempt from the lint.
   - The parameter name in the comment must exactly match the callee signature.
-  - You can run `just argument-comment-lint` to run the lint check locally. This is powered by Bazel, so running it the first time can be slow if Bazel is not warmed up, though incremental invocations should take <15s. Most of the time, it is best to update the PR and let CI take responsibility for checking this (or run it asynchronously in the background after submitting the PR). Note CI checks all three platforms, which the local run does not.
+  - Do not run bazel related commands unless in CI environement
+  - Do not run 'just argument-comment-lint' unless in CI environment
 - When possible, make `match` statements exhaustive and avoid wildcard arms.
 - Newly added traits should include doc comments that explain their role and how implementations are expected to use them.
 - When writing tests, prefer comparing the equality of entire objects over fields one by one.
@@ -209,3 +210,6 @@ These guidelines apply to app-server protocol work in `codex-rs`, especially:
 - Validate with `cargo test -p codex-app-server-protocol`.
 - Avoid boilerplate tests that only assert experimental field markers for individual
   request fields in `common.rs`; rely on schema generation/tests and behavioral coverage instead.
+- cargo run --bin codex -- -p <profile> 总是 加 -p pig ; it allows api usage
+- 修改代码后总是执行 cargo build -p codex-cli; 然后执行交互式终端 (PTY) 验证要完成的特性是否实现;
+- 在跑 codex 命令之前, 总是用sudo codesign --sign - --force --preserve-metadata=entitlements,requirements,flags,runtime <bin>来给二进制签名

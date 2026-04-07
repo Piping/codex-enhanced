@@ -7994,7 +7994,7 @@ impl ChatWidget {
         self.unified_exec_processes.clear();
         self.sync_unified_exec_footer();
         self.add_info_message(
-            "Stopping all background terminals.".to_string(),
+            "Stopping all background tasks.".to_string(),
             /*hint*/ None,
         );
     }

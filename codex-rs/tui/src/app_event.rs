@@ -17,7 +17,6 @@ use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
-use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::Turn as AppServerTurn;
 use codex_clawbot::ClawbotTurnMode;
 use codex_clawbot::ProviderEvent as ClawbotProviderEvent;
@@ -363,16 +362,6 @@ pub(crate) enum AppEvent {
     BackgroundWorkflowRunCompleted {
         run_id: String,
         result: Box<BackgroundWorkflowRunResult>,
-    },
-
-    RegisterWorkflowThreadNotificationForwarder {
-        thread_id: ThreadId,
-        sender: tokio::sync::mpsc::UnboundedSender<ServerNotification>,
-        ready_tx: tokio::sync::oneshot::Sender<()>,
-    },
-
-    UnregisterWorkflowThreadNotificationForwarder {
-        thread_id: ThreadId,
     },
     OpenWorkflowControls,
 
