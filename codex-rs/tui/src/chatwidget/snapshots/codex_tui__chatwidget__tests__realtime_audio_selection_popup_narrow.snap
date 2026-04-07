@@ -6,6 +6,7 @@ expression: popup
   Configure UI and realtime settings for Codex.
 
 › 1. UI  Configure local TUI-only transcript
-         visibility for raw reasoning.
+         visibility for reasoning, tool activity, and
+         diffs.
 
   Press enter to confirm or esc to go back

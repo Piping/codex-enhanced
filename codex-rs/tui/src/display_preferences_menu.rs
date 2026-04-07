@@ -65,12 +65,12 @@ fn display_preference_item(
             "Currently hidden. Reveal raw reasoning text in this TUI only.",
         ),
         (DisplayPreferenceKey::ToolResults, true) => (
-            "Hide Tool Results",
-            "Currently visible. Collapse MCP/custom tool result bodies in transcript cells.",
+            "Hide Tool Activity",
+            "Currently visible. Hide tool calls and result details in transcript cells.",
         ),
         (DisplayPreferenceKey::ToolResults, false) => (
-            "Show Tool Results",
-            "Currently hidden. Reveal MCP/custom tool result bodies in transcript cells.",
+            "Show Tool Activity",
+            "Currently hidden. Reveal tool calls and result details in transcript cells.",
         ),
         (DisplayPreferenceKey::PatchDiffs, true) => (
             "Hide Patch Diffs",

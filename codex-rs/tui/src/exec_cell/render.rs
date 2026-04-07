@@ -3,6 +3,7 @@ use std::time::Instant;
 use super::model::CommandOutput;
 use super::model::ExecCall;
 use super::model::ExecCell;
+use crate::display_preferences::DisplayPreferences;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::HistoryCell;
 use crate::render::highlight::highlight_bash_to_lines;
@@ -44,6 +45,7 @@ pub(crate) fn new_active_exec_command(
     source: ExecCommandSource,
     interaction_input: Option<String>,
     animations_enabled: bool,
+    display_preferences: DisplayPreferences,
 ) -> ExecCell {
     ExecCell::new(
         ExecCall {
@@ -58,6 +60,7 @@ pub(crate) fn new_active_exec_command(
         },
         animations_enabled,
     )
+    .with_display_preferences(display_preferences)
 }
 
 fn format_unified_exec_interaction(command: &[String], input: Option<&str>) -> String {
@@ -197,6 +200,9 @@ pub(crate) fn spinner(start_time: Option<Instant>, animations_enabled: bool) -> 
 
 impl HistoryCell for ExecCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if !self.show_tool_results() {
+            return Vec::new();
+        }
         if self.is_exploring_cell() {
             self.exploring_display_lines(width)
         } else {
@@ -205,6 +211,9 @@ impl HistoryCell for ExecCell {
     }
 
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if !self.show_tool_results() {
+            return Vec::new();
+        }
         let mut lines: Vec<Line<'static>> = vec![];
         for (i, call) in self.iter_calls().enumerate() {
             if i > 0 {
