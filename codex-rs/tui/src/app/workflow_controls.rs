@@ -39,8 +39,16 @@ struct WorkflowFileSummary {
     workflow_name: Option<String>,
     display_name: String,
     filename: String,
+    jobs: Vec<String>,
+    manual_triggers: Vec<WorkflowTriggerSummary>,
     manual_trigger_count: usize,
     job_count: usize,
+}
+
+#[derive(Clone)]
+struct WorkflowTriggerSummary {
+    id: String,
+    enabled: bool,
 }
 
 impl App {
@@ -69,6 +77,14 @@ impl App {
             WorkflowControlsDestination::ManualTriggers { workflow_path } => {
                 self.workflow_manual_triggers_popup_params(workflow_path.as_path(), Some(0))
             }
+            WorkflowControlsDestination::ManualTrigger {
+                workflow_path,
+                trigger_id,
+            } => self.workflow_manual_trigger_popup_params(
+                workflow_path.as_path(),
+                &trigger_id,
+                Some(0),
+            ),
         };
         self.show_workflow_popup(params, active_selected_idx.is_some());
     }
@@ -247,6 +263,32 @@ impl App {
         }
     }
 
+    pub(crate) fn toggle_workflow_trigger_enabled_from_ui(
+        &mut self,
+        workflow_path: PathBuf,
+        trigger_id: String,
+    ) {
+        match workflow_editor::toggle_trigger_enabled(workflow_path.as_path(), &trigger_id) {
+            Ok(enabled) => {
+                self.chat_widget.add_info_message(
+                    format!(
+                        "{} workflow trigger `{trigger_id}`.",
+                        if enabled { "Enabled" } else { "Disabled" }
+                    ),
+                    /*hint*/ None,
+                );
+                self.open_workflow_control_view(WorkflowControlsDestination::ManualTrigger {
+                    workflow_path,
+                    trigger_id,
+                });
+            }
+            Err(err) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(err));
+            }
+        }
+    }
+
     pub(crate) fn cycle_workflow_job_context_from_ui(
         &mut self,
         workflow_path: PathBuf,
@@ -382,40 +424,107 @@ impl App {
                     });
                 } else {
                     for file in state.files {
-                        let workflow_path = file.workflow_path.clone();
+                        let workflow_prefix = file.display_name.clone();
+                        let workflow_filename = file.filename.clone();
+
                         items.push(SelectionItem {
-                            name: file.display_name.clone(),
-                            description: Some(format!(
-                                "{} · {} · {}",
-                                file.filename,
-                                count_label(file.manual_trigger_count, "manual trigger"),
-                                count_label(file.job_count, "job")
-                            )),
+                            name: format!("{workflow_prefix} - Edit workflow.yaml"),
+                            description: Some(format!("Open {workflow_filename} in your editor.")),
                             selected_description: Some(match file.workflow_name {
                                 Some(_) => {
-                                    "Open this workflow file. You can edit the YAML, browse jobs, or run manual triggers."
+                                    "Open the real workflow YAML file in your external editor."
                                         .to_string()
                                 }
                                 None => {
-                                    "Open this workflow file in your editor. Structured actions will appear once the YAML parses successfully."
+                                    "Open this workflow file in your editor so you can fix the YAML."
                                         .to_string()
                                 }
                             }),
                             search_value: Some(format!(
-                                "{} {}",
-                                file.display_name.to_ascii_lowercase(),
-                                file.filename.to_ascii_lowercase()
+                                "{} {} edit workflow yaml",
+                                workflow_prefix.to_ascii_lowercase(),
+                                workflow_filename.to_ascii_lowercase()
                             )),
-                            actions: vec![Box::new(move |tx| {
-                                tx.send(AppEvent::OpenWorkflowControlView {
-                                    destination: WorkflowControlsDestination::File {
+                            actions: vec![Box::new({
+                                let workflow_path = file.workflow_path.clone();
+                                move |tx| {
+                                    tx.send(AppEvent::EditWorkflowFile {
                                         workflow_path: workflow_path.clone(),
-                                    },
-                                });
+                                        reopen: WorkflowControlsDestination::Root,
+                                    });
+                                }
                             })],
                             dismiss_on_select: false,
                             ..Default::default()
                         });
+
+                        if file.workflow_name.is_some() {
+                            for job_name in &file.jobs {
+                                items.push(SelectionItem {
+                                    name: format!("{workflow_prefix} - {job_name}"),
+                                    description: Some("Workflow job".to_string()),
+                                    selected_description: Some(
+                                        "Open this job directly. From there you can run it, toggle it, and edit its fields."
+                                            .to_string(),
+                                    ),
+                                    search_value: Some(format!(
+                                        "{} {} {} job",
+                                        workflow_prefix.to_ascii_lowercase(),
+                                        workflow_filename.to_ascii_lowercase(),
+                                        job_name.to_ascii_lowercase()
+                                    )),
+                                    actions: vec![Box::new({
+                                        let workflow_path = file.workflow_path.clone();
+                                        let job_name = job_name.clone();
+                                        move |tx| {
+                                            tx.send(AppEvent::OpenWorkflowControlView {
+                                                destination: WorkflowControlsDestination::Job {
+                                                    workflow_path: workflow_path.clone(),
+                                                    job_name: job_name.clone(),
+                                                },
+                                            });
+                                        }
+                                    })],
+                                    dismiss_on_select: false,
+                                    ..Default::default()
+                                });
+                            }
+
+                            for trigger in &file.manual_triggers {
+                                items.push(SelectionItem {
+                                    name: format!("{workflow_prefix} - {}", trigger.id),
+                                    description: Some(format!(
+                                        "Manual trigger · {}",
+                                        if trigger.enabled { "Enabled" } else { "Disabled" }
+                                    )),
+                                    selected_description: Some(
+                                        "Open this trigger directly. From there you can run it now or toggle its enabled state."
+                                            .to_string(),
+                                    ),
+                                    search_value: Some(format!(
+                                        "{} {} {} manual trigger",
+                                        workflow_prefix.to_ascii_lowercase(),
+                                        workflow_filename.to_ascii_lowercase(),
+                                        trigger.id.to_ascii_lowercase()
+                                    )),
+                                    actions: vec![Box::new({
+                                        let workflow_path = file.workflow_path.clone();
+                                        let trigger_id = trigger.id.clone();
+                                        move |tx| {
+                                            tx.send(AppEvent::OpenWorkflowControlView {
+                                                destination:
+                                                    WorkflowControlsDestination::ManualTrigger {
+                                                        workflow_path: workflow_path.clone(),
+                                                        trigger_id: trigger_id.clone(),
+                                                    },
+                                            });
+                                        }
+                                    })],
+                                    dismiss_on_select: false,
+                                    ..Default::default()
+                                });
+                            }
+                        }
                     }
                 }
             }
@@ -437,8 +546,7 @@ impl App {
             view_id: Some(WORKFLOW_CONTROLS_VIEW_ID),
             title: Some("Workflow".to_string()),
             subtitle: Some(
-                "Manage workflow files, browse jobs, and inspect current background status."
-                    .to_string(),
+                "Manage workflow files, jobs, and manual triggers directly.".to_string(),
             ),
             footer_hint: Some(standard_popup_hint_line()),
             items,
@@ -561,9 +669,7 @@ impl App {
                 let running_set = running_labels.iter().cloned().collect::<HashSet<_>>();
                 let queued_set = queued_labels.iter().cloned().collect::<HashSet<_>>();
                 let mut items = vec![
-                    workflow_back_item(WorkflowControlsDestination::File {
-                        workflow_path: workflow_path.to_path_buf(),
-                    }),
+                    workflow_back_item(WorkflowControlsDestination::Root),
                     workflow_edit_file_item(
                         workflow_path.to_path_buf(),
                         WorkflowControlsDestination::Jobs {
@@ -647,9 +753,7 @@ impl App {
                 "Workflow Jobs",
                 "Failed to load workflow jobs.",
                 err,
-                workflow_back_item(WorkflowControlsDestination::File {
-                    workflow_path: workflow_path.to_path_buf(),
-                }),
+                workflow_back_item(WorkflowControlsDestination::Root),
                 initial_selected_idx,
             ),
         }
@@ -667,9 +771,7 @@ impl App {
                 let running_set = running_labels.iter().cloned().collect::<HashSet<_>>();
                 let queued_set = queued_labels.iter().cloned().collect::<HashSet<_>>();
                 let mut items = vec![
-                    workflow_back_item(WorkflowControlsDestination::File {
-                        workflow_path: workflow_path.to_path_buf(),
-                    }),
+                    workflow_back_item(WorkflowControlsDestination::Root),
                     workflow_edit_file_item(
                         workflow_path.to_path_buf(),
                         WorkflowControlsDestination::ManualTriggers {
@@ -692,18 +794,18 @@ impl App {
                     });
                 } else {
                     for trigger in triggers {
-                        let workflow_name = workflow.name.clone();
+                        let workflow_path = workflow_path.to_path_buf();
                         let trigger_id = trigger.id.clone();
                         let label = format!("{} · {}", workflow.name, trigger.id);
                         let status = workflow_target_status(&label, &running_set, &queued_set);
-                        let mut item = SelectionItem {
+                        items.push(SelectionItem {
                             name: trigger.id.clone(),
                             description: Some(format!(
                                 "{} · {status}",
                                 if trigger.enabled { "Enabled" } else { "Disabled" }
                             )),
                             selected_description: Some(
-                                "Run this manual trigger now. Trigger runs stay visible in the footer and /ps."
+                                "Open this trigger. From there you can run it now or toggle its enabled state."
                                     .to_string(),
                             ),
                             search_value: Some(format!(
@@ -714,22 +816,16 @@ impl App {
                                 status
                             )),
                             actions: vec![Box::new(move |tx| {
-                                tx.send(AppEvent::StartManualWorkflowTrigger {
-                                    workflow_name: workflow_name.clone(),
-                                    trigger_id: trigger_id.clone(),
+                                tx.send(AppEvent::OpenWorkflowControlView {
+                                    destination: WorkflowControlsDestination::ManualTrigger {
+                                        workflow_path: workflow_path.clone(),
+                                        trigger_id: trigger_id.clone(),
+                                    },
                                 });
                             })],
                             dismiss_on_select: false,
                             ..Default::default()
-                        };
-                        if !trigger.enabled {
-                            item.is_disabled = true;
-                            item.disabled_reason = Some(
-                                "Enable this trigger in workflow.yaml before running it."
-                                    .to_string(),
-                            );
-                        }
-                        items.push(item);
+                        });
                     }
                 }
 
@@ -749,9 +845,137 @@ impl App {
                 "Manual Triggers",
                 "Failed to load manual triggers.",
                 err,
-                workflow_back_item(WorkflowControlsDestination::File {
-                    workflow_path: workflow_path.to_path_buf(),
-                }),
+                workflow_back_item(WorkflowControlsDestination::Root),
+                initial_selected_idx,
+            ),
+        }
+    }
+
+    fn workflow_manual_trigger_popup_params(
+        &self,
+        workflow_path: &Path,
+        trigger_id: &str,
+        initial_selected_idx: Option<usize>,
+    ) -> SelectionViewParams {
+        match workflow_loaded_manual_trigger_state(
+            self.config.cwd.as_path(),
+            workflow_path,
+            trigger_id,
+        ) {
+            Ok((summary, workflow, trigger)) => {
+                let mut items = vec![
+                    workflow_back_item(WorkflowControlsDestination::Root),
+                    workflow_edit_file_item(
+                        workflow_path.to_path_buf(),
+                        WorkflowControlsDestination::ManualTrigger {
+                            workflow_path: workflow_path.to_path_buf(),
+                            trigger_id: trigger.id.clone(),
+                        },
+                    ),
+                ];
+
+                if trigger.enabled {
+                    items.push(SelectionItem {
+                        name: "Run Now".to_string(),
+                        description: Some(
+                            "Run this manual trigger immediately in a background workflow thread."
+                                .to_string(),
+                        ),
+                        selected_description: Some(
+                            "Start this trigger now. Running state stays visible in the footer and /ps."
+                                .to_string(),
+                        ),
+                        actions: vec![Box::new({
+                            let workflow_name = workflow.name.clone();
+                            let trigger_id = trigger.id.clone();
+                            move |tx| {
+                                tx.send(AppEvent::StartManualWorkflowTrigger {
+                                    workflow_name: workflow_name.clone(),
+                                    trigger_id: trigger_id.clone(),
+                                });
+                            }
+                        })],
+                        dismiss_on_select: false,
+                        ..Default::default()
+                    });
+                } else {
+                    items.push(SelectionItem {
+                        name: "Run Now".to_string(),
+                        description: Some("This trigger is disabled.".to_string()),
+                        selected_description: Some(
+                            "Enable this trigger first, then run it from here.".to_string(),
+                        ),
+                        is_disabled: true,
+                        ..Default::default()
+                    });
+                }
+
+                items.push(SelectionItem {
+                    name: if trigger.enabled {
+                        "Disable Trigger".to_string()
+                    } else {
+                        "Enable Trigger".to_string()
+                    },
+                    description: Some(if trigger.enabled {
+                        "Prevent this trigger from starting until it is enabled again.".to_string()
+                    } else {
+                        "Allow this trigger to run again.".to_string()
+                    }),
+                    selected_description: Some(
+                        "Toggle this trigger's enabled state in workflow.yaml.".to_string(),
+                    ),
+                    actions: vec![Box::new({
+                        let workflow_path = workflow_path.to_path_buf();
+                        let trigger_id = trigger.id.clone();
+                        move |tx| {
+                            tx.send(AppEvent::ToggleWorkflowTriggerEnabled {
+                                workflow_path: workflow_path.clone(),
+                                trigger_id: trigger_id.clone(),
+                            });
+                        }
+                    })],
+                    dismiss_on_select: false,
+                    ..Default::default()
+                });
+
+                items.push(SelectionItem {
+                    name: "Target Jobs".to_string(),
+                    description: Some(count_label(
+                        workflow
+                            .triggers
+                            .iter()
+                            .find(|candidate| candidate.id == trigger.id)
+                            .map_or(0, |candidate| candidate.jobs.len()),
+                        "job",
+                    )),
+                    selected_description: Some(
+                        "Edit workflow.yaml if you want to change which jobs this trigger runs."
+                            .to_string(),
+                    ),
+                    is_disabled: true,
+                    ..Default::default()
+                });
+
+                SelectionViewParams {
+                    view_id: Some(WORKFLOW_CONTROLS_VIEW_ID),
+                    title: Some("Workflow Trigger".to_string()),
+                    subtitle: Some(format!(
+                        "{} · {} · {}",
+                        workflow.name, trigger.id, summary.filename
+                    )),
+                    footer_hint: Some(standard_popup_hint_line()),
+                    items,
+                    is_searchable: true,
+                    search_placeholder: Some("Type to search trigger actions".to_string()),
+                    initial_selected_idx,
+                    ..Default::default()
+                }
+            }
+            Err(err) => workflow_error_popup_params(
+                "Workflow Trigger",
+                "Failed to load workflow trigger.",
+                err,
+                workflow_back_item(WorkflowControlsDestination::Root),
                 initial_selected_idx,
             ),
         }
@@ -766,9 +990,7 @@ impl App {
         match workflow_loaded_job_state(self.config.cwd.as_path(), workflow_path, job_name) {
             Ok((summary, workflow, job)) => {
                 let mut items = vec![
-                    workflow_back_item(WorkflowControlsDestination::Jobs {
-                        workflow_path: workflow_path.to_path_buf(),
-                    }),
+                    workflow_back_item(WorkflowControlsDestination::Root),
                     workflow_edit_file_item(
                         workflow_path.to_path_buf(),
                         WorkflowControlsDestination::Job {
@@ -778,38 +1000,28 @@ impl App {
                     ),
                 ];
 
-                if job.config.enabled {
-                    items.push(SelectionItem {
-                        name: "Run Now".to_string(),
-                        description: Some("Run this job immediately in a background workflow thread.".to_string()),
-                        selected_description: Some(
-                            "Start this job now. Running state stays visible in the footer and /ps."
-                                .to_string(),
-                        ),
-                        actions: vec![Box::new({
-                            let workflow_name = workflow.name.clone();
-                            let job_name = job.name.clone();
-                            move |tx| {
-                                tx.send(AppEvent::StartManualWorkflowJob {
-                                    workflow_name: workflow_name.clone(),
-                                    job_name: job_name.clone(),
-                                });
-                            }
-                        })],
-                        dismiss_on_select: false,
-                        ..Default::default()
-                    });
-                } else {
-                    items.push(SelectionItem {
-                        name: "Run Now".to_string(),
-                        description: Some("This job is disabled.".to_string()),
-                        selected_description: Some(
-                            "Enable this job first, then run it from here.".to_string(),
-                        ),
-                        is_disabled: true,
-                        ..Default::default()
-                    });
-                }
+                items.push(SelectionItem {
+                    name: "Run Now".to_string(),
+                    description: Some(
+                        "Run this job immediately in a background workflow thread.".to_string(),
+                    ),
+                    selected_description: Some(
+                        "Start this job now. Job `enabled` only affects trigger-driven runs; manual runs are always allowed."
+                            .to_string(),
+                    ),
+                    actions: vec![Box::new({
+                        let workflow_name = workflow.name.clone();
+                        let job_name = job.name.clone();
+                        move |tx| {
+                            tx.send(AppEvent::StartManualWorkflowJob {
+                                workflow_name: workflow_name.clone(),
+                                job_name: job_name.clone(),
+                            });
+                        }
+                    })],
+                    dismiss_on_select: false,
+                    ..Default::default()
+                });
 
                 items.push(SelectionItem {
                     name: if job.config.enabled {
@@ -818,12 +1030,14 @@ impl App {
                         "Enable Job".to_string()
                     },
                     description: Some(if job.config.enabled {
-                        "Prevent this job from running until it is enabled again.".to_string()
+                        "Prevent triggers from including this job until it is enabled again."
+                            .to_string()
                     } else {
-                        "Allow this job to run again.".to_string()
+                        "Allow triggers to include this job again.".to_string()
                     }),
                     selected_description: Some(
-                        "Toggle this job's enabled state in workflow.yaml.".to_string(),
+                        "Toggle whether trigger-driven workflow runs may include this job."
+                            .to_string(),
                     ),
                     actions: vec![Box::new({
                         let workflow_path = workflow_path.to_path_buf();
@@ -947,9 +1161,7 @@ impl App {
                 "Workflow Job",
                 "Failed to load workflow job.",
                 err,
-                workflow_back_item(WorkflowControlsDestination::Jobs {
-                    workflow_path: workflow_path.to_path_buf(),
-                }),
+                workflow_back_item(WorkflowControlsDestination::Root),
                 initial_selected_idx,
             ),
         }
@@ -969,21 +1181,31 @@ fn workflow_menu_state(cwd: &Path) -> Result<WorkflowMenuState, String> {
                     .iter()
                     .find(|workflow| workflow.source_path == workflow_path)
                 {
+                    let mut jobs = registry
+                        .jobs
+                        .values()
+                        .filter(|job| job.workflow_path == workflow.source_path)
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    jobs.sort_by_key(|job| job.definition_index);
+                    let manual_triggers = workflow
+                        .triggers
+                        .iter()
+                        .filter(|trigger| matches!(trigger.kind, WorkflowTriggerKind::Manual))
+                        .map(|trigger| WorkflowTriggerSummary {
+                            id: trigger.id.clone(),
+                            enabled: trigger.enabled,
+                        })
+                        .collect::<Vec<_>>();
                     WorkflowFileSummary {
                         workflow_path: workflow_path.clone(),
                         workflow_name: Some(workflow.name.clone()),
                         display_name: workflow.name.clone(),
                         filename: filename_label(&workflow_path),
-                        manual_trigger_count: workflow
-                            .triggers
-                            .iter()
-                            .filter(|trigger| matches!(trigger.kind, WorkflowTriggerKind::Manual))
-                            .count(),
-                        job_count: registry
-                            .jobs
-                            .values()
-                            .filter(|job| job.workflow_path == workflow.source_path)
-                            .count(),
+                        job_count: jobs.len(),
+                        jobs: jobs.into_iter().map(|job| job.name).collect(),
+                        manual_trigger_count: manual_triggers.len(),
+                        manual_triggers,
                     }
                 } else {
                     fallback_workflow_summary(workflow_path)
@@ -1057,6 +1279,33 @@ fn workflow_loaded_job_state(
     Ok((summary, workflow, job))
 }
 
+fn workflow_loaded_manual_trigger_state(
+    cwd: &Path,
+    workflow_path: &Path,
+    trigger_id: &str,
+) -> Result<
+    (
+        WorkflowFileSummary,
+        LoadedWorkflowFile,
+        WorkflowTriggerSummary,
+    ),
+    String,
+> {
+    let (summary, _registry, workflow) = workflow_loaded_file_state(cwd, workflow_path)?;
+    let trigger = workflow
+        .triggers
+        .iter()
+        .find(|trigger| {
+            matches!(trigger.kind, WorkflowTriggerKind::Manual) && trigger.id == trigger_id
+        })
+        .map(|trigger| WorkflowTriggerSummary {
+            id: trigger.id.clone(),
+            enabled: trigger.enabled,
+        })
+        .ok_or_else(|| format!("workflow trigger `{trigger_id}` does not exist"))?;
+    Ok((summary, workflow, trigger))
+}
+
 fn fallback_workflow_summary(workflow_path: PathBuf) -> WorkflowFileSummary {
     WorkflowFileSummary {
         display_name: workflow_path
@@ -1066,6 +1315,8 @@ fn fallback_workflow_summary(workflow_path: PathBuf) -> WorkflowFileSummary {
         filename: filename_label(&workflow_path),
         workflow_path,
         workflow_name: None,
+        jobs: Vec::new(),
+        manual_triggers: Vec::new(),
         manual_trigger_count: 0,
         job_count: 0,
     }
@@ -1242,6 +1493,31 @@ jobs:
         .unwrap();
     }
 
+    fn write_test_disabled_job_workflow(workspace_cwd: &Path) {
+        let workflows_dir = workspace_cwd.join(".codex/workflows");
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::write(
+            workflows_dir.join("manual.yaml"),
+            r#"name: director
+
+triggers:
+  - type: manual
+    id: review_backlog
+    jobs: [notify]
+
+jobs:
+  notify:
+    enabled: false
+    context: ephemeral
+    response: user
+    steps:
+      - prompt: |
+          send workflow update
+"#,
+        )
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn workflow_root_popup_shows_create_template_when_empty() {
         let mut app = super::super::tests::make_test_app().await;
@@ -1308,6 +1584,27 @@ jobs:
     }
 
     #[tokio::test]
+    async fn disabled_job_popup_still_offers_run_now() {
+        let mut app = super::super::tests::make_test_app().await;
+        let dir = tempdir().unwrap();
+        app.config.cwd = dir.path().to_path_buf().abs();
+        write_test_disabled_job_workflow(app.config.cwd.as_path());
+        let workflow_path = app
+            .config
+            .cwd
+            .as_path()
+            .join(".codex/workflows/manual.yaml");
+
+        app.open_workflow_control_view(WorkflowControlsDestination::Job {
+            workflow_path,
+            job_name: "notify".to_string(),
+        });
+        let popup = render_bottom_popup(&app.chat_widget, /*width*/ 100);
+        assert!(popup.contains("Run Now             Run this job immediately"));
+        assert!(!popup.contains("This job is disabled."));
+    }
+
+    #[tokio::test]
     async fn workflow_manual_triggers_popup_snapshot() {
         let mut app = super::super::tests::make_test_app().await;
         let dir = tempdir().unwrap();
@@ -1324,6 +1621,26 @@ jobs:
         });
         let popup = render_bottom_popup(&app.chat_widget, /*width*/ 100);
         insta::assert_snapshot!("workflow_manual_triggers_popup", popup);
+    }
+
+    #[tokio::test]
+    async fn workflow_manual_trigger_popup_snapshot() {
+        let mut app = super::super::tests::make_test_app().await;
+        let dir = tempdir().unwrap();
+        app.config.cwd = dir.path().to_path_buf().abs();
+        write_test_manual_workflow(app.config.cwd.as_path());
+        let workflow_path = app
+            .config
+            .cwd
+            .as_path()
+            .join(".codex/workflows/manual.yaml");
+
+        app.open_workflow_control_view(WorkflowControlsDestination::ManualTrigger {
+            workflow_path,
+            trigger_id: "review_backlog".to_string(),
+        });
+        let popup = render_bottom_popup(&app.chat_widget, /*width*/ 100);
+        insta::assert_snapshot!("workflow_manual_trigger_popup", popup);
     }
 
     #[test]
