@@ -29,8 +29,28 @@ def sdk_root() -> Path:
     return repo_root() / "sdk" / "python"
 
 
-def python_runtime_root() -> Path:
-    return repo_root() / "sdk" / "python-runtime"
+def python_runtime_root(runtime_package: str = "default") -> Path:
+    if runtime_package == "default":
+        return repo_root() / "sdk" / "python-runtime"
+    if runtime_package == "enhanced":
+        return repo_root() / "sdk" / "python-runtime-enhanced"
+    raise RuntimeError(f"Unsupported runtime package: {runtime_package}")
+
+
+def runtime_python_package_dir(runtime_package: str = "default") -> str:
+    if runtime_package == "default":
+        return "codex_cli_bin"
+    if runtime_package == "enhanced":
+        return "codex_enhanced"
+    raise RuntimeError(f"Unsupported runtime package: {runtime_package}")
+
+
+def runtime_distribution_name(runtime_package: str = "default") -> str:
+    if runtime_package == "default":
+        return RUNTIME_DISTRIBUTION_NAME
+    if runtime_package == "enhanced":
+        return "codex-enhanced"
+    raise RuntimeError(f"Unsupported runtime package: {runtime_package}")
 
 
 def schema_bundle_path() -> Path:
@@ -56,8 +76,14 @@ def runtime_binary_name() -> str:
     return "codex.exe" if _is_windows() else "codex"
 
 
-def staged_runtime_bin_path(root: Path) -> Path:
-    return root / "src" / "codex_cli_bin" / "bin" / runtime_binary_name()
+def staged_runtime_bin_path(root: Path, runtime_package: str = "default") -> Path:
+    return (
+        root
+        / "src"
+        / runtime_python_package_dir(runtime_package)
+        / "bin"
+        / runtime_binary_name()
+    )
 
 
 def run(cmd: list[str], cwd: Path) -> None:
@@ -210,20 +236,23 @@ def stage_python_runtime_package(
     staging_dir: Path,
     codex_version: str,
     binary_path: Path,
+    runtime_package: str = "default",
     platform_tag: str | None = None,
 ) -> Path:
     package_version = normalize_codex_version(codex_version)
-    _copy_package_tree(python_runtime_root(), staging_dir)
+    _copy_package_tree(python_runtime_root(runtime_package), staging_dir)
 
     pyproject_path = staging_dir / "pyproject.toml"
     pyproject_text = pyproject_path.read_text()
-    pyproject_text = _rewrite_project_name(pyproject_text, RUNTIME_DISTRIBUTION_NAME)
+    pyproject_text = _rewrite_project_name(
+        pyproject_text, runtime_distribution_name(runtime_package)
+    )
     pyproject_text = _rewrite_project_version(pyproject_text, package_version)
     if platform_tag is not None:
         pyproject_text = _rewrite_runtime_platform_tag(pyproject_text, platform_tag)
     pyproject_path.write_text(pyproject_text)
 
-    out_bin = staged_runtime_bin_path(staging_dir)
+    out_bin = staged_runtime_bin_path(staging_dir, runtime_package)
     out_bin.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(binary_path, out_bin)
     if not _is_windows():
@@ -632,7 +661,7 @@ class PublicFieldSpec:
 class CliOps:
     generate_types: Callable[[], None]
     stage_python_sdk_package: Callable[[Path, str], Path]
-    stage_python_runtime_package: Callable[[Path, str, Path, str | None], Path]
+    stage_python_runtime_package: Callable[[Path, str, Path, str, str | None], Path]
     current_sdk_version: Callable[[], str]
 
 
@@ -1047,6 +1076,12 @@ def build_parser() -> argparse.ArgumentParser:
             "macosx_11_0_arm64 or musllinux_1_1_x86_64."
         ),
     )
+    stage_runtime_parser.add_argument(
+        "--runtime-package",
+        choices=["default", "enhanced"],
+        default="default",
+        help="Runtime package template to stage",
+    )
     return parser
 
 
@@ -1100,6 +1135,7 @@ def run_command(args: argparse.Namespace, ops: CliOps) -> None:
             args.staging_dir,
             codex_version,
             args.runtime_binary.resolve(),
+            args.runtime_package,
             args.platform_tag,
         )
 

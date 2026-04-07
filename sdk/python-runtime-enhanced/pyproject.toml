@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling>=1.24.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codex-enhanced"
+version = "0.1.22"
+description = "Enhanced Codex CLI with loop automation, Feishu clawbot support, and fast session respawn"
+readme = "README.md"
+requires-python = ">=3"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Piping" }]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+]
+
+[project.urls]
+Homepage = "https://codex-enhanced.com"
+Repository = "https://github.com/Piping/codex-enhanced"
+Issues = "https://github.com/Piping/codex-enhanced/issues"
+
+[project.scripts]
+codex-enhanced = "codex_enhanced.__main__:main"
+
+[tool.hatch.build]
+exclude = [
+  ".venv/**",
+  ".pytest_cache/**",
+  "dist/**",
+  "build/**",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/codex_enhanced"]
+include = ["src/codex_enhanced/bin/**"]
+
+[tool.hatch.build.targets.wheel.hooks.custom]
+
+[tool.hatch.build.targets.sdist]
+
+[tool.hatch.build.targets.sdist.hooks.custom]

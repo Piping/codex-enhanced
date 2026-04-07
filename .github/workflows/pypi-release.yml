@@ -1,0 +1,234 @@
+name: pypi-release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing tag to build and publish, for example v0.1.12
+        required: true
+        type: string
+      artifact_run_id:
+        description: Existing pypi-release run id whose wheel artifacts should be reused for publish
+        required: false
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name || inputs.release_tag }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      release_version: ${{ steps.meta.outputs.release_version }}
+      checkout_ref: ${{ steps.meta.outputs.checkout_ref }}
+      artifact_run_id: ${{ steps.meta.outputs.artifact_run_id }}
+      reuse_artifacts: ${{ steps.meta.outputs.reuse_artifacts }}
+    steps:
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            release_tag="${{ inputs.release_tag }}"
+            checkout_ref="refs/tags/${release_tag}"
+          else
+            release_tag="${GITHUB_REF_NAME}"
+            checkout_ref="${GITHUB_REF}"
+          fi
+
+          [[ "${release_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
+            || { echo "Release tag ${release_tag} is not in the expected format."; exit 1; }
+
+          echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
+          echo "release_version=${release_tag#v}" >> "$GITHUB_OUTPUT"
+          echo "checkout_ref=${checkout_ref}" >> "$GITHUB_OUTPUT"
+          artifact_run_id="${{ inputs.artifact_run_id }}"
+          if [[ -n "${artifact_run_id}" ]]; then
+            echo "artifact_run_id=${artifact_run_id}" >> "$GITHUB_OUTPUT"
+            echo "reuse_artifacts=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "artifact_run_id=" >> "$GITHUB_OUTPUT"
+            echo "reuse_artifacts=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout release ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.meta.outputs.checkout_ref }}
+
+      - name: Validate tag matches codex-enhanced runtime version
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_ver="$(grep -m1 '^version' sdk/python-runtime-enhanced/pyproject.toml | sed -E 's/version *= *"([^"]+)".*/\1/')"
+          tag_ver="${{ steps.meta.outputs.release_version }}"
+          [[ "${tag_ver}" == "${runtime_ver}" ]] \
+            || { echo "Tag version ${tag_ver} does not match sdk/python-runtime-enhanced ${runtime_ver}."; exit 1; }
+
+  build:
+    needs: prepare
+    name: build-wheel-${{ matrix.target }}
+    if: ${{ needs.prepare.outputs.reuse_artifacts != 'true' }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: ""
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            binary_name: codex
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            binary_name: codex
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            binary_name: codex
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            binary_name: codex.exe
+    steps:
+      - name: Checkout release ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+
+      - uses: dtolnay/rust-toolchain@1.93.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Python build dependencies
+        shell: bash
+        run: python -m pip install --upgrade build hatchling packaging
+
+      - name: Clear workspace build rustflags for CI release builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_ENCODED_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_BUILD_RUSTFLAGS=" >> "$GITHUB_ENV"
+
+      - name: Use default macOS linker
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_ENCODED_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_BUILD_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS=" >> "$GITHUB_ENV"
+
+      - name: Install Linux build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libcap-dev pkg-config protobuf-compiler
+
+      - name: Install macOS build dependencies
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v protoc >/dev/null 2>&1; then
+            brew install protobuf
+          fi
+
+      - name: Install Windows build dependencies
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          if (-not (Get-Command protoc -ErrorAction SilentlyContinue)) {
+            choco install protoc -y --no-progress
+          }
+
+      - name: Build release codex binary
+        shell: bash
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --target "${{ matrix.target }}" --bin codex
+
+      - name: Stage codex-enhanced runtime package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python sdk/python/scripts/update_sdk_artifacts.py \
+            stage-runtime \
+            "${RUNNER_TEMP}/codex-enhanced" \
+            "${GITHUB_WORKSPACE}/codex-rs/target/${{ matrix.target }}/release/${{ matrix.binary_name }}" \
+            --runtime-version "${{ needs.prepare.outputs.release_version }}" \
+            --runtime-package enhanced
+
+      - name: Build wheel
+        shell: bash
+        run: python -m build --wheel "${RUNNER_TEMP}/codex-enhanced"
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pypi-wheel-${{ matrix.target }}
+          path: ${{ runner.temp }}/codex-enhanced/dist/*
+          if-no-files-found: error
+
+  publish:
+    needs:
+      - prepare
+      - build
+    if: ${{ always() && needs.prepare.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Download wheel artifacts from current run
+        if: ${{ needs.prepare.outputs.reuse_artifacts != 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pypi-wheel-*
+          path: dist
+          merge-multiple: true
+
+      - name: Download wheel artifacts from an earlier run
+        if: ${{ needs.prepare.outputs.reuse_artifacts == 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          work_dir="$(mktemp -d)"
+          gh run download "${{ needs.prepare.outputs.artifact_run_id }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --dir "${work_dir}"
+          find "${work_dir}" -type f -name '*.whl' -exec mv {} dist/ \;
+          if ! find dist -maxdepth 1 -type f -name '*.whl' | grep -q .; then
+            echo "No wheel artifacts were downloaded from run ${{ needs.prepare.outputs.artifact_run_id }}."
+            exit 1
+          fi
+
+      - name: Publish codex-enhanced wheels to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          skip-existing: true
+          verbose: true
