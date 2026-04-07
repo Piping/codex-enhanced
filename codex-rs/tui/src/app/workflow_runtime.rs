@@ -10,7 +10,6 @@ use super::workflow_definition::ordered_jobs_for_roots;
 use super::workflow_history::WorkflowReplySource;
 use super::workflow_history::workflow_result_cell;
 use crate::app_event::AppEvent;
-use crate::app_event_sender::AppEventSender;
 use crate::app_server_session::AppServerSession;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
@@ -58,6 +57,8 @@ const WORKFLOW_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const WORKFLOW_INTERRUPT_SETTLE_TIMEOUT: Duration = Duration::from_secs(1);
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+pub(crate) type WorkflowThreadNotificationChannels =
+    Arc<tokio::sync::Mutex<HashMap<ThreadId, mpsc::UnboundedSender<ServerNotification>>>>;
 
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,7 +214,7 @@ trait WorkflowRuntimeClient: Send + Sync {
 
 pub(crate) struct AppServerWorkflowRuntimeClient {
     request_handle: AppServerRequestHandle,
-    app_event_tx: AppEventSender,
+    workflow_thread_notification_channels: WorkflowThreadNotificationChannels,
     config: Config,
     primary_thread_id: Option<ThreadId>,
     is_remote: bool,
@@ -223,13 +224,13 @@ pub(crate) struct AppServerWorkflowRuntimeClient {
 impl AppServerWorkflowRuntimeClient {
     pub(crate) fn new(
         app_server: &AppServerSession,
-        app_event_tx: AppEventSender,
+        workflow_thread_notification_channels: WorkflowThreadNotificationChannels,
         config: Config,
         primary_thread_id: Option<ThreadId>,
     ) -> Self {
         Self {
             request_handle: app_server.request_handle(),
-            app_event_tx,
+            workflow_thread_notification_channels,
             config,
             primary_thread_id,
             is_remote: app_server.is_remote(),
@@ -284,16 +285,10 @@ impl WorkflowRuntimeClient for AppServerWorkflowRuntimeClient {
                     )
                 })?;
                 let (sender, receiver) = mpsc::unbounded_channel();
-                let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-                self.app_event_tx
-                    .send(AppEvent::RegisterWorkflowThreadNotificationForwarder {
-                        thread_id,
-                        sender,
-                        ready_tx,
-                    });
-                ready_rx.await.map_err(|_| {
-                    "workflow thread notification forwarder setup was cancelled".to_string()
-                })?;
+                self.workflow_thread_notification_channels
+                    .lock()
+                    .await
+                    .insert(thread_id, sender);
                 return Ok(WorkflowThreadSession {
                     thread_id: response.thread.id,
                     cwd: response.cwd,
@@ -320,16 +315,10 @@ impl WorkflowRuntimeClient for AppServerWorkflowRuntimeClient {
                 )
             })?;
             let (sender, receiver) = mpsc::unbounded_channel();
-            let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-            self.app_event_tx
-                .send(AppEvent::RegisterWorkflowThreadNotificationForwarder {
-                    thread_id,
-                    sender,
-                    ready_tx,
-                });
-            ready_rx.await.map_err(|_| {
-                "workflow thread notification forwarder setup was cancelled".to_string()
-            })?;
+            self.workflow_thread_notification_channels
+                .lock()
+                .await
+                .insert(thread_id, sender);
             Ok(WorkflowThreadSession {
                 thread_id: response.thread.id,
                 cwd: response.cwd,
@@ -452,10 +441,10 @@ impl WorkflowRuntimeClient for AppServerWorkflowRuntimeClient {
                 .await
                 .map_err(|err| format!("failed to unsubscribe workflow thread: {err}"));
             if let Ok(parsed_thread_id) = ThreadId::from_string(&thread_id) {
-                self.app_event_tx
-                    .send(AppEvent::UnregisterWorkflowThreadNotificationForwarder {
-                        thread_id: parsed_thread_id,
-                    });
+                self.workflow_thread_notification_channels
+                    .lock()
+                    .await
+                    .remove(&parsed_thread_id);
             }
             result.map(|_| ())
         })
@@ -474,7 +463,7 @@ impl App {
             .map_err(|error| format!("failed to load workflows: {error}"))?;
         let client = AppServerWorkflowRuntimeClient::new(
             app_server,
-            self.app_event_tx.clone(),
+            self.workflow_thread_notification_channels.clone(),
             self.config.clone(),
             self.primary_thread_id,
         );
@@ -695,7 +684,7 @@ impl App {
             .next_background_run_id(target.workflow_name(), target.slot_key());
         let runtime_client = AppServerWorkflowRuntimeClient::new(
             app_server,
-            self.app_event_tx.clone(),
+            self.workflow_thread_notification_channels.clone(),
             self.config.clone(),
             self.primary_thread_id,
         );
@@ -1563,10 +1552,9 @@ jobs:
         let app_server = crate::start_embedded_app_server_for_picker(&config)
             .await
             .expect("embedded app server");
-        let (app_event_tx, _app_event_rx) = tokio::sync::mpsc::unbounded_channel();
         let client = AppServerWorkflowRuntimeClient::new(
             &app_server,
-            crate::app_event_sender::AppEventSender::new(app_event_tx),
+            Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             config,
             /*primary_thread_id*/ None,
         );
@@ -1638,19 +1626,12 @@ jobs:
                 .as_ref()
                 .is_some_and(|path| !path.exists())
         );
-        let (app_event_tx, mut app_event_rx) = tokio::sync::mpsc::unbounded_channel();
-        tokio::spawn(async move {
-            let Some(AppEvent::RegisterWorkflowThreadNotificationForwarder { ready_tx, .. }) =
-                app_event_rx.recv().await
-            else {
-                panic!("expected workflow notification registration event");
-            };
-            let _ = ready_tx.send(());
-        });
+        let workflow_thread_notification_channels =
+            Arc::new(tokio::sync::Mutex::new(HashMap::new()));
 
         let client = AppServerWorkflowRuntimeClient::new(
             &app_server,
-            crate::app_event_sender::AppEventSender::new(app_event_tx),
+            workflow_thread_notification_channels.clone(),
             config,
             Some(primary.session.thread_id),
         );
@@ -1662,6 +1643,17 @@ jobs:
         assert_ne!(
             workflow_thread.thread_id,
             primary.session.thread_id.to_string()
+        );
+        let registered_thread_ids = workflow_thread_notification_channels
+            .lock()
+            .await
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(registered_thread_ids.len(), 1);
+        assert_eq!(
+            registered_thread_ids[0].to_string(),
+            workflow_thread.thread_id
         );
     }
 }

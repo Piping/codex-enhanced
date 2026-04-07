@@ -1102,8 +1102,7 @@ pub(crate) struct App {
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
-    workflow_thread_notification_channels:
-        HashMap<ThreadId, mpsc::UnboundedSender<ServerNotification>>,
+    workflow_thread_notification_channels: workflow_runtime::WorkflowThreadNotificationChannels,
     workflow_scheduler: WorkflowSchedulerState,
     workflow_history: WorkflowHistoryState,
     btw_session: Option<BtwSessionState>,
@@ -2710,6 +2709,11 @@ impl App {
                 app_server
                     .thread_background_terminals_clean(thread_id)
                     .await?;
+                let stopped_workflow_runs =
+                    self.workflow_scheduler.stop_active_workflow_runs().await;
+                if stopped_workflow_runs > 0 {
+                    self.sync_background_workflow_status();
+                }
                 Ok(true)
             }
             AppCommandView::RealtimeConversationStart(params) => {
@@ -4229,7 +4233,9 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
-            workflow_thread_notification_channels: HashMap::new(),
+            workflow_thread_notification_channels: Arc::new(
+                tokio::sync::Mutex::new(HashMap::new()),
+            ),
             workflow_scheduler: WorkflowSchedulerState::default(),
             workflow_history: WorkflowHistoryState::default(),
             btw_session: None,
@@ -4743,19 +4749,6 @@ impl App {
                 for cell in cells {
                     self.insert_visible_history_cell(tui, cell);
                 }
-            }
-            AppEvent::RegisterWorkflowThreadNotificationForwarder {
-                thread_id,
-                sender,
-                ready_tx,
-            } => {
-                self.workflow_thread_notification_channels
-                    .insert(thread_id, sender);
-                let _ = ready_tx.send(());
-            }
-            AppEvent::UnregisterWorkflowThreadNotificationForwarder { thread_id } => {
-                self.workflow_thread_notification_channels
-                    .remove(&thread_id);
             }
             AppEvent::StartBtwDiscussion { prompt } => {
                 self.start_btw_discussion(app_server, prompt).await;
@@ -9902,7 +9895,9 @@ guardian_approval = true
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
-            workflow_thread_notification_channels: HashMap::new(),
+            workflow_thread_notification_channels: Arc::new(
+                tokio::sync::Mutex::new(HashMap::new()),
+            ),
             workflow_scheduler: WorkflowSchedulerState::default(),
             workflow_history: WorkflowHistoryState::default(),
             btw_session: None,
@@ -9971,7 +9966,9 @@ guardian_approval = true
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),
-                workflow_thread_notification_channels: HashMap::new(),
+                workflow_thread_notification_channels: Arc::new(tokio::sync::Mutex::new(
+                    HashMap::new(),
+                )),
                 workflow_scheduler: WorkflowSchedulerState::default(),
                 workflow_history: WorkflowHistoryState::default(),
                 btw_session: None,
@@ -12343,6 +12340,62 @@ model = "gpt-5.2"
     }
 
     #[tokio::test]
+    async fn clean_background_terminals_stops_background_workflows() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await?;
+        let thread_id = started.session.thread_id;
+        app.primary_thread_id = Some(thread_id);
+        app.primary_session_configured = Some(started.session);
+        app.active_thread_id = Some(thread_id);
+
+        let run_id = app
+            .workflow_scheduler
+            .next_background_run_id("director", "review_backlog");
+        let cancellation = CancellationToken::new();
+        let cancellation_for_task = cancellation.clone();
+        app.workflow_scheduler.register_background_workflow_run(
+            run_id,
+            workflow_runtime::BackgroundWorkflowRunTarget::Job {
+                workflow_name: "director".to_string(),
+                job_name: "review_backlog".to_string(),
+            },
+            cancellation,
+            tokio::spawn(async move {
+                cancellation_for_task.cancelled().await;
+            }),
+        );
+        app.workflow_scheduler
+            .enqueue_trigger_run("director".to_string(), "triage".to_string());
+        app.sync_background_workflow_status();
+
+        assert_eq!(
+            app.background_workflow_labels(),
+            vec!["director · review_backlog".to_string()]
+        );
+        assert_eq!(
+            app.queued_trigger_labels(),
+            vec!["director · triage".to_string()]
+        );
+
+        let handled = app
+            .try_submit_active_thread_op_via_app_server(
+                &mut app_server,
+                thread_id,
+                &AppCommand::clean_background_terminals(),
+            )
+            .await?;
+
+        assert!(handled);
+        assert!(app.background_workflow_labels().is_empty());
+        assert!(app.queued_trigger_labels().is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn manual_triggers_use_a_global_fifo_queue() {
         let mut app = make_test_app().await;
 
@@ -12459,6 +12512,8 @@ model = "gpt-5.2"
         let thread_id = ThreadId::new();
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
         app.workflow_thread_notification_channels
+            .lock()
+            .await
             .insert(thread_id, sender);
 
         let notification = ServerNotification::ItemCompleted(ItemCompletedNotification {

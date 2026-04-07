@@ -7638,7 +7638,7 @@ impl ChatWidget {
     fn clean_background_terminals(&mut self) {
         self.submit_op(AppCommand::clean_background_terminals());
         self.add_info_message(
-            "Stopping all background terminals.".to_string(),
+            "Stopping all background tasks.".to_string(),
             /*hint*/ None,
         );
     }

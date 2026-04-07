@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+assertion_line: 405
+expression: rendered
+---
+• Stopping all background tasks.
