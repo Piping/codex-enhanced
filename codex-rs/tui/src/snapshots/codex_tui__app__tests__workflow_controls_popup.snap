@@ -3,11 +3,15 @@ source: tui/src/app.rs
 expression: popup
 ---
   Workflow
-  Manage workflow files, browse jobs, and inspect current background status.
+  Manage workflow files, jobs, and manual triggers directly.
 
   Type to search workflows
-› Background Tasks  Insert a background task snapshot into the transcript. /ps shows the same live
-                    workflow state.
-  director          manual.yaml · 2 manual triggers · 2 jobs
+› Background Tasks               Insert a background task snapshot into the transcript. /ps shows
+                                 the same live workflow state.
+  director - Edit workflow.yaml  Open manual.yaml in your editor.
+  director - summarize           Workflow job
+  director - notify              Workflow job
+  director - review_backlog      Manual trigger · Enabled
+  director - triage              Manual trigger · Enabled
 
   Press enter to confirm or esc to go back

@@ -5111,6 +5111,12 @@ See the Codex keymap documentation for supported actions and examples."
                 self.edit_workflow_file_from_ui(tui, workflow_path, reopen)
                     .await;
             }
+            AppEvent::ToggleWorkflowTriggerEnabled {
+                workflow_path,
+                trigger_id,
+            } => {
+                self.toggle_workflow_trigger_enabled_from_ui(workflow_path, trigger_id);
+            }
             AppEvent::ToggleWorkflowJobEnabled {
                 workflow_path,
                 job_name,
