@@ -80,6 +80,7 @@ mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
 pub(crate) mod custom_prompt_view;
+mod custom_prompts;
 mod experimental_features_view;
 mod file_search_popup;
 mod footer;
@@ -156,6 +157,9 @@ pub(crate) use chat_composer::InputResult;
 
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::status_indicator_widget::StatusIndicatorWidget;
+pub(crate) use custom_prompts::CustomPrompt;
+pub(crate) use custom_prompts::PROMPTS_CMD_PREFIX;
+pub(crate) use custom_prompts::discover_prompts_in;
 pub(crate) use experimental_features_view::ExperimentalFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 #[cfg(test)]
@@ -255,6 +259,11 @@ impl BottomPane {
 
     pub fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.composer.set_skill_mentions(skills);
+        self.request_redraw();
+    }
+
+    pub fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
+        self.composer.set_custom_prompts(prompts);
         self.request_redraw();
     }
 

@@ -108,10 +108,16 @@ struct PageLoadRequest {
     sort_key: ThreadSortKey,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum ProviderFilter {
     Any,
     MatchDefault(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionPickerProviderScope {
+    AllProviders,
+    CurrentProfile,
 }
 
 type PageLoader = Arc<dyn Fn(PageLoadRequest) + Send + Sync>;
@@ -124,11 +130,17 @@ enum BackgroundEvent {
     },
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum PageCursor {
     #[allow(dead_code)]
     Rollout(Cursor),
-    AppServer(String),
+    AppServer(AppServerPageCursor),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AppServerPageCursor {
+    Local(Option<String>),
+    Global(Option<String>),
 }
 
 struct PickerPage {
@@ -151,39 +163,62 @@ struct PickerPage {
 /// new sessions appear during pagination.
 ///
 /// Filtering happens in two layers:
-/// 1. Provider and source filtering at the backend (only interactive CLI sessions
-///    for the current model provider).
-/// 2. Working-directory filtering at the picker (unless `--all` is passed).
+/// 1. Provider and source filtering at the backend.
+/// 2. Query filtering at the picker, while presentation order determines whether
+///    current-working-directory sessions are grouped ahead of the rest of global
+///    history.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionPickerOrder {
+    GlobalTime,
+    LocalGroupFirst,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PickerFilters {
+    provider_filter: ProviderFilter,
+    filter_cwd: Option<PathBuf>,
+}
+
 #[allow(dead_code)]
 pub async fn run_resume_picker(
     tui: &mut Tui,
     config: &Config,
-    show_all: bool,
+    order: SessionPickerOrder,
 ) -> Result<SessionSelection> {
-    run_session_picker(tui, config, show_all, SessionPickerAction::Resume).await
+    run_session_picker(tui, config, order, SessionPickerAction::Resume).await
 }
 
 pub async fn run_resume_picker_with_app_server(
     tui: &mut Tui,
     config: &Config,
-    show_all: bool,
+    order: SessionPickerOrder,
+    provider_scope: SessionPickerProviderScope,
     include_non_interactive: bool,
     app_server: AppServerSession,
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
     let is_remote = app_server.is_remote();
-    let cwd_filter = if show_all {
-        None
-    } else {
-        app_server.remote_cwd_override().map(Path::to_path_buf)
+    let filters = PickerFilters {
+        provider_filter: provider_filter_for_scope(
+            is_remote,
+            &config.model_provider_id,
+            provider_scope,
+        ),
+        filter_cwd: picker_filter_cwd(config, is_remote),
     };
     run_session_picker_with_loader(
         tui,
         config,
-        show_all,
+        order,
         SessionPickerAction::Resume,
-        is_remote,
-        spawn_app_server_page_loader(app_server, cwd_filter, include_non_interactive, bg_tx),
+        filters.clone(),
+        spawn_app_server_page_loader(
+            app_server,
+            order,
+            filters.filter_cwd.clone(),
+            include_non_interactive,
+            bg_tx,
+        ),
         bg_rx,
     )
     .await
@@ -192,24 +227,31 @@ pub async fn run_resume_picker_with_app_server(
 pub async fn run_fork_picker_with_app_server(
     tui: &mut Tui,
     config: &Config,
-    show_all: bool,
+    order: SessionPickerOrder,
     app_server: AppServerSession,
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
     let is_remote = app_server.is_remote();
-    let cwd_filter = if show_all {
-        None
-    } else {
-        app_server.remote_cwd_override().map(Path::to_path_buf)
+    let filters = PickerFilters {
+        provider_filter: provider_filter_for_scope(
+            is_remote,
+            &config.model_provider_id,
+            SessionPickerProviderScope::CurrentProfile,
+        ),
+        filter_cwd: picker_filter_cwd(config, is_remote),
     };
     run_session_picker_with_loader(
         tui,
         config,
-        show_all,
+        order,
         SessionPickerAction::Fork,
-        is_remote,
+        filters.clone(),
         spawn_app_server_page_loader(
-            app_server, cwd_filter, /*include_non_interactive*/ false, bg_tx,
+            app_server,
+            order,
+            filters.filter_cwd.clone(),
+            /*include_non_interactive*/ false,
+            bg_tx,
         ),
         bg_rx,
     )
@@ -220,16 +262,23 @@ pub async fn run_fork_picker_with_app_server(
 async fn run_session_picker(
     tui: &mut Tui,
     config: &Config,
-    show_all: bool,
+    order: SessionPickerOrder,
     action: SessionPickerAction,
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
     run_session_picker_with_loader(
         tui,
         config,
-        show_all,
+        order,
         action,
-        /*is_remote*/ false,
+        PickerFilters {
+            provider_filter: provider_filter_for_scope(
+                /*is_remote*/ false,
+                &config.model_provider_id,
+                SessionPickerProviderScope::CurrentProfile,
+            ),
+            filter_cwd: picker_filter_cwd(config, /*is_remote*/ false),
+        },
         spawn_rollout_page_loader(config, bg_tx),
         bg_rx,
     )
@@ -239,35 +288,22 @@ async fn run_session_picker(
 async fn run_session_picker_with_loader(
     tui: &mut Tui,
     config: &Config,
-    show_all: bool,
+    order: SessionPickerOrder,
     action: SessionPickerAction,
-    is_remote: bool,
+    filters: PickerFilters,
     page_loader: PageLoader,
     bg_rx: mpsc::UnboundedReceiver<BackgroundEvent>,
 ) -> Result<SessionSelection> {
     let alt = AltScreenGuard::enter(tui);
-    let provider_filter = if is_remote {
-        ProviderFilter::Any
-    } else {
-        ProviderFilter::MatchDefault(config.model_provider_id.to_string())
-    };
     let codex_home = config.codex_home.as_path();
-    let filter_cwd = if show_all || is_remote {
-        // Remote sessions live in the server's filesystem namespace, so the client
-        // process cwd is not a meaningful row filter. If the user provided an
-        // explicit remote --cd, filtering is handled server-side in thread/list.
-        None
-    } else {
-        std::env::current_dir().ok()
-    };
 
     let mut state = PickerState::new(
         codex_home.to_path_buf(),
         alt.tui.frame_requester(),
         page_loader,
-        provider_filter,
-        show_all,
-        filter_cwd,
+        filters.provider_filter,
+        order,
+        filters.filter_cwd,
         action,
     );
     state.start_initial_load();
@@ -353,7 +389,8 @@ fn spawn_rollout_page_loader(
 
 fn spawn_app_server_page_loader(
     app_server: AppServerSession,
-    cwd_filter: Option<PathBuf>,
+    order: SessionPickerOrder,
+    filter_cwd: Option<PathBuf>,
     include_non_interactive: bool,
     bg_tx: mpsc::UnboundedSender<BackgroundEvent>,
 ) -> PageLoader {
@@ -369,8 +406,9 @@ fn spawn_app_server_page_loader(
             };
             let page = load_app_server_page(
                 &mut app_server,
+                order,
+                filter_cwd.as_deref(),
                 cursor,
-                cwd_filter.as_deref(),
                 request.provider_filter,
                 request.sort_key,
                 include_non_interactive,
@@ -438,7 +476,7 @@ struct PickerState {
     page_loader: PageLoader,
     view_rows: Option<usize>,
     provider_filter: ProviderFilter,
-    show_all: bool,
+    order: SessionPickerOrder,
     filter_cwd: Option<PathBuf>,
     action: SessionPickerAction,
     sort_key: ThreadSortKey,
@@ -484,12 +522,14 @@ impl LoadingState {
 
 async fn load_app_server_page(
     app_server: &mut AppServerSession,
-    cursor: Option<String>,
-    cwd_filter: Option<&Path>,
+    order: SessionPickerOrder,
+    filter_cwd: Option<&Path>,
+    cursor: Option<AppServerPageCursor>,
     provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
     include_non_interactive: bool,
 ) -> std::io::Result<PickerPage> {
+    let (cursor, cwd_filter, scope) = app_server_page_request(order, filter_cwd, cursor.as_ref());
     let response = app_server
         .thread_list(thread_list_params(
             cursor,
@@ -508,10 +548,71 @@ async fn load_app_server_page(
             .into_iter()
             .filter_map(row_from_app_server_thread)
             .collect(),
-        next_cursor: response.next_cursor.map(PageCursor::AppServer),
+        next_cursor: next_app_server_page_cursor(scope, response.next_cursor),
         num_scanned_files,
         reached_scan_cap: false,
     })
+}
+
+fn picker_filter_cwd(config: &Config, is_remote: bool) -> Option<PathBuf> {
+    if is_remote {
+        // Remote sessions live in the server's filesystem namespace, so the client
+        // process cwd is not a meaningful local-priority hint.
+        None
+    } else {
+        Some(config.cwd.to_path_buf())
+    }
+}
+
+fn provider_filter_for_scope(
+    is_remote: bool,
+    default_provider: &str,
+    provider_scope: SessionPickerProviderScope,
+) -> ProviderFilter {
+    if is_remote || provider_scope == SessionPickerProviderScope::AllProviders {
+        ProviderFilter::Any
+    } else {
+        ProviderFilter::MatchDefault(default_provider.to_string())
+    }
+}
+
+fn app_server_page_request<'a>(
+    order: SessionPickerOrder,
+    filter_cwd: Option<&'a Path>,
+    cursor: Option<&AppServerPageCursor>,
+) -> (Option<String>, Option<&'a Path>, AppServerPageScope) {
+    match cursor {
+        Some(AppServerPageCursor::Local(cursor)) => {
+            (cursor.clone(), filter_cwd, AppServerPageScope::Local)
+        }
+        Some(AppServerPageCursor::Global(cursor)) => {
+            (cursor.clone(), None, AppServerPageScope::Global)
+        }
+        None if order == SessionPickerOrder::LocalGroupFirst && filter_cwd.is_some() => {
+            (None, filter_cwd, AppServerPageScope::Local)
+        }
+        None => (None, None, AppServerPageScope::Global),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AppServerPageScope {
+    Local,
+    Global,
+}
+
+fn next_app_server_page_cursor(
+    scope: AppServerPageScope,
+    next_cursor: Option<String>,
+) -> Option<PageCursor> {
+    match scope {
+        AppServerPageScope::Local => Some(PageCursor::AppServer(match next_cursor {
+            Some(cursor) => AppServerPageCursor::Local(Some(cursor)),
+            None => AppServerPageCursor::Global(None),
+        })),
+        AppServerPageScope::Global => next_cursor
+            .map(|cursor| PageCursor::AppServer(AppServerPageCursor::Global(Some(cursor)))),
+    }
 }
 
 impl SearchState {
@@ -576,7 +677,7 @@ impl PickerState {
         requester: FrameRequester,
         page_loader: PageLoader,
         provider_filter: ProviderFilter,
-        show_all: bool,
+        order: SessionPickerOrder,
         filter_cwd: Option<PathBuf>,
         action: SessionPickerAction,
     ) -> Self {
@@ -602,7 +703,7 @@ impl PickerState {
             page_loader,
             view_rows: None,
             provider_filter,
-            show_all,
+            order,
             filter_cwd,
             action,
             sort_key: ThreadSortKey::UpdatedAt,
@@ -679,8 +780,8 @@ impl PickerState {
                     self.request_frame();
                 }
             }
-            KeyCode::PageDown => {
-                if !self.filtered_rows.is_empty() {
+            KeyCode::PageDown
+                if !self.filtered_rows.is_empty() => {
                     let step = self.view_rows.unwrap_or(10).max(1);
                     let max_index = self.filtered_rows.len().saturating_sub(1);
                     self.selected = (self.selected + step).min(max_index);
@@ -688,7 +789,6 @@ impl PickerState {
                     self.maybe_load_more_for_scroll();
                     self.request_frame();
                 }
-            }
             KeyCode::Tab => {
                 self.toggle_sort_key();
                 self.request_frame();
@@ -698,18 +798,17 @@ impl PickerState {
                 new_query.pop();
                 self.set_query(new_query);
             }
-            KeyCode::Char(c) => {
+            KeyCode::Char(c)
                 // basic text input for search
                 if !key
                     .modifiers
                     .contains(crossterm::event::KeyModifiers::CONTROL)
                     && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT)
-                {
+                => {
                     let mut new_query = self.query.clone();
                     new_query.push(c);
                     self.set_query(new_query);
                 }
-            }
             _ => {}
         }
         Ok(None)
@@ -853,15 +952,23 @@ impl PickerState {
     }
 
     fn apply_filter(&mut self) {
-        let base_iter = self
-            .all_rows
-            .iter()
-            .filter(|row| self.row_matches_filter(row));
         if self.query.is_empty() {
-            self.filtered_rows = base_iter.cloned().collect();
+            self.filtered_rows = self.all_rows.clone();
         } else {
             let q = self.query.to_lowercase();
-            self.filtered_rows = base_iter.filter(|r| r.matches_query(&q)).cloned().collect();
+            self.filtered_rows = self
+                .all_rows
+                .iter()
+                .filter(|row| row.matches_query(&q))
+                .cloned()
+                .collect();
+        }
+        if self.order == SessionPickerOrder::LocalGroupFirst {
+            let filter_cwd = self.filter_cwd.clone();
+            self.filtered_rows.sort_by_key(|row| {
+                let is_local = Self::row_matches_local_cwd(row, filter_cwd.as_deref());
+                !is_local
+            });
         }
         if self.selected >= self.filtered_rows.len() {
             self.selected = self.filtered_rows.len().saturating_sub(1);
@@ -873,12 +980,9 @@ impl PickerState {
         self.request_frame();
     }
 
-    fn row_matches_filter(&self, row: &Row) -> bool {
-        if self.show_all {
-            return true;
-        }
-        let Some(filter_cwd) = self.filter_cwd.as_ref() else {
-            return true;
+    fn row_matches_local_cwd(row: &Row, filter_cwd: Option<&Path>) -> bool {
+        let Some(filter_cwd) = filter_cwd else {
+            return false;
         };
         let Some(row_cwd) = row.cwd.as_ref() else {
             return false;
@@ -1136,7 +1240,9 @@ fn thread_list_params(
             ThreadSortKey::UpdatedAt => AppServerThreadSortKey::UpdatedAt,
         }),
         model_providers: match provider_filter {
-            ProviderFilter::Any => None,
+            // App-server interprets `modelProviders = null` as "current provider only";
+            // send an explicit empty list to request unfiltered local history.
+            ProviderFilter::Any => Some(vec![]),
             ProviderFilter::MatchDefault(default_provider) => Some(vec![default_provider]),
         },
         source_kinds: (!include_non_interactive)
@@ -1188,7 +1294,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
 
         let metrics = calculate_column_metrics(
             &state.filtered_rows,
-            state.show_all,
+            /*include_cwd*/ true,
             state.relative_time_reference.unwrap_or_else(Utc::now),
         );
 
@@ -1859,22 +1965,22 @@ mod tests {
     }
 
     #[test]
-    fn remote_thread_list_params_omit_provider_filter() {
+    fn any_provider_thread_list_params_request_unfiltered_history() {
         let params = thread_list_params(
             Some(String::from("cursor-1")),
-            Some(Path::new("repo/on/server")),
+            /*cwd_filter*/ None,
             ProviderFilter::Any,
             ThreadSortKey::UpdatedAt,
             /*include_non_interactive*/ false,
         );
 
         assert_eq!(params.cursor, Some(String::from("cursor-1")));
-        assert_eq!(params.model_providers, None);
+        assert_eq!(params.model_providers, Some(vec![]));
         assert_eq!(
             params.source_kinds,
             Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode])
         );
-        assert_eq!(params.cwd.as_deref(), Some("repo/on/server"));
+        assert_eq!(params.cwd, None);
     }
 
     #[test]
@@ -1888,22 +1994,108 @@ mod tests {
         );
 
         assert_eq!(params.cursor, Some(String::from("cursor-1")));
-        assert_eq!(params.model_providers, None);
+        assert_eq!(params.model_providers, Some(vec![]));
         assert_eq!(params.source_kinds, None);
     }
 
     #[test]
-    fn remote_picker_does_not_filter_rows_by_local_cwd() {
+    fn provider_filter_scope_can_include_all_local_sessions() {
+        assert_eq!(
+            provider_filter_for_scope(
+                /*is_remote*/ false,
+                "daz2",
+                SessionPickerProviderScope::AllProviders
+            ),
+            ProviderFilter::Any
+        );
+    }
+
+    #[test]
+    fn provider_filter_scope_keeps_current_profile_filter_for_local_sessions() {
+        assert_eq!(
+            provider_filter_for_scope(
+                /*is_remote*/ false,
+                "daz2",
+                SessionPickerProviderScope::CurrentProfile
+            ),
+            ProviderFilter::MatchDefault(String::from("daz2"))
+        );
+    }
+
+    #[test]
+    fn local_cwd_rows_are_prioritized_without_hiding_global_rows() {
         let loader: PageLoader = Arc::new(|_| {});
-        let state = PickerState::new(
+        let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
-            ProviderFilter::Any,
-            /*show_all*/ false,
-            /*filter_cwd*/ None,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            SessionPickerOrder::LocalGroupFirst,
+            Some(PathBuf::from("/repo/local")),
             SessionPickerAction::Resume,
         );
+        state.all_rows = vec![
+            Row {
+                path: Some(PathBuf::from("/tmp/global.jsonl")),
+                preview: String::from("global"),
+                thread_id: Some(ThreadId::new()),
+                thread_name: None,
+                created_at: None,
+                updated_at: None,
+                cwd: Some(PathBuf::from("/repo/elsewhere")),
+                git_branch: None,
+            },
+            Row {
+                path: Some(PathBuf::from("/tmp/local.jsonl")),
+                preview: String::from("local"),
+                thread_id: Some(ThreadId::new()),
+                thread_name: None,
+                created_at: None,
+                updated_at: None,
+                cwd: Some(PathBuf::from("/repo/local")),
+                git_branch: None,
+            },
+        ];
+
+        state.apply_filter();
+
+        let previews: Vec<&str> = state
+            .filtered_rows
+            .iter()
+            .map(|row| row.preview.as_str())
+            .collect();
+        assert_eq!(previews, vec!["local", "global"]);
+    }
+
+    #[test]
+    fn app_server_page_request_starts_with_local_scope_when_local_priority_has_cwd() {
+        let (cursor, cwd_filter, scope) = app_server_page_request(
+            SessionPickerOrder::LocalGroupFirst,
+            Some(Path::new("/repo/local")),
+            None,
+        );
+
+        assert_eq!(cursor, None);
+        assert_eq!(cwd_filter, Some(Path::new("/repo/local")));
+        assert_eq!(scope, AppServerPageScope::Local);
+    }
+
+    #[test]
+    fn next_app_server_page_cursor_transitions_from_local_to_global() {
+        assert_eq!(
+            next_app_server_page_cursor(AppServerPageScope::Local, None),
+            Some(PageCursor::AppServer(AppServerPageCursor::Global(None)))
+        );
+        assert_eq!(
+            next_app_server_page_cursor(AppServerPageScope::Local, Some(String::from("cursor-2"))),
+            Some(PageCursor::AppServer(AppServerPageCursor::Local(Some(
+                String::from("cursor-2")
+            ))))
+        );
+    }
+
+    #[test]
+    fn row_matches_local_cwd_returns_false_without_filter_cwd() {
         let row = Row {
             path: None,
             preview: String::from("remote session"),
@@ -1915,7 +2107,9 @@ mod tests {
             git_branch: None,
         };
 
-        assert!(state.row_matches_filter(&row));
+        assert!(!PickerState::row_matches_local_cwd(
+            &row, /*filter_cwd*/ None
+        ));
     }
 
     #[test]
@@ -1931,7 +2125,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
-            /*show_all*/ true,
+            SessionPickerOrder::GlobalTime,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
         );
@@ -1977,7 +2171,7 @@ mod tests {
         state.update_view_rows(/*rows*/ 3);
 
         state.relative_time_reference = Some(now);
-        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all, now);
+        let metrics = calculate_column_metrics(&state.filtered_rows, /*include_cwd*/ true, now);
 
         let width: u16 = 80;
         let height: u16 = 6;
@@ -2010,7 +2204,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
-            /*show_all*/ true,
+            SessionPickerOrder::GlobalTime,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
         );
@@ -2246,7 +2440,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
-            /*show_all*/ true,
+            SessionPickerOrder::GlobalTime,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
         );
@@ -2284,7 +2478,7 @@ mod tests {
         state.update_thread_names().await;
 
         state.relative_time_reference = Some(now);
-        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all, now);
+        let metrics = calculate_column_metrics(&state.filtered_rows, /*include_cwd*/ true, now);
 
         let width: u16 = 80;
         let height: u16 = 5;
@@ -2328,7 +2522,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
-            /*show_all*/ true,
+            SessionPickerOrder::GlobalTime,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
         );
@@ -2365,7 +2559,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
-            /*show_all*/ true,
+            SessionPickerOrder::GlobalTime,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
         );
@@ -2434,7 +2628,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
-            /*show_all*/ true,
+            SessionPickerOrder::GlobalTime,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
         );
@@ -2515,7 +2709,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
-            /*show_all*/ true,
+            SessionPickerOrder::GlobalTime,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
         );
@@ -2545,7 +2739,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
-            /*show_all*/ true,
+            SessionPickerOrder::GlobalTime,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
         );
@@ -2593,7 +2787,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
-            /*show_all*/ true,
+            SessionPickerOrder::GlobalTime,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
         );
@@ -2633,7 +2827,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
-            /*show_all*/ true,
+            SessionPickerOrder::GlobalTime,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
         );
@@ -2703,7 +2897,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
-            /*show_all*/ true,
+            SessionPickerOrder::GlobalTime,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
         );
@@ -2751,7 +2945,7 @@ mod tests {
             FrameRequester::test_dummy(),
             loader,
             ProviderFilter::MatchDefault(String::from("openai")),
-            /*show_all*/ true,
+            SessionPickerOrder::GlobalTime,
             /*filter_cwd*/ None,
             SessionPickerAction::Resume,
         );

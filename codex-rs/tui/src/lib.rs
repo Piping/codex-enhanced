@@ -592,29 +592,49 @@ async fn lookup_latest_session_target_with_app_server(
     cwd_filter: Option<&Path>,
     include_non_interactive: bool,
 ) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
-    let response = app_server
-        .thread_list(latest_session_lookup_params(
-            app_server.is_remote(),
-            config,
-            cwd_filter,
-            include_non_interactive,
-        ))
-        .await?;
-    Ok(response
-        .data
-        .into_iter()
-        .find_map(session_target_from_app_server_thread))
+    let mut cursor = None;
+    let mut fallback = None;
+
+    loop {
+        let response = app_server
+            .thread_list(latest_session_lookup_params(
+                cursor.clone(),
+                app_server.is_remote(),
+                config,
+                include_non_interactive,
+            ))
+            .await?;
+
+        for thread in response.data {
+            let matches_cwd =
+                cwd_filter.is_some_and(|cwd| app_server_thread_matches_cwd(&thread, cwd));
+            let Some(target) = session_target_from_app_server_thread(thread) else {
+                continue;
+            };
+            if fallback.is_none() {
+                fallback = Some(target.clone());
+            }
+            if matches_cwd {
+                return Ok(Some(target));
+            }
+        }
+
+        if response.next_cursor.is_none() {
+            return Ok(fallback);
+        }
+        cursor = response.next_cursor;
+    }
 }
 
 fn latest_session_lookup_params(
+    cursor: Option<String>,
     is_remote: bool,
     config: &Config,
-    cwd_filter: Option<&Path>,
     include_non_interactive: bool,
 ) -> ThreadListParams {
     ThreadListParams {
-        cursor: None,
-        limit: Some(1),
+        cursor,
+        limit: Some(100),
         sort_key: Some(AppServerThreadSortKey::UpdatedAt),
         model_providers: if is_remote {
             None
@@ -624,9 +644,19 @@ fn latest_session_lookup_params(
         source_kinds: (!include_non_interactive)
             .then_some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
         archived: Some(false),
-        cwd: cwd_filter.map(|cwd| cwd.to_string_lossy().to_string()),
+        cwd: None,
         search_term: None,
     }
+}
+
+fn app_server_thread_matches_cwd(thread: &AppServerThread, cwd_filter: &Path) -> bool {
+    if let (Ok(thread_cwd), Ok(filter_cwd)) = (
+        path_utils::normalize_for_path_comparison(&thread.cwd),
+        path_utils::normalize_for_path_comparison(cwd_filter),
+    ) {
+        return thread_cwd == filter_cwd;
+    }
+    thread.cwd == cwd_filter
 }
 
 fn config_cwd_for_app_server_target(
@@ -1248,7 +1278,11 @@ async fn run_ratatui_app(
             match resume_picker::run_fork_picker_with_app_server(
                 &mut tui,
                 &config,
-                cli.fork_show_all,
+                if cli.fork_show_all {
+                    resume_picker::SessionPickerOrder::GlobalTime
+                } else {
+                    resume_picker::SessionPickerOrder::LocalGroupFirst
+                },
                 app_server,
             )
             .await?
@@ -1315,7 +1349,12 @@ async fn run_ratatui_app(
         match resume_picker::run_resume_picker_with_app_server(
             &mut tui,
             &config,
-            cli.resume_show_all,
+            if cli.resume_show_all {
+                resume_picker::SessionPickerOrder::GlobalTime
+            } else {
+                resume_picker::SessionPickerOrder::LocalGroupFirst
+            },
+            resume_picker::SessionPickerProviderScope::CurrentProfile,
             cli.resume_include_non_interactive,
             app_server,
         )
@@ -1894,21 +1933,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn latest_session_lookup_params_keep_local_filters_for_embedded_sessions()
+    async fn latest_session_lookup_params_keep_local_provider_filter_for_embedded_sessions()
     -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let config = build_config(&temp_dir).await?;
-        let cwd = temp_dir.path().join("project");
 
         let params = latest_session_lookup_params(
-            /*is_remote*/ false,
-            &config,
-            Some(cwd.as_path()),
+            /*cursor*/ None, /*is_remote*/ false, &config,
             /*include_non_interactive*/ false,
         );
 
         assert_eq!(params.model_providers, Some(vec![config.model_provider_id]));
-        assert_eq!(params.cwd, Some(cwd.to_string_lossy().to_string()));
+        assert_eq!(params.cwd, None);
         Ok(())
     }
 
@@ -1919,7 +1955,7 @@ mod tests {
         let config = build_config(&temp_dir).await?;
 
         let params = latest_session_lookup_params(
-            /*is_remote*/ true, &config, /*cwd_filter*/ None,
+            /*cursor*/ None, /*is_remote*/ true, &config,
             /*include_non_interactive*/ false,
         );
 
@@ -1929,21 +1965,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn latest_session_lookup_params_keep_explicit_cwd_filter_for_remote_sessions()
+    async fn latest_session_lookup_params_omit_explicit_cwd_filter_for_remote_sessions()
     -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let config = build_config(&temp_dir).await?;
-        let cwd = Path::new("repo/on/server");
 
         let params = latest_session_lookup_params(
+            /*cursor*/ Some(String::from("cursor-1")),
             /*is_remote*/ true,
             &config,
-            Some(cwd),
             /*include_non_interactive*/ false,
         );
 
+        assert_eq!(params.cursor, Some(String::from("cursor-1")));
         assert_eq!(params.model_providers, None);
-        assert_eq!(params.cwd.as_deref(), Some("repo/on/server"));
+        assert_eq!(params.cwd, None);
         Ok(())
     }
 
