@@ -678,10 +678,10 @@ impl ThreadEventStore {
             ServerNotification::TurnStarted(turn) => {
                 self.active_turn_id = Some(turn.turn.id.clone());
             }
-            ServerNotification::TurnCompleted(turn) => {
-                if self.active_turn_id.as_deref() == Some(turn.turn.id.as_str()) {
-                    self.active_turn_id = None;
-                }
+            ServerNotification::TurnCompleted(turn)
+                if self.active_turn_id.as_deref() == Some(turn.turn.id.as_str()) =>
+            {
+                self.active_turn_id = None;
             }
             ServerNotification::ThreadClosed(_) => {
                 self.active_turn_id = None;
@@ -4499,8 +4499,9 @@ impl App {
                 match crate::resume_picker::run_resume_picker_with_app_server(
                     tui,
                     &self.config,
-                    /*show_all*/ false,
-                    /*include_non_interactive*/ false,
+                    crate::resume_picker::SessionPickerOrder::LocalGroupFirst,
+                    crate::resume_picker::SessionPickerProviderScope::AllProviders,
+                    /*include_non_interactive*/ true,
                     picker_app_server,
                 )
                 .await?
@@ -6680,14 +6681,10 @@ impl App {
                 code: KeyCode::Esc,
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
-            } => {
-                if self.chat_widget.is_normal_backtrack_mode()
-                    && self.chat_widget.composer_is_empty()
-                {
-                    self.handle_backtrack_esc_key(tui);
-                } else {
-                    self.chat_widget.handle_key_event(key_event);
-                }
+            } if self.chat_widget.is_normal_backtrack_mode()
+                && self.chat_widget.composer_is_empty() =>
+            {
+                self.handle_backtrack_esc_key(tui);
             }
             // Enter confirms backtrack when primed + count > 0. Otherwise pass to widget.
             KeyEvent {
