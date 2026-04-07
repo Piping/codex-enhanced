@@ -15,11 +15,11 @@ expression: render_lines(&view)
                             Reveal raw          
                             reasoning text in   
                             this TUI only.      
-  3. Hide Tool Results      Currently visible.  
-                            Collapse MCP/       
-                            custom tool result  
-                            bodies in           
-                            transcript cells.   
+  3. Hide Tool Activity     Currently visible.  
+                            Hide tool calls     
+                            and result details  
+                            in transcript       
+                            cells.              
   4. Hide Patch Diffs       Currently visible.  
                             Collapse patch/     
                             edit diff           

@@ -1766,9 +1766,11 @@ impl ChatWidget {
             return;
         };
         self.needs_final_message_separator = true;
-        let cell = history_cell::new_unified_exec_interaction(wait.command_display, String::new());
-        self.app_event_tx
-            .send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        self.add_to_history(history_cell::new_unified_exec_interaction(
+            wait.command_display,
+            String::new(),
+            self.display_preferences.clone(),
+        ));
         self.restore_reasoning_status_header();
     }
 
@@ -3848,13 +3850,19 @@ impl ChatWidget {
             self.bottom_pane.ensure_status_indicator();
             self.bottom_pane
                 .set_interrupt_hint_visible(/*visible*/ true);
-            self.terminal_title_status_kind = TerminalTitleStatusKind::WaitingForBackgroundTerminal;
-            self.set_status(
-                "Waiting for background terminal".to_string(),
-                command_display.clone(),
-                StatusDetailsCapitalization::Preserve,
-                /*details_max_lines*/ 1,
-            );
+            if self.display_preferences.show_tool_results() {
+                self.terminal_title_status_kind =
+                    TerminalTitleStatusKind::WaitingForBackgroundTerminal;
+                self.set_status(
+                    "Waiting for background terminal".to_string(),
+                    command_display.clone(),
+                    StatusDetailsCapitalization::Preserve,
+                    /*details_max_lines*/ 1,
+                );
+            } else {
+                self.terminal_title_status_kind = TerminalTitleStatusKind::Working;
+                self.set_status_header(String::from("Working"));
+            }
             match &mut self.unified_exec_wait_streak {
                 Some(wait) if wait.process_id == process_id => {
                     wait.update_command_display(command_display);
@@ -3881,6 +3889,7 @@ impl ChatWidget {
             self.add_to_history(history_cell::new_unified_exec_interaction(
                 command_display,
                 stdin,
+                self.display_preferences.clone(),
             ));
         }
     }
@@ -4067,6 +4076,7 @@ impl ChatWidget {
             call_id,
             String::new(),
             self.config.animations,
+            self.display_preferences.clone(),
         )));
         self.bump_active_cell_revision();
         self.request_redraw();
@@ -4094,7 +4104,12 @@ impl ChatWidget {
         }
 
         if !handled {
-            self.add_to_history(history_cell::new_web_search_call(call_id, query, action));
+            self.add_to_history(history_cell::new_web_search_call(
+                call_id,
+                query,
+                action,
+                self.display_preferences.clone(),
+            ));
         }
         self.had_work_activity = true;
     }
@@ -4563,12 +4578,11 @@ impl ChatWidget {
                     source,
                     /*interaction_input*/ None,
                     self.config.animations,
+                    self.display_preferences.clone(),
                 );
                 let completed = orphan.complete_call(&id, output, duration);
                 debug_assert!(completed, "new orphan exec cell should contain {id}");
-                self.needs_final_message_separator = true;
-                self.app_event_tx
-                    .send(AppEvent::InsertHistoryCell(Box::new(orphan)));
+                self.insert_boxed_history_without_flushing(Box::new(orphan));
                 self.request_redraw();
             }
             ExecEndTarget::NewCell => {
@@ -4580,6 +4594,7 @@ impl ChatWidget {
                     source,
                     /*interaction_input*/ None,
                     self.config.animations,
+                    self.display_preferences.clone(),
                 );
                 let completed = cell.complete_call(&id, output, duration);
                 debug_assert!(completed, "new exec cell should contain {id}");
@@ -4815,6 +4830,7 @@ impl ChatWidget {
                 source,
                 /*interaction_input*/ None,
                 self.config.animations,
+                self.display_preferences.clone(),
             )));
             self.bump_active_cell_revision();
         }
@@ -6183,8 +6199,7 @@ impl ChatWidget {
 
     fn flush_active_cell(&mut self) {
         if let Some(active) = self.active_cell.take() {
-            self.needs_final_message_separator = true;
-            self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
+            self.insert_boxed_history_without_flushing(active);
         }
     }
 
@@ -6192,7 +6207,24 @@ impl ChatWidget {
         self.add_boxed_history(Box::new(cell));
     }
 
+    fn insert_boxed_history_without_flushing(&mut self, cell: Box<dyn HistoryCell>) {
+        let has_visible_display_lines = !cell.display_lines(u16::MAX).is_empty();
+        let has_visible_transcript_lines = !cell.transcript_lines(u16::MAX).is_empty();
+        if !has_visible_display_lines && !has_visible_transcript_lines {
+            return;
+        }
+
+        self.needs_final_message_separator = true;
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+    }
+
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
+        let has_visible_display_lines = !cell.display_lines(u16::MAX).is_empty();
+        let has_visible_transcript_lines = !cell.transcript_lines(u16::MAX).is_empty();
+        if !has_visible_display_lines && !has_visible_transcript_lines {
+            return;
+        }
+
         // Keep the placeholder session header as the active cell until real session info arrives,
         // so we can merge headers instead of committing a duplicate box to history.
         let keep_placeholder_header_active = !self.is_session_configured()
@@ -6201,12 +6233,11 @@ impl ChatWidget {
                 .as_ref()
                 .is_some_and(|c| c.as_any().is::<history_cell::SessionHeaderHistoryCell>());
 
-        if !keep_placeholder_header_active && !cell.display_lines(u16::MAX).is_empty() {
+        if !keep_placeholder_header_active && has_visible_display_lines {
             // Only break exec grouping if the cell renders visible lines.
             self.flush_active_cell();
-            self.needs_final_message_separator = true;
         }
-        self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+        self.insert_boxed_history_without_flushing(cell);
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
@@ -8540,7 +8571,8 @@ impl ChatWidget {
         let mut items = vec![SelectionItem {
             name: "UI".to_string(),
             description: Some(
-                "Configure local TUI-only transcript visibility for raw reasoning.".to_string(),
+                "Configure local TUI-only transcript visibility for reasoning, tool activity, and diffs."
+                    .to_string(),
             ),
             actions: vec![Box::new(|tx| {
                 tx.send(AppEvent::OpenDisplayPreferencesPanel)
