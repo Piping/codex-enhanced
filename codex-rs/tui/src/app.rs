@@ -131,10 +131,10 @@ use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
-use codex_config::ConfigLayerStackOrdering;
 #[cfg(test)]
 use codex_clawbot::ProviderOutboundReaction;
 use codex_clawbot::ProviderOutboundTextMessage;
+use codex_config::ConfigLayerStackOrdering;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_core_plugins::PluginsManager;
@@ -200,12 +200,12 @@ mod app_server_events;
 pub(crate) mod app_server_requests;
 mod background_requests;
 mod btw;
+mod clawbot;
+mod clawbot_controls;
 mod config_persistence;
 mod event_dispatch;
 mod history_ui;
 mod input;
-mod clawbot;
-mod clawbot_controls;
 mod jump_navigation;
 mod key_chord;
 mod loaded_threads;
@@ -618,10 +618,10 @@ impl ThreadEventStore {
             ServerNotification::TurnStarted(turn) => {
                 self.active_turn_id = Some(turn.turn.id.clone());
             }
-            ServerNotification::TurnCompleted(turn) => {
-                if self.active_turn_id.as_deref() == Some(turn.turn.id.as_str()) {
-                    self.active_turn_id = None;
-                }
+            ServerNotification::TurnCompleted(turn)
+                if self.active_turn_id.as_deref() == Some(turn.turn.id.as_str()) =>
+            {
+                self.active_turn_id = None;
             }
             ServerNotification::ThreadClosed(_) => {
                 self.active_turn_id = None;
@@ -4864,8 +4864,9 @@ See the Codex keymap documentation for supported actions and examples."
                 match crate::resume_picker::run_resume_picker_with_app_server(
                     tui,
                     &self.config,
-                    /*show_all*/ false,
-                    /*include_non_interactive*/ false,
+                    crate::resume_picker::SessionPickerOrder::LocalGroupFirst,
+                    crate::resume_picker::SessionPickerProviderScope::AllProviders,
+                    /*include_non_interactive*/ true,
                     picker_app_server,
                 )
                 .await?
@@ -7042,14 +7043,10 @@ See the Codex keymap documentation for supported actions and examples."
                 code: KeyCode::Esc,
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
-            } => {
-                if self.chat_widget.is_normal_backtrack_mode()
-                    && self.chat_widget.composer_is_empty()
-                {
-                    self.handle_backtrack_esc_key(tui);
-                } else {
-                    self.chat_widget.handle_key_event(key_event);
-                }
+            } if self.chat_widget.is_normal_backtrack_mode()
+                && self.chat_widget.composer_is_empty() =>
+            {
+                self.handle_backtrack_esc_key(tui);
             }
             // Enter confirms backtrack when primed + count > 0. Otherwise pass to widget.
             KeyEvent {
@@ -7344,9 +7341,9 @@ mod tests {
     use assert_matches::assert_matches;
     use codex_app_server_client::AppServerEvent;
 
+    use crate::app_event::ClawbotForwardingChannel;
     use crate::legacy_core::config::ConfigBuilder;
     use crate::legacy_core::config::ConfigOverrides;
-    use crate::app_event::ClawbotForwardingChannel;
     use crate::render::renderable::Renderable;
     use codex_app_server_protocol::AdditionalFileSystemPermissions;
     use codex_app_server_protocol::AdditionalNetworkPermissions;

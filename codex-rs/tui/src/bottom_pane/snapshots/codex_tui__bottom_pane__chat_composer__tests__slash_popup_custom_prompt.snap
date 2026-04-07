@@ -1,0 +1,11 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 6340
+expression: terminal.backend()
+---
+"                                                            "
+"› /spec                                                     "
+"                                                            "
+"                                                            "
+"                                                            "
+"  /prompts:specialist  saved prompt                         "

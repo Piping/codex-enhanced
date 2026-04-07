@@ -1468,7 +1468,7 @@ fn with_border_internal(
         let span_count = line.spans.len();
         let mut spans: Vec<Span<'static>> = Vec::with_capacity(span_count + 4);
         spans.push(Span::from("│ ").dim());
-        spans.extend(line.into_iter());
+        spans.extend(line);
         if used_width < content_width {
             spans.push(Span::from(" ".repeat(content_width - used_width)).dim());
         }
@@ -2495,7 +2495,7 @@ pub(crate) fn new_mcp_tools_output(
 
     let effective_servers = config.mcp_servers.get().clone();
     let mut servers: Vec<_> = effective_servers.iter().collect();
-    servers.sort_by(|(a, _), (b, _)| a.cmp(b));
+    servers.sort_by_key(|(a, _)| *a);
 
     for (server, cfg) in servers {
         let prefix = qualified_mcp_tool_name_prefix(server);
@@ -2567,7 +2567,7 @@ pub(crate) fn new_mcp_tools_output(
                     && !headers.is_empty()
                 {
                     let mut pairs: Vec<_> = headers.iter().collect();
-                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    pairs.sort_by_key(|(a, _)| *a);
                     let display = pairs
                         .into_iter()
                         .map(|(name, _)| format!("{name}=*****"))
@@ -2579,7 +2579,7 @@ pub(crate) fn new_mcp_tools_output(
                     && !headers.is_empty()
                 {
                     let mut pairs: Vec<_> = headers.iter().collect();
-                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    pairs.sort_by_key(|(a, _)| *a);
                     let display = pairs
                         .into_iter()
                         .map(|(name, var)| format!("{name}={var}"))
@@ -2754,7 +2754,7 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
                         && !headers.is_empty()
                     {
                         let mut pairs: Vec<_> = headers.iter().collect();
-                        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                        pairs.sort_by_key(|(a, _)| *a);
                         let display = pairs
                             .into_iter()
                             .map(|(name, _)| format!("{name}=*****"))
@@ -2766,7 +2766,7 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
                         && !headers.is_empty()
                     {
                         let mut pairs: Vec<_> = headers.iter().collect();
-                        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                        pairs.sort_by_key(|(a, _)| *a);
                         let display = pairs
                             .into_iter()
                             .map(|(name, var)| format!("{name}={var}"))

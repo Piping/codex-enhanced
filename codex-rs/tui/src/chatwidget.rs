@@ -286,6 +286,7 @@ use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
+use crate::bottom_pane::discover_prompts_in;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::collaboration_modes;
@@ -5216,6 +5217,10 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_connectors_enabled(widget.connectors_enabled());
+        let prompts_dir = widget.config.codex_home.join("prompts");
+        widget
+            .bottom_pane
+            .set_custom_prompts(discover_prompts_in(&prompts_dir));
         widget.refresh_status_surfaces();
 
         widget
@@ -7195,10 +7200,8 @@ impl ChatWidget {
                 reasoning_effort,
                 agents_states,
             }),
-            ThreadItem::EnteredReviewMode { review, .. } => {
-                if !from_replay {
-                    self.enter_review_mode_with_hint(review, /*from_replay*/ false);
-                }
+            ThreadItem::EnteredReviewMode { review, .. } if !from_replay => {
+                self.enter_review_mode_with_hint(review, /*from_replay*/ false);
             }
             _ => {}
         }

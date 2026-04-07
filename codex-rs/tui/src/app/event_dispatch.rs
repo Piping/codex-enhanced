@@ -80,7 +80,8 @@ impl App {
                 match crate::resume_picker::run_resume_picker_from_existing_session_with_app_server(
                     tui,
                     &self.config,
-                    /*show_all*/ false,
+                    crate::resume_picker::SessionPickerOrder::LocalGroupFirst,
+                    crate::resume_picker::SessionPickerProviderScope::CurrentProfile,
                     /*include_non_interactive*/ false,
                     picker_app_server,
                 )
