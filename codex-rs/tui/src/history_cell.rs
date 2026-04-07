@@ -626,19 +626,28 @@ impl HistoryCell for PrefixedWrappedHistoryCell {
 pub(crate) struct UnifiedExecInteractionCell {
     command_display: Option<String>,
     stdin: String,
+    display_preferences: DisplayPreferences,
 }
 
 impl UnifiedExecInteractionCell {
-    pub(crate) fn new(command_display: Option<String>, stdin: String) -> Self {
+    pub(crate) fn new(
+        command_display: Option<String>,
+        stdin: String,
+        display_preferences: DisplayPreferences,
+    ) -> Self {
         Self {
             command_display,
             stdin,
+            display_preferences,
         }
     }
 }
 
 impl HistoryCell for UnifiedExecInteractionCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if !self.display_preferences.show_tool_results() {
+            return Vec::new();
+        }
         if width == 0 {
             return Vec::new();
         }
@@ -686,8 +695,9 @@ impl HistoryCell for UnifiedExecInteractionCell {
 pub(crate) fn new_unified_exec_interaction(
     command_display: Option<String>,
     stdin: String,
+    display_preferences: DisplayPreferences,
 ) -> UnifiedExecInteractionCell {
-    UnifiedExecInteractionCell::new(command_display, stdin)
+    UnifiedExecInteractionCell::new(command_display, stdin, display_preferences)
 }
 
 #[derive(Debug)]
@@ -1840,6 +1850,7 @@ pub(crate) struct WebSearchCell {
     start_time: Instant,
     completed: bool,
     animations_enabled: bool,
+    display_preferences: DisplayPreferences,
 }
 
 impl WebSearchCell {
@@ -1848,6 +1859,7 @@ impl WebSearchCell {
         query: String,
         action: Option<WebSearchAction>,
         animations_enabled: bool,
+        display_preferences: DisplayPreferences,
     ) -> Self {
         Self {
             call_id,
@@ -1856,6 +1868,7 @@ impl WebSearchCell {
             start_time: Instant::now(),
             completed: false,
             animations_enabled,
+            display_preferences,
         }
     }
 
@@ -1875,6 +1888,9 @@ impl WebSearchCell {
 
 impl HistoryCell for WebSearchCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if !self.display_preferences.show_tool_results() {
+            return Vec::new();
+        }
         let bullet = if self.completed {
             "•".dim()
         } else {
@@ -1895,20 +1911,29 @@ pub(crate) fn new_active_web_search_call(
     call_id: String,
     query: String,
     animations_enabled: bool,
+    display_preferences: DisplayPreferences,
 ) -> WebSearchCell {
-    WebSearchCell::new(call_id, query, /*action*/ None, animations_enabled)
+    WebSearchCell::new(
+        call_id,
+        query,
+        /*action*/ None,
+        animations_enabled,
+        display_preferences,
+    )
 }
 
 pub(crate) fn new_web_search_call(
     call_id: String,
     query: String,
     action: WebSearchAction,
+    display_preferences: DisplayPreferences,
 ) -> WebSearchCell {
     let mut cell = WebSearchCell::new(
         call_id,
         query,
         Some(action),
         /*animations_enabled*/ false,
+        display_preferences,
     );
     cell.complete();
     cell
@@ -3235,8 +3260,11 @@ mod tests {
 
     #[test]
     fn unified_exec_interaction_cell_renders_input() {
-        let cell =
-            new_unified_exec_interaction(Some("echo hello".to_string()), "ls\npwd".to_string());
+        let cell = new_unified_exec_interaction(
+            Some("echo hello".to_string()),
+            "ls\npwd".to_string(),
+            DisplayPreferences::default(),
+        );
         let lines = render_transcript(&cell);
         assert_eq!(
             lines,
@@ -3250,9 +3278,30 @@ mod tests {
 
     #[test]
     fn unified_exec_interaction_cell_renders_wait() {
-        let cell = new_unified_exec_interaction(/*command_display*/ None, String::new());
+        let cell = new_unified_exec_interaction(
+            /*command_display*/ None,
+            String::new(),
+            DisplayPreferences::default(),
+        );
         let lines = render_transcript(&cell);
         assert_eq!(lines, vec!["• Waited for background terminal"]);
+    }
+
+    #[test]
+    fn unified_exec_interaction_cell_hides_when_tool_activity_is_disabled() {
+        let display_preferences = DisplayPreferences::default();
+        display_preferences.set_enabled(
+            crate::display_preferences::DisplayPreferenceKey::ToolResults,
+            /*enabled*/ false,
+        );
+        let cell = new_unified_exec_interaction(
+            Some("echo hello".to_string()),
+            "ls\npwd".to_string(),
+            display_preferences,
+        );
+
+        assert!(cell.display_lines(/*width*/ 80).is_empty());
+        assert!(cell.transcript_lines(/*width*/ 80).is_empty());
     }
 
     #[test]
@@ -3674,7 +3723,11 @@ mod tests {
     fn unified_exec_interaction_cell_does_not_split_url_like_stdin_token() {
         let url_like =
             "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890";
-        let cell = UnifiedExecInteractionCell::new(Some("true".to_string()), url_like.to_string());
+        let cell = UnifiedExecInteractionCell::new(
+            Some("true".to_string()),
+            url_like.to_string(),
+            DisplayPreferences::default(),
+        );
         let rendered = render_lines(&cell.display_lines(/*width*/ 24));
 
         assert_eq!(
@@ -3730,6 +3783,7 @@ mod tests {
         let cell: Box<dyn HistoryCell> = Box::new(UnifiedExecInteractionCell::new(
             Some("true".to_string()),
             url_like.to_string(),
+            DisplayPreferences::default(),
         ));
 
         let width: u16 = 24;
@@ -3771,6 +3825,7 @@ mod tests {
                 query: Some(query),
                 queries: None,
             },
+            DisplayPreferences::default(),
         );
         let rendered = render_lines(&cell.display_lines(/*width*/ 64)).join("\n");
 
@@ -3788,6 +3843,7 @@ mod tests {
                 query: Some(query),
                 queries: None,
             },
+            DisplayPreferences::default(),
         );
         let rendered = render_lines(&cell.display_lines(/*width*/ 64));
 
@@ -3810,6 +3866,7 @@ mod tests {
                 query: Some(query),
                 queries: None,
             },
+            DisplayPreferences::default(),
         );
         let rendered = render_lines(&cell.display_lines(/*width*/ 64));
 
@@ -3827,6 +3884,7 @@ mod tests {
                 query: Some(query),
                 queries: None,
             },
+            DisplayPreferences::default(),
         );
         let rendered = render_lines(&cell.transcript_lines(/*width*/ 64)).join("\n");
 
@@ -4467,6 +4525,34 @@ mod tests {
         let lines = cell.display_lines(/*width*/ 80);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn exec_cell_hides_when_tool_activity_is_disabled() {
+        let display_preferences = DisplayPreferences::default();
+        display_preferences.set_enabled(
+            crate::display_preferences::DisplayPreferenceKey::ToolResults,
+            /*enabled*/ false,
+        );
+        let call_id = "c1".to_string();
+        let mut cell = ExecCell::new(
+            ExecCall {
+                call_id: call_id.clone(),
+                command: vec!["echo".into(), "ok".into()],
+                parsed: Vec::new(),
+                output: None,
+                source: ExecCommandSource::Agent,
+                start_time: Some(Instant::now()),
+                duration: None,
+                interaction_input: None,
+            },
+            /*animations_enabled*/ true,
+        )
+        .with_display_preferences(display_preferences);
+        cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
+
+        assert!(cell.display_lines(/*width*/ 80).is_empty());
+        assert!(cell.transcript_lines(/*width*/ 80).is_empty());
     }
 
     #[test]

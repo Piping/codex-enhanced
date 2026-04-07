@@ -8,6 +8,7 @@
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::display_preferences::DisplayPreferences;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::ExecCommandSource;
 
@@ -36,6 +37,7 @@ pub(crate) struct ExecCall {
 pub(crate) struct ExecCell {
     pub(crate) calls: Vec<ExecCall>,
     animations_enabled: bool,
+    display_preferences: DisplayPreferences,
 }
 
 impl ExecCell {
@@ -43,7 +45,16 @@ impl ExecCell {
         Self {
             calls: vec![call],
             animations_enabled,
+            display_preferences: DisplayPreferences::default(),
         }
+    }
+
+    pub(crate) fn with_display_preferences(
+        mut self,
+        display_preferences: DisplayPreferences,
+    ) -> Self {
+        self.display_preferences = display_preferences;
+        self
     }
 
     pub(crate) fn with_added_call(
@@ -68,6 +79,7 @@ impl ExecCell {
             Some(Self {
                 calls: [self.calls.clone(), vec![call]].concat(),
                 animations_enabled: self.animations_enabled,
+                display_preferences: self.display_preferences.clone(),
             })
         } else {
             None
@@ -133,6 +145,10 @@ impl ExecCell {
 
     pub(crate) fn animations_enabled(&self) -> bool {
         self.animations_enabled
+    }
+
+    pub(crate) fn show_tool_results(&self) -> bool {
+        self.display_preferences.show_tool_results()
     }
 
     pub(crate) fn iter_calls(&self) -> impl Iterator<Item = &ExecCall> {

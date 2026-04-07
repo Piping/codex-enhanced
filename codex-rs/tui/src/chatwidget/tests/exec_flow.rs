@@ -741,6 +741,36 @@ async fn unified_exec_wait_status_header_updates_on_late_command_display() {
 }
 
 #[tokio::test]
+async fn unified_exec_wait_status_hides_tool_activity_when_disabled() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.display_preferences.set_enabled(
+        crate::display_preferences::DisplayPreferenceKey::ToolResults,
+        /*enabled*/ false,
+    );
+    chat.on_task_started();
+    chat.unified_exec_processes.push(UnifiedExecProcessSummary {
+        key: "proc-1".to_string(),
+        call_id: "call-1".to_string(),
+        command_display: "sleep 5".to_string(),
+        recent_chunks: Vec::new(),
+    });
+
+    chat.on_terminal_interaction(TerminalInteractionEvent {
+        call_id: "call-1".to_string(),
+        process_id: "proc-1".to_string(),
+        stdin: String::new(),
+    });
+
+    assert_eq!(chat.current_status.header, "Working");
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Working");
+    assert_eq!(status.details(), None);
+}
+
+#[tokio::test]
 async fn unified_exec_waiting_multiple_empty_snapshots() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.on_task_started();
