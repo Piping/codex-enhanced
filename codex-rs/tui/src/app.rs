@@ -224,6 +224,7 @@ mod thread_routing;
 mod thread_session_state;
 mod workflow_controls;
 mod workflow_definition;
+mod workflow_editor;
 mod workflow_history;
 pub(crate) mod workflow_runtime;
 mod workflow_scheduler;
@@ -5096,6 +5097,45 @@ See the Codex keymap documentation for supported actions and examples."
             }
             AppEvent::OpenWorkflowControls => {
                 self.open_workflow_controls_popup();
+            }
+            AppEvent::OpenWorkflowControlView { destination } => {
+                self.open_workflow_control_view(destination);
+            }
+            AppEvent::CreateDefaultWorkflowTemplate => {
+                self.create_default_workflow_template_from_ui(tui).await;
+            }
+            AppEvent::EditWorkflowFile {
+                workflow_path,
+                reopen,
+            } => {
+                self.edit_workflow_file_from_ui(tui, workflow_path, reopen)
+                    .await;
+            }
+            AppEvent::ToggleWorkflowJobEnabled {
+                workflow_path,
+                job_name,
+            } => {
+                self.toggle_workflow_job_enabled_from_ui(workflow_path, job_name);
+            }
+            AppEvent::CycleWorkflowJobContext {
+                workflow_path,
+                job_name,
+            } => {
+                self.cycle_workflow_job_context_from_ui(workflow_path, job_name);
+            }
+            AppEvent::CycleWorkflowJobResponse {
+                workflow_path,
+                job_name,
+            } => {
+                self.cycle_workflow_job_response_from_ui(workflow_path, job_name);
+            }
+            AppEvent::EditWorkflowJobField {
+                workflow_path,
+                job_name,
+                field,
+            } => {
+                self.edit_workflow_job_field_from_ui(tui, workflow_path, job_name, field)
+                    .await;
             }
             AppEvent::StartManualWorkflowTrigger {
                 workflow_name,
@@ -10488,7 +10528,7 @@ guardian_approval = true
         assert_snapshot!("clear_ui_header_fast_status_fast_capable_models", rendered);
     }
 
-    async fn make_test_app() -> App {
+    pub(super) async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
         let display_preferences = DisplayPreferences::from_config(&config);

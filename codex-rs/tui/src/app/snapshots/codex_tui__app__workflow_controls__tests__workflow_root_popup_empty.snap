@@ -1,0 +1,14 @@
+---
+source: tui/src/app/workflow_controls.rs
+expression: popup
+---
+  Workflow
+  Manage workflow files, browse jobs, and inspect current background status.
+
+  Type to search workflows
+› Background Tasks      Insert a background task snapshot into the transcript. /ps shows the same
+                        live workflow state.
+  Create workflow.yaml  Create a starter template under .codex/workflows and open it in your
+                        editor.
+
+  Press enter to confirm or esc to go back

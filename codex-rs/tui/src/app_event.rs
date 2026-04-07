@@ -120,6 +120,30 @@ pub(crate) enum WindowsSandboxEnableMode {
     Legacy,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WorkflowControlsDestination {
+    Root,
+    File {
+        workflow_path: PathBuf,
+    },
+    Jobs {
+        workflow_path: PathBuf,
+    },
+    Job {
+        workflow_path: PathBuf,
+        job_name: String,
+    },
+    ManualTriggers {
+        workflow_path: PathBuf,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkflowJobEditableField {
+    Needs,
+    Steps,
+}
+
 #[derive(Debug, Clone)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) struct ConnectorsSnapshot {
@@ -608,6 +632,38 @@ pub(crate) enum AppEvent {
     },
 
     ShowWorkflowBackgroundTasks,
+
+    OpenWorkflowControlView {
+        destination: WorkflowControlsDestination,
+    },
+
+    CreateDefaultWorkflowTemplate,
+
+    EditWorkflowFile {
+        workflow_path: PathBuf,
+        reopen: WorkflowControlsDestination,
+    },
+
+    ToggleWorkflowJobEnabled {
+        workflow_path: PathBuf,
+        job_name: String,
+    },
+
+    CycleWorkflowJobContext {
+        workflow_path: PathBuf,
+        job_name: String,
+    },
+
+    CycleWorkflowJobResponse {
+        workflow_path: PathBuf,
+        job_name: String,
+    },
+
+    EditWorkflowJobField {
+        workflow_path: PathBuf,
+        job_name: String,
+        field: WorkflowJobEditableField,
+    },
 
     StartBtwDiscussion {
         prompt: String,
