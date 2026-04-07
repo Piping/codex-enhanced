@@ -1,0 +1,14 @@
+---
+source: tui/src/app/workflow_controls.rs
+expression: popup
+---
+  Workflow Jobs
+  director · manual.yaml
+
+  Type to search jobs
+› Back                Return to the previous workflow menu.
+  Edit workflow.yaml  Open manual.yaml in your editor.
+  summarize           Enabled · Embed · Assistant · Ready
+  notify              Enabled · Ephemeral · User · Ready
+
+  Press enter to confirm or esc to go back

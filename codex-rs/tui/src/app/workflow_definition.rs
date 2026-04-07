@@ -1,5 +1,6 @@
 use indexmap::IndexMap;
 use serde::Deserialize;
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::VecDeque;
@@ -29,7 +30,7 @@ impl std::fmt::Display for WorkflowDefinitionError {
 
 impl std::error::Error for WorkflowDefinitionError {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum WorkflowContextMode {
     Embed,
@@ -37,7 +38,7 @@ pub(crate) enum WorkflowContextMode {
     Ephemeral,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum WorkflowResponseMode {
     #[default]
@@ -45,7 +46,7 @@ pub(crate) enum WorkflowResponseMode {
     User,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(untagged)]
 pub(crate) enum WorkflowStep {
     Run { run: String, retry: Option<u32> },

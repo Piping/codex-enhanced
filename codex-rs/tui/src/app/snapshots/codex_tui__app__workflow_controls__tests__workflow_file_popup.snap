@@ -1,0 +1,14 @@
+---
+source: tui/src/app/workflow_controls.rs
+expression: popup
+---
+  Workflow
+  director · manual.yaml
+
+  Type to search workflow actions
+› Back                Return to the previous workflow menu.
+  Edit workflow.yaml  Open manual.yaml in your editor.
+  Jobs                2 jobs
+  Manual Triggers     2 manual triggers
+
+  Press enter to confirm or esc to go back
