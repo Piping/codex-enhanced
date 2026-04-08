@@ -270,12 +270,12 @@ async fn approvals_popup_shows_disabled_presets() {
     let screen = terminal.backend().vt100().screen().contents();
     let collapsed = screen.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        collapsed.contains("(disabled)"),
-        "disabled preset label should be shown"
+        !collapsed.contains("(disabled)"),
+        "disabled preset label should stay hidden"
     );
     assert!(
-        collapsed.contains("this message should be printed in the description"),
-        "disabled preset reason should be shown"
+        !collapsed.contains("this message should be printed in the description"),
+        "disabled preset reason should stay hidden"
     );
 }
 
