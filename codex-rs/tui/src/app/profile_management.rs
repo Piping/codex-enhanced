@@ -642,7 +642,8 @@ fn fallback_route_editor_seed(
 
     let mut seed = [
         "# Reorder fallback profiles, one id per line.",
-        "# Keep every current profile exactly once.",
+        "# Omitted profiles are allowed.",
+        "# Keep only profiles currently defined in config.toml, at most once each.",
         "# Blank lines and lines starting with # are ignored.",
     ]
     .join("\n");
@@ -679,18 +680,6 @@ fn parse_fallback_route_editor_contents(
             ));
         }
         ordered_ids.push(line.to_string());
-    }
-
-    if ordered_ids.len() != current_profile_ids.len() {
-        let missing = current_profile_ids
-            .iter()
-            .filter(|id| !seen_ids.contains(id.as_str()))
-            .cloned()
-            .collect::<Vec<_>>();
-        return Err(format!(
-            "Fallback config must list every current profile exactly once. Missing: {}.",
-            missing.join(", ")
-        ));
     }
 
     Ok(ordered_ids)
@@ -824,7 +813,8 @@ mod tests {
             seed,
             concat!(
                 "# Reorder fallback profiles, one id per line.\n",
-                "# Keep every current profile exactly once.\n",
+                "# Omitted profiles are allowed.\n",
+                "# Keep only profiles currently defined in config.toml, at most once each.\n",
                 "# Blank lines and lines starting with # are ignored.\n",
                 "\n",
                 "primary\n",
@@ -835,7 +825,7 @@ mod tests {
     }
 
     #[test]
-    fn fallback_route_parser_requires_complete_unique_profile_list() {
+    fn fallback_route_parser_accepts_partial_unique_profile_list() {
         let current_profile_ids = vec![
             "primary".to_string(),
             "secondary".to_string(),
@@ -856,12 +846,12 @@ mod tests {
             ]
         );
 
-        let missing =
+        let partial =
             parse_fallback_route_editor_contents("secondary\nprimary\n", &current_profile_ids)
-                .expect_err("missing profile should fail");
+                .expect("omitted profiles should be allowed");
         assert_eq!(
-            missing,
-            "Fallback config must list every current profile exactly once. Missing: tertiary."
+            partial,
+            vec!["secondary".to_string(), "primary".to_string()]
         );
 
         let duplicate = parse_fallback_route_editor_contents(
