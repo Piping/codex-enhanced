@@ -1,6 +1,7 @@
 # Workflow Strategy
 
-The workflows in this directory are split so that pull requests get fast, review-friendly signal while `main` still gets the full cross-platform verification pass.
+This fork keeps pushes to `main` quiet. Heavier validation runs stay available through
+`workflow_dispatch`, while pull requests can still use targeted review-time checks.
 
 ## Pull Requests
 
@@ -14,17 +15,22 @@ The workflows in this directory are split so that pull requests get fast, review
   - `argument-comment-lint` on Linux, macOS, and Windows
   - `tools/argument-comment-lint` package tests when the lint or its workflow wiring changes
 
-## Post-Merge On `main`
+## Manual Verification
 
-- `bazel.yml` also runs on pushes to `main`.
-  This re-verifies the merged Bazel path and helps keep the BuildBuddy caches warm.
+- `bazel.yml` is available as a manual verification path when the fork needs a full
+  Bazel pass.
 - `rust-ci-full.yml` is the full Cargo-native verification workflow.
-  It keeps the heavier checks off the PR path while still validating them after merge:
+  It keeps the heavier checks off the PR path while still providing an on-demand
+  validation path:
   - the full Cargo `clippy` matrix
   - the full Cargo `nextest` matrix
   - release-profile Cargo builds
   - cross-platform `argument-comment-lint`
   - Linux remote-env tests
+
+Other repo-level checks that used to run on `push(main)` in upstream, such as
+`ci.yml`, `cargo-deny.yml`, `codespell.yml`, `sdk.yml`, and `v8-canary.yml`, are also
+manual-only in this fork so routine sync pushes do not fan out into unrelated CI.
 
 ## Rule Of Thumb
 
