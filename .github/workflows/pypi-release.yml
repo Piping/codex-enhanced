@@ -11,7 +11,7 @@ on:
         required: true
         type: string
       artifact_run_id:
-        description: Existing pypi-release run id whose wheel artifacts should be reused for publish
+        description: Existing pypi-release run id whose wheel and release artifacts should be reused
         required: false
         type: string
 
@@ -72,41 +72,48 @@ jobs:
           [[ "${tag_ver}" == "${runtime_ver}" ]] \
             || { echo "Tag version ${tag_ver} does not match sdk/python-runtime-enhanced ${runtime_ver}."; exit 1; }
 
-  build:
+  release-assets:
     needs: prepare
-    name: build-wheel-${{ matrix.target }}
     if: ${{ needs.prepare.outputs.reuse_artifacts != 'true' }}
+    uses: ./.github/workflows/pypi-release-artifacts.yml
+    with:
+      checkout_ref: ${{ needs.prepare.outputs.checkout_ref }}
+      release_tag: ${{ needs.prepare.outputs.release_tag }}
+
+  build:
+    needs:
+      - prepare
+      - release-assets
+    name: build-wheel-${{ matrix.target }}
+    if: ${{ needs.prepare.outputs.reuse_artifacts != 'true' && needs.release-assets.result == 'success' }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
-    env:
-      CARGO_INCREMENTAL: "0"
-      RUSTC_WRAPPER: ""
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: macos-14
             target: aarch64-apple-darwin
+            runtime_artifact_name: pypi-runtime-aarch64-apple-darwin
             binary_name: codex
           - runner: macos-15-intel
             target: x86_64-apple-darwin
+            runtime_artifact_name: pypi-runtime-x86_64-apple-darwin
             binary_name: codex
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+            runtime_artifact_name: pypi-runtime-x86_64-unknown-linux-gnu
             binary_name: codex
           - runner: windows-2022
             target: x86_64-pc-windows-msvc
+            runtime_artifact_name: pypi-runtime-x86_64-pc-windows-msvc
             binary_name: codex.exe
     steps:
       - name: Checkout release ref
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.prepare.outputs.checkout_ref }}
-
-      - uses: dtolnay/rust-toolchain@1.93.0
-        with:
-          targets: ${{ matrix.target }}
 
       - uses: actions/setup-python@v5
         with:
@@ -116,56 +123,11 @@ jobs:
         shell: bash
         run: python -m pip install --upgrade build hatchling packaging
 
-      - name: Clear workspace build rustflags for CI release builds
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "RUSTFLAGS=" >> "$GITHUB_ENV"
-          echo "CARGO_ENCODED_RUSTFLAGS=" >> "$GITHUB_ENV"
-          echo "CARGO_BUILD_RUSTFLAGS=" >> "$GITHUB_ENV"
-
-      - name: Use default macOS linker
-        if: ${{ runner.os == 'macOS' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "RUSTFLAGS=" >> "$GITHUB_ENV"
-          echo "CARGO_ENCODED_RUSTFLAGS=" >> "$GITHUB_ENV"
-          echo "CARGO_BUILD_RUSTFLAGS=" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS=" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS=" >> "$GITHUB_ENV"
-
-      - name: Install Linux build dependencies
-        if: ${{ runner.os == 'Linux' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y libcap-dev pkg-config protobuf-compiler
-
-      - name: Install macOS build dependencies
-        if: ${{ runner.os == 'macOS' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! command -v protoc >/dev/null 2>&1; then
-            brew install protobuf
-          fi
-
-      - name: Install Windows build dependencies
-        if: ${{ runner.os == 'Windows' }}
-        shell: pwsh
-        run: |
-          if (-not (Get-Command protoc -ErrorAction SilentlyContinue)) {
-            choco install protoc -y --no-progress
-          }
-
-      - name: Build release codex binary
-        shell: bash
-        working-directory: codex-rs
-        run: |
-          set -euo pipefail
-          cargo build --locked --release --target "${{ matrix.target }}" --bin codex
+      - name: Download release binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.runtime_artifact_name }}
+          path: ${{ runner.temp }}/runtime-artifact
 
       - name: Stage codex-enhanced runtime package
         shell: bash
@@ -174,7 +136,7 @@ jobs:
           python sdk/python/scripts/update_sdk_artifacts.py \
             stage-runtime \
             "${RUNNER_TEMP}/codex-enhanced" \
-            "${GITHUB_WORKSPACE}/codex-rs/target/${{ matrix.target }}/release/${{ matrix.binary_name }}" \
+            "${RUNNER_TEMP}/runtime-artifact/${{ matrix.binary_name }}" \
             --runtime-version "${{ needs.prepare.outputs.release_version }}" \
             --runtime-package enhanced
 
@@ -192,8 +154,9 @@ jobs:
   publish:
     needs:
       - prepare
+      - release-assets
       - build
-    if: ${{ always() && needs.prepare.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
+    if: ${{ always() && needs.prepare.result == 'success' && ((needs.prepare.outputs.reuse_artifacts == 'true' && needs.build.result == 'skipped') || (needs.prepare.outputs.reuse_artifacts != 'true' && needs.release-assets.result == 'success' && needs.build.result == 'success')) }}
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -232,3 +195,84 @@ jobs:
           packages-dir: dist
           skip-existing: true
           verbose: true
+
+  github-release:
+    needs:
+      - prepare
+      - release-assets
+      - build
+      - publish
+    if: ${{ always() && needs.prepare.result == 'success' && needs.publish.result == 'success' && ((needs.prepare.outputs.reuse_artifacts == 'true' && needs.release-assets.result == 'skipped' && needs.build.result == 'skipped') || (needs.prepare.outputs.reuse_artifacts != 'true' && needs.release-assets.result == 'success' && needs.build.result == 'success')) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+
+      - name: Download release assets from current run
+        if: ${{ needs.prepare.outputs.reuse_artifacts != 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pypi-release-asset-*
+          path: release-dist
+          merge-multiple: true
+
+      - name: Download wheel artifacts from current run
+        if: ${{ needs.prepare.outputs.reuse_artifacts != 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pypi-wheel-*
+          path: release-dist
+          merge-multiple: true
+
+      - name: Download release assets and wheels from an earlier run
+        if: ${{ needs.prepare.outputs.reuse_artifacts == 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-dist
+          work_dir="$(mktemp -d)"
+          gh run download "${{ needs.prepare.outputs.artifact_run_id }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --dir "${work_dir}"
+          find "${work_dir}" -type f \( -name '*.whl' -o -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} release-dist/ \;
+          if ! find release-dist -maxdepth 1 -type f | grep -q .; then
+            echo "No release assets were downloaded from run ${{ needs.prepare.outputs.artifact_run_id }}."
+            exit 1
+          fi
+
+      - name: Generate GitHub Release notes
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse HEAD^{commit})"
+          notes_path="${RUNNER_TEMP}/release-notes.md"
+          pypi_url="https://pypi.org/project/codex-enhanced/${{ needs.prepare.outputs.release_version }}/"
+
+          git log -1 --format=%B "${commit}" > "${notes_path}"
+          echo >> "${notes_path}"
+          {
+            echo "## PyPI"
+            echo
+            echo "- https://pypi.org/project/codex-enhanced/"
+            echo "- ${pypi_url}"
+          } >> "${notes_path}"
+
+          echo "RELEASE_NOTES_PATH=${notes_path}" >> "$GITHUB_ENV"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
+        with:
+          name: ${{ needs.prepare.outputs.release_version }}
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
+          body_path: ${{ env.RELEASE_NOTES_PATH }}
+          files: release-dist/*
+          overwrite_files: true
+          prerelease: ${{ contains(needs.prepare.outputs.release_version, '-') }}

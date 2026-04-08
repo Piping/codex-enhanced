@@ -9,6 +9,6 @@ expression: popup
 › Back                Return to the previous workflow menu.
   Edit workflow.yaml  Open manual.yaml in your editor.
   Jobs                2 jobs
-  Manual Triggers     2 manual triggers
+  Triggers            3 triggers
 
   Press enter to confirm or esc to go back

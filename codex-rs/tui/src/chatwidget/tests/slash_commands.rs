@@ -1768,6 +1768,7 @@ async fn slash_mcp_invalid_args_show_usage() {
     assert_eq!(recall_latest_after_clearing(&mut chat), "/mcp full");
     assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
 }
+#[tokio::test]
 async fn slash_workflow_opens_controls_popup() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

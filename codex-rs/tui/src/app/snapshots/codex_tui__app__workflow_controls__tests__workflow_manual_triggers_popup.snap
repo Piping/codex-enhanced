@@ -2,13 +2,14 @@
 source: tui/src/app/workflow_controls.rs
 expression: popup
 ---
-  Manual Triggers
+  Workflow Triggers
   director · manual.yaml
 
   Type to search triggers
 › Back                Return to the previous workflow menu.
   Edit workflow.yaml  Open manual.yaml in your editor.
-  review_backlog      Enabled · Ready
-  triage              Disabled · Ready
+  review_backlog      Manual · Enabled · Ready
+  triage              Manual · Disabled · Ready
+  pulse               Interval (30m) · Enabled · Ready
 
   Press enter to confirm or esc to go back
