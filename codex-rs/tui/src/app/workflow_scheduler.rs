@@ -6,6 +6,7 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 use super::workflow_runtime::BackgroundWorkflowRunTarget;
+use super::workflow_runtime::OwnedWorkflowPhaseContext;
 
 pub(crate) struct BackgroundWorkflowRunState {
     pub(crate) label: String,
@@ -19,6 +20,7 @@ pub(crate) struct BackgroundWorkflowRunState {
 pub(crate) struct QueuedWorkflowTriggerRun {
     pub(crate) workflow_name: String,
     pub(crate) trigger_id: String,
+    pub(crate) phase_context: OwnedWorkflowPhaseContext,
 }
 
 #[derive(Default)]
@@ -91,11 +93,17 @@ impl WorkflowSchedulerState {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn enqueue_trigger_run(&mut self, workflow_name: String, trigger_id: String) {
+    pub(crate) fn enqueue_trigger_run(
+        &mut self,
+        workflow_name: String,
+        trigger_id: String,
+        phase_context: OwnedWorkflowPhaseContext,
+    ) {
         self.queued_trigger_runs
             .push_back(QueuedWorkflowTriggerRun {
                 workflow_name,
                 trigger_id,
+                phase_context,
             });
     }
 

@@ -1821,6 +1821,7 @@ impl App {
             workflow_runtime::BackgroundWorkflowRunTarget::Trigger {
                 workflow_name,
                 trigger_id: target_name,
+                phase_context: workflow_runtime::OwnedWorkflowPhaseContext::default(),
             }
         } else {
             workflow_runtime::BackgroundWorkflowRunTarget::Job {
@@ -1845,8 +1846,11 @@ impl App {
         trigger_id: String,
     ) -> Option<String> {
         if self.workflow_scheduler.has_running_trigger_run() {
-            self.workflow_scheduler
-                .enqueue_trigger_run(workflow_name, trigger_id);
+            self.workflow_scheduler.enqueue_trigger_run(
+                workflow_name,
+                trigger_id,
+                workflow_runtime::OwnedWorkflowPhaseContext::default(),
+            );
             self.sync_background_workflow_status();
             None
         } else {
@@ -6533,12 +6537,12 @@ impl App {
     }
 
     async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {
-        let editor_cmd = match external_editor::resolve_editor_command() {
-            Ok(cmd) => cmd,
+        let editor_cmds = match external_editor::resolve_editor_commands() {
+            Ok(cmds) => cmds,
             Err(external_editor::EditorError::MissingEditor) => {
                 self.chat_widget
                     .add_to_history(history_cell::new_error_event(
-                    "Cannot open external editor: set $VISUAL or $EDITOR before starting Codex."
+                    "Cannot open external editor: no usable editor found in $VISUAL, $EDITOR, or `vim`."
                         .to_string(),
                 ));
                 self.reset_external_editor_state(tui);
@@ -6557,7 +6561,7 @@ impl App {
         let seed = self.chat_widget.composer_text_with_pending();
         let editor_result = tui
             .with_restored(tui::RestoreMode::KeepRaw, || async {
-                external_editor::run_editor(&seed, &editor_cmd).await
+                external_editor::run_editor(&seed, &editor_cmds).await
             })
             .await;
         self.reset_external_editor_state(tui);
@@ -10081,6 +10085,7 @@ jobs:
 
 triggers:
   - type: after_turn
+    id: followup
     jobs: [followup]
 
 jobs:
@@ -12266,7 +12271,38 @@ model = "gpt-5.2"
                 Some("final reply".to_string()),
             )
             .await;
-        assert_eq!(visible_cells.len(), 2);
+        assert_eq!(visible_cells.len(), 1);
+        let rendered_cells: Vec<String> = visible_cells
+            .iter()
+            .map(|cell| lines_to_single_string(&cell.transcript_lines(/*width*/ 80)))
+            .collect();
+        assert!(rendered_cells[0].contains("Workflow trigger started"));
+        assert_eq!(
+            app.background_workflow_labels(),
+            vec!["director · followup".to_string()]
+        );
+
+        let (run_id, result) = loop {
+            match tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
+                .await?
+                .expect("expected background workflow event")
+            {
+                AppEvent::BackgroundWorkflowRunCompleted { run_id, result } => {
+                    break (run_id, result);
+                }
+                other => panic!("expected background workflow completion event, got {other:?}"),
+            }
+        };
+        let completion_cells = app
+            .finish_background_workflow_run(&app_server, run_id, *result)
+            .await;
+        let rendered_completion: Vec<String> = completion_cells
+            .iter()
+            .map(|cell| lines_to_single_string(&cell.transcript_lines(/*width*/ 80)))
+            .collect();
+        assert_eq!(rendered_completion.len(), 2);
+        assert!(rendered_completion[0].contains("Workflow trigger completed"));
+        assert!(rendered_completion[1].contains("Workflow reply"));
 
         match app_event_rx
             .try_recv()
@@ -12322,6 +12358,30 @@ model = "gpt-5.2"
             )),
         )
         .await;
+
+        let (run_id, result) = loop {
+            match tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
+                .await?
+                .expect("expected inactive primary background workflow event")
+            {
+                AppEvent::BackgroundWorkflowRunCompleted { run_id, result } => {
+                    break (run_id, result);
+                }
+                AppEvent::ClawbotTurnCompleted { .. }
+                | AppEvent::InsertHistoryCell(_)
+                | AppEvent::ReplayWorkflowHistory { .. } => {
+                    continue;
+                }
+                other => panic!("expected background workflow completion event, got {other:?}"),
+            }
+        };
+        let visible_cells = app
+            .finish_background_workflow_run(&app_server, run_id, *result)
+            .await;
+        assert!(
+            visible_cells.is_empty(),
+            "inactive primary thread should record workflow cells without rendering them immediately"
+        );
 
         match app_event_rx
             .try_recv()
@@ -12432,8 +12492,11 @@ model = "gpt-5.2"
                 cancellation_for_task.cancelled().await;
             }),
         );
-        app.workflow_scheduler
-            .enqueue_trigger_run("director".to_string(), "triage".to_string());
+        app.workflow_scheduler.enqueue_trigger_run(
+            "director".to_string(),
+            "triage".to_string(),
+            workflow_runtime::OwnedWorkflowPhaseContext::default(),
+        );
         app.sync_background_workflow_status();
 
         assert_eq!(
