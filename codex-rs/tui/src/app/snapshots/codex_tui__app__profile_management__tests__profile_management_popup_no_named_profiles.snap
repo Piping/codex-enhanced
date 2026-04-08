@@ -1,0 +1,51 @@
+---
+source: tui/src/app/profile_management.rs
+expression: "render_selection_popup(&view, 96, 20)"
+---
+TestBackend { buffer: Buffer {
+    area: Rect { x: 0, y: 0, width: 96, height: 20 },
+    content: [
+        "                                                                                                ",
+        "  Profiles                                                                                      ",
+        "  Current runtime: default · 0 named profile(s).                                                ",
+        "                                                                                                ",
+        "  Type to search profiles                                                                       ",
+        "› Default Config (current)  Reload the current session with this profile while preserving       ",
+        "                            input continuity.                                                   ",
+        "  Fallback Config           No profiles in the fallback route.                                  ",
+        "  No named profiles         Add `[profiles.<name>]` entries in config.toml to route API         ",
+        "                            traffic through alternate endpoints.                                ",
+        "                                                                                                ",
+        "                                                                                                ",
+        "                                                                                                ",
+        "                                                                                                ",
+        "                                                                                                ",
+        "                                                                                                ",
+        "                                                                                                ",
+        "                                                                                                ",
+        "                                                                                                ",
+        "  Press enter to confirm or esc to go back                                                      ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 10, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 48, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 25, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 89, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 45, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 28, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 62, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 87, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 64, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 19, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+    ]
+}, scrollback: Buffer {
+    area: Rect { x: 0, y: 0, width: 96, height: 0 }
+}, cursor: false, pos: (0, 0) }

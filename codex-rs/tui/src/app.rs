@@ -4908,6 +4908,9 @@ impl App {
             AppEvent::OpenProfileManagementPanel => {
                 self.open_profile_management_panel();
             }
+            AppEvent::EditProfileFallbackConfig => {
+                self.edit_profile_fallback_config_from_ui(tui).await;
+            }
             AppEvent::OpenThreadPanel => {
                 self.open_thread_panel();
             }
