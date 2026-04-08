@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use toml::Value as TomlValue;
 
 use super::App;
@@ -8,9 +10,12 @@ use crate::app_server_session::AppServerSession;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+use crate::external_editor;
+use crate::history_cell;
 use crate::profile_router::DefaultProfileRouter;
 use crate::profile_router::PROFILE_ROUTER_STATE_RELATIVE_PATH;
 use crate::profile_router::ProfileFallbackAction;
+use crate::profile_router::ProfileRouteEntry;
 use crate::profile_router::ProfileRouterState;
 use crate::profile_router::ProfileRouterStore;
 use crate::tui;
@@ -54,31 +59,104 @@ impl App {
 
     pub(crate) fn open_profile_management_panel(&mut self) {
         let router_state = self.profile_router_store().load().unwrap_or_default();
-        let initial_selected_idx = self
+        let active_selected_idx = self
             .chat_widget
             .selected_index_for_active_view(PROFILE_MANAGEMENT_VIEW_ID);
-        let params = profile_management_panel_params(
+        let profiles = self.routed_profile_summaries(&router_state);
+        let params = profile_management_root_params(
             self.active_profile.as_deref(),
             &self.default_profile_summary(),
-            &self.routed_profile_summaries(&router_state),
-            router_state.routes.len(),
+            &profiles,
+            &router_state,
             self.chat_widget.is_task_running(),
-            initial_selected_idx,
+            active_selected_idx,
         );
-        if !self
-            .chat_widget
-            .replace_selection_view_if_active(PROFILE_MANAGEMENT_VIEW_ID, params)
-        {
-            self.chat_widget
-                .show_selection_view(profile_management_panel_params(
-                    self.active_profile.as_deref(),
-                    &self.default_profile_summary(),
-                    &self.routed_profile_summaries(&router_state),
-                    router_state.routes.len(),
-                    self.chat_widget.is_task_running(),
-                    initial_selected_idx,
-                ));
+        if active_selected_idx.is_some() {
+            let _ = self
+                .chat_widget
+                .replace_selection_view_if_active(PROFILE_MANAGEMENT_VIEW_ID, params);
+        } else {
+            self.chat_widget.show_selection_view(params);
         }
+    }
+
+    pub(crate) async fn edit_profile_fallback_config_from_ui(&mut self, tui: &mut tui::Tui) {
+        let router_state = self.profile_router_store().load().unwrap_or_default();
+        let profiles = self.routed_profile_summaries(&router_state);
+        if profiles.is_empty() {
+            match self
+                .profile_router_store()
+                .update(|state| *state = ProfileRouterState::default())
+            {
+                Ok(_) => {
+                    self.chat_widget.add_info_message(
+                        "Cleared the fallback route because no named profiles are defined."
+                            .to_string(),
+                        /*hint*/ None,
+                    );
+                    self.open_profile_management_panel();
+                }
+                Err(err) => {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to update {PROFILE_ROUTER_STATE_RELATIVE_PATH}: {err}"
+                    ));
+                }
+            }
+            return;
+        }
+
+        let seed = fallback_route_editor_seed(&profiles, &router_state);
+        let Ok(editor_cmd) = self.resolve_editor_command_for_profiles() else {
+            return;
+        };
+        let edited = tui
+            .with_restored(tui::RestoreMode::KeepRaw, || async {
+                external_editor::run_editor_with_suffix(&seed, &editor_cmd, ".txt").await
+            })
+            .await;
+
+        match edited {
+            Ok(contents) => {
+                let current_profile_ids = profiles
+                    .iter()
+                    .map(|profile| profile.id.clone())
+                    .collect::<Vec<_>>();
+                match parse_fallback_route_editor_contents(&contents, &current_profile_ids) {
+                    Ok(ordered_profile_ids) => {
+                        let next_state = rewritten_router_state(&router_state, ordered_profile_ids);
+                        match self
+                            .profile_router_store()
+                            .update(|state| *state = next_state.clone())
+                        {
+                            Ok(_) => {
+                                self.chat_widget.add_info_message(
+                                    format!(
+                                        "Updated fallback route in {PROFILE_ROUTER_STATE_RELATIVE_PATH}."
+                                    ),
+                                    /*hint*/ None,
+                                );
+                                self.open_profile_management_panel();
+                            }
+                            Err(err) => {
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to update {PROFILE_ROUTER_STATE_RELATIVE_PATH}: {err}"
+                                ));
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        self.chat_widget.add_error_message(err);
+                    }
+                }
+            }
+            Err(err) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(format!(
+                        "Failed to open editor: {err}",
+                    )));
+            }
+        }
+        tui.frame_requester().schedule_frame();
     }
 
     fn default_profile_summary(&self) -> DefaultProfileSummary {
@@ -150,6 +228,27 @@ impl App {
                 }
             })
             .collect()
+    }
+
+    fn resolve_editor_command_for_profiles(&mut self) -> Result<Vec<String>, ()> {
+        match external_editor::resolve_editor_command() {
+            Ok(cmd) => Ok(cmd),
+            Err(external_editor::EditorError::MissingEditor) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(
+                    "Cannot open external editor: set $VISUAL or $EDITOR before starting Codex."
+                        .to_string(),
+                ));
+                Err(())
+            }
+            Err(err) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(format!(
+                        "Failed to open editor: {err}",
+                    )));
+                Err(())
+            }
+        }
     }
 
     fn provider_label_and_base_url(&self, provider_id: &str) -> (String, Option<String>) {
@@ -361,26 +460,45 @@ impl App {
     }
 }
 
-fn profile_management_panel_params(
+fn profile_management_root_params(
     active_profile: Option<&str>,
     default_profile: &DefaultProfileSummary,
     profiles: &[RoutedProfileSummary],
-    routed_count: usize,
+    router_state: &ProfileRouterState,
     task_running: bool,
     initial_selected_idx: Option<usize>,
 ) -> SelectionViewParams {
-    let mut items = vec![profile_selection_item(
-        "Default Config".to_string(),
-        default_profile_description(default_profile),
-        active_profile.is_none(),
-        task_running,
-        RuntimeProfileTarget::Default,
-    )];
+    let mut items = vec![
+        profile_selection_item(
+            "Default Config".to_string(),
+            default_profile_description(default_profile),
+            active_profile.is_none(),
+            task_running,
+            RuntimeProfileTarget::Default,
+        ),
+        SelectionItem {
+            name: "Fallback Config".to_string(),
+            description: Some(root_fallback_summary(router_state)),
+            selected_description: Some(
+                "Open your external editor and reorder all named profiles. Saving rewrites the fallback route file from scratch."
+                    .to_string(),
+            ),
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::EditProfileFallbackConfig);
+            })],
+            dismiss_on_select: false,
+            search_value: Some("fallback config route reorder edit".to_string()),
+            ..Default::default()
+        },
+    ];
 
     if profiles.is_empty() {
         items.push(SelectionItem {
             name: "No named profiles".to_string(),
-            description: Some("Add `[profiles.<name>]` entries in config.toml to route API traffic through alternate endpoints.".to_string()),
+            description: Some(
+                "Add `[profiles.<name>]` entries in config.toml to route API traffic through alternate endpoints."
+                    .to_string(),
+            ),
             is_disabled: true,
             ..Default::default()
         });
@@ -400,11 +518,9 @@ fn profile_management_panel_params(
         view_id: Some(PROFILE_MANAGEMENT_VIEW_ID),
         title: Some("Profiles".to_string()),
         subtitle: Some(format!(
-            "Current: {} · {} named profile(s) · {} routed fallback entr{}.",
+            "Current runtime: {} · {} named profile(s).",
             active_profile.unwrap_or("default"),
             profiles.len(),
-            routed_count,
-            if routed_count == 1 { "y" } else { "ies" },
         )),
         footer_hint: Some(standard_popup_hint_line()),
         items,
@@ -467,13 +583,7 @@ fn default_profile_description(profile: &DefaultProfileSummary) -> String {
 }
 
 fn routed_profile_description(profile: &RoutedProfileSummary) -> String {
-    let mut parts = vec![format!("provider: {}", profile.provider_label)];
-    if let Some(base_url) = &profile.base_url {
-        parts.push(base_url.clone());
-    }
-    if let Some(model) = &profile.model {
-        parts.push(format!("model: {model}"));
-    }
+    let mut parts = vec![profile_endpoint_description(profile)];
     parts.push(
         profile
             .route_position
@@ -481,6 +591,129 @@ fn routed_profile_description(profile: &RoutedProfileSummary) -> String {
             .unwrap_or_else(|| "not in fallback route".to_string()),
     );
     parts.join(" · ")
+}
+
+fn profile_endpoint_description(profile: &RoutedProfileSummary) -> String {
+    let mut parts = vec![format!("provider: {}", profile.provider_label)];
+    if let Some(base_url) = &profile.base_url {
+        parts.push(base_url.clone());
+    }
+    if let Some(model) = &profile.model {
+        parts.push(format!("model: {model}"));
+    }
+    parts.join(" · ")
+}
+
+fn root_fallback_summary(router_state: &ProfileRouterState) -> String {
+    if router_state.routes.is_empty() {
+        "No profiles in the fallback route.".to_string()
+    } else {
+        format!(
+            "{} profile(s) in route · active fallback: {}",
+            router_state.routes.len(),
+            router_state.active_profile_id.as_deref().unwrap_or("none")
+        )
+    }
+}
+
+fn fallback_route_editor_seed(
+    profiles: &[RoutedProfileSummary],
+    router_state: &ProfileRouterState,
+) -> String {
+    let mut ordered_ids = Vec::with_capacity(profiles.len());
+    let current_profile_ids = profiles
+        .iter()
+        .map(|profile| profile.id.as_str())
+        .collect::<HashSet<_>>();
+
+    for route in &router_state.routes {
+        let profile_id = route.profile_id.as_str();
+        if current_profile_ids.contains(profile_id)
+            && !ordered_ids.iter().any(|id| id == profile_id)
+        {
+            ordered_ids.push(profile_id.to_string());
+        }
+    }
+    for profile in profiles {
+        if !ordered_ids.iter().any(|id| id == &profile.id) {
+            ordered_ids.push(profile.id.clone());
+        }
+    }
+
+    let mut seed = [
+        "# Reorder fallback profiles, one id per line.",
+        "# Keep every current profile exactly once.",
+        "# Blank lines and lines starting with # are ignored.",
+    ]
+    .join("\n");
+    seed.push_str("\n\n");
+    seed.push_str(&ordered_ids.join("\n"));
+    seed.push('\n');
+    seed
+}
+
+fn parse_fallback_route_editor_contents(
+    contents: &str,
+    current_profile_ids: &[String],
+) -> Result<Vec<String>, String> {
+    let expected_ids = current_profile_ids
+        .iter()
+        .map(std::string::String::as_str)
+        .collect::<HashSet<_>>();
+    let mut seen_ids = HashSet::with_capacity(current_profile_ids.len());
+    let mut ordered_ids = Vec::with_capacity(current_profile_ids.len());
+
+    for raw_line in contents.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if !expected_ids.contains(line) {
+            return Err(format!(
+                "Unknown profile `{line}` in fallback config. Keep only profiles currently defined in config.toml."
+            ));
+        }
+        if !seen_ids.insert(line.to_string()) {
+            return Err(format!(
+                "Duplicate profile `{line}` in fallback config. Each profile must appear exactly once."
+            ));
+        }
+        ordered_ids.push(line.to_string());
+    }
+
+    if ordered_ids.len() != current_profile_ids.len() {
+        let missing = current_profile_ids
+            .iter()
+            .filter(|id| !seen_ids.contains(id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        return Err(format!(
+            "Fallback config must list every current profile exactly once. Missing: {}.",
+            missing.join(", ")
+        ));
+    }
+
+    Ok(ordered_ids)
+}
+
+fn rewritten_router_state(
+    previous_state: &ProfileRouterState,
+    ordered_profile_ids: Vec<String>,
+) -> ProfileRouterState {
+    let active_profile_id = previous_state
+        .active_profile_id
+        .as_ref()
+        .filter(|profile_id| ordered_profile_ids.iter().any(|id| id == *profile_id))
+        .cloned();
+
+    ProfileRouterState {
+        active_profile_id,
+        routes: ordered_profile_ids
+            .into_iter()
+            .map(|profile_id| ProfileRouteEntry { profile_id })
+            .collect(),
+        ..ProfileRouterState::default()
+    }
 }
 
 #[cfg(test)]
@@ -494,10 +727,15 @@ mod tests {
 
     use super::DefaultProfileSummary;
     use super::RoutedProfileSummary;
-    use super::profile_management_panel_params;
+    use super::fallback_route_editor_seed;
+    use super::parse_fallback_route_editor_contents;
+    use super::profile_management_root_params;
+    use super::rewritten_router_state;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
     use crate::bottom_pane::ListSelectionView;
+    use crate::profile_router::ProfileRouteEntry;
+    use crate::profile_router::ProfileRouterState;
     use crate::render::renderable::Renderable;
 
     fn render_selection_popup(view: &ListSelectionView, width: u16, height: u16) -> String {
@@ -511,11 +749,8 @@ mod tests {
         format!("{:?}", terminal.backend())
     }
 
-    #[test]
-    fn profile_management_popup_snapshot() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let profiles = vec![
+    fn test_profiles() -> Vec<RoutedProfileSummary> {
+        vec![
             RoutedProfileSummary {
                 id: "primary".to_string(),
                 provider_label: "OpenAI".to_string(),
@@ -530,17 +765,45 @@ mod tests {
                 base_url: Some("https://api.secondary.example/v1".to_string()),
                 route_position: Some(2),
             },
-        ];
+            RoutedProfileSummary {
+                id: "tertiary".to_string(),
+                provider_label: "OpenAI".to_string(),
+                model: Some("gpt-5".to_string()),
+                base_url: Some("https://api.tertiary.example/v1".to_string()),
+                route_position: None,
+            },
+        ]
+    }
+
+    fn test_router_state() -> ProfileRouterState {
+        ProfileRouterState {
+            version: 1,
+            active_profile_id: Some("primary".to_string()),
+            routes: vec![
+                ProfileRouteEntry {
+                    profile_id: "primary".to_string(),
+                },
+                ProfileRouteEntry {
+                    profile_id: "secondary".to_string(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn profile_management_popup_snapshot() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
         let view = ListSelectionView::new(
-            profile_management_panel_params(
+            profile_management_root_params(
                 Some("primary"),
                 &DefaultProfileSummary {
                     provider_label: "OpenAI".to_string(),
                     model: Some("gpt-5".to_string()),
                     base_url: Some("https://api.openai.com/v1".to_string()),
                 },
-                &profiles,
-                /*routed_count*/ 2,
+                &test_profiles(),
+                &test_router_state(),
                 /*task_running*/ false,
                 /*initial_selected_idx*/ None,
             ),
@@ -554,8 +817,199 @@ mod tests {
     }
 
     #[test]
-    fn profile_management_panel_disables_switches_while_task_running() {
-        let params = profile_management_panel_params(
+    fn fallback_route_editor_seed_uses_current_profiles_only() {
+        let seed = fallback_route_editor_seed(&test_profiles(), &test_router_state());
+
+        assert_eq!(
+            seed,
+            concat!(
+                "# Reorder fallback profiles, one id per line.\n",
+                "# Keep every current profile exactly once.\n",
+                "# Blank lines and lines starting with # are ignored.\n",
+                "\n",
+                "primary\n",
+                "secondary\n",
+                "tertiary\n"
+            )
+        );
+    }
+
+    #[test]
+    fn fallback_route_parser_requires_complete_unique_profile_list() {
+        let current_profile_ids = vec![
+            "primary".to_string(),
+            "secondary".to_string(),
+            "tertiary".to_string(),
+        ];
+
+        let ordered = parse_fallback_route_editor_contents(
+            "# comment\nsecondary\nprimary\ntertiary\n",
+            &current_profile_ids,
+        )
+        .expect("valid fallback route");
+        assert_eq!(
+            ordered,
+            vec![
+                "secondary".to_string(),
+                "primary".to_string(),
+                "tertiary".to_string()
+            ]
+        );
+
+        let missing =
+            parse_fallback_route_editor_contents("secondary\nprimary\n", &current_profile_ids)
+                .expect_err("missing profile should fail");
+        assert_eq!(
+            missing,
+            "Fallback config must list every current profile exactly once. Missing: tertiary."
+        );
+
+        let duplicate = parse_fallback_route_editor_contents(
+            "secondary\nprimary\nprimary\ntertiary\n",
+            &current_profile_ids,
+        )
+        .expect_err("duplicate profile should fail");
+        assert_eq!(
+            duplicate,
+            "Duplicate profile `primary` in fallback config. Each profile must appear exactly once."
+        );
+
+        let unknown = parse_fallback_route_editor_contents(
+            "secondary\nunknown\nprimary\ntertiary\n",
+            &current_profile_ids,
+        )
+        .expect_err("unknown profile should fail");
+        assert_eq!(
+            unknown,
+            "Unknown profile `unknown` in fallback config. Keep only profiles currently defined in config.toml."
+        );
+    }
+
+    #[test]
+    fn rewritten_router_state_drops_stale_entries_and_preserves_active_profile() {
+        let state = rewritten_router_state(
+            &ProfileRouterState {
+                version: 1,
+                active_profile_id: Some("secondary".to_string()),
+                routes: vec![
+                    ProfileRouteEntry {
+                        profile_id: "stale".to_string(),
+                    },
+                    ProfileRouteEntry {
+                        profile_id: "primary".to_string(),
+                    },
+                ],
+            },
+            vec![
+                "tertiary".to_string(),
+                "secondary".to_string(),
+                "primary".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            state,
+            ProfileRouterState {
+                version: 1,
+                active_profile_id: Some("secondary".to_string()),
+                routes: vec![
+                    ProfileRouteEntry {
+                        profile_id: "tertiary".to_string(),
+                    },
+                    ProfileRouteEntry {
+                        profile_id: "secondary".to_string(),
+                    },
+                    ProfileRouteEntry {
+                        profile_id: "primary".to_string(),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn rewritten_router_state_clears_missing_active_profile() {
+        let state = rewritten_router_state(
+            &ProfileRouterState {
+                version: 1,
+                active_profile_id: Some("stale".to_string()),
+                routes: Vec::new(),
+            },
+            vec!["primary".to_string()],
+        );
+
+        assert_eq!(
+            state,
+            ProfileRouterState {
+                version: 1,
+                active_profile_id: None,
+                routes: vec![ProfileRouteEntry {
+                    profile_id: "primary".to_string(),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn profile_management_popup_fallback_item_opens_editor_flow() {
+        let params = profile_management_root_params(
+            Some("primary"),
+            &DefaultProfileSummary {
+                provider_label: "OpenAI".to_string(),
+                model: Some("gpt-5".to_string()),
+                base_url: Some("https://api.openai.com/v1".to_string()),
+            },
+            &test_profiles(),
+            &test_router_state(),
+            /*task_running*/ false,
+            /*initial_selected_idx*/ None,
+        );
+
+        assert_eq!(params.items[1].name, "Fallback Config");
+        assert_eq!(
+            params.items[1].selected_description.as_deref(),
+            Some(
+                "Open your external editor and reorder all named profiles. Saving rewrites the fallback route file from scratch."
+            )
+        );
+        assert_eq!(params.items[1].dismiss_on_select, false);
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        (params.items[1].actions[0])(&AppEventSender::new(tx));
+        assert!(matches!(
+            rx.try_recv().ok(),
+            Some(AppEvent::EditProfileFallbackConfig)
+        ));
+    }
+
+    #[test]
+    fn profile_management_popup_shows_no_named_profiles() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let view = ListSelectionView::new(
+            profile_management_root_params(
+                None,
+                &DefaultProfileSummary {
+                    provider_label: "OpenAI".to_string(),
+                    model: Some("gpt-5".to_string()),
+                    base_url: Some("https://api.openai.com/v1".to_string()),
+                },
+                &[],
+                &ProfileRouterState::default(),
+                /*task_running*/ false,
+                /*initial_selected_idx*/ None,
+            ),
+            tx,
+        );
+
+        assert_snapshot!(
+            "profile_management_popup_no_named_profiles",
+            render_selection_popup(&view, /*width*/ 96, /*height*/ 20)
+        );
+    }
+
+    #[test]
+    fn profile_management_popup_fallback_item_stays_enabled_while_task_running() {
+        let params = profile_management_root_params(
             Some("primary"),
             &DefaultProfileSummary {
                 provider_label: "OpenAI".to_string(),
@@ -569,19 +1023,56 @@ mod tests {
                 base_url: None,
                 route_position: Some(1),
             }],
-            /*routed_count*/ 1,
+            &ProfileRouterState {
+                version: 1,
+                active_profile_id: Some("primary".to_string()),
+                routes: vec![ProfileRouteEntry {
+                    profile_id: "primary".to_string(),
+                }],
+            },
+            /*task_running*/ true,
+            /*initial_selected_idx*/ None,
+        );
+
+        assert_eq!(params.items[1].is_disabled, false);
+    }
+
+    #[test]
+    fn profile_management_panel_disables_switches_while_task_running() {
+        let params = profile_management_root_params(
+            Some("primary"),
+            &DefaultProfileSummary {
+                provider_label: "OpenAI".to_string(),
+                model: Some("gpt-5".to_string()),
+                base_url: None,
+            },
+            &[RoutedProfileSummary {
+                id: "primary".to_string(),
+                provider_label: "OpenAI".to_string(),
+                model: Some("gpt-5".to_string()),
+                base_url: None,
+                route_position: Some(1),
+            }],
+            &ProfileRouterState {
+                version: 1,
+                active_profile_id: Some("primary".to_string()),
+                routes: vec![ProfileRouteEntry {
+                    profile_id: "primary".to_string(),
+                }],
+            },
             /*task_running*/ true,
             /*initial_selected_idx*/ None,
         );
 
         assert_eq!(params.items[0].is_disabled, true);
-        assert_eq!(params.items[1].is_disabled, true);
+        assert_eq!(params.items[1].is_disabled, false);
+        assert_eq!(params.items[2].is_disabled, true);
         assert_eq!(
             params.items[0].disabled_reason.as_deref(),
             Some("Wait for the current task to finish before switching profiles.")
         );
         assert_eq!(
-            params.items[1].disabled_reason.as_deref(),
+            params.items[2].disabled_reason.as_deref(),
             Some("Already active.")
         );
     }

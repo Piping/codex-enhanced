@@ -477,7 +477,7 @@ fn serialize_yaml_fragment(value: &impl serde::Serialize) -> Result<String, Stri
 
 fn clear_trigger_type_fields(trigger: &mut Mapping) {
     for key in ["type", "after", "every", "cron"] {
-        trigger.remove(&string_key(key));
+        trigger.remove(string_key(key));
     }
 }
 

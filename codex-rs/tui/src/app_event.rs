@@ -188,6 +188,9 @@ pub(crate) enum AppEvent {
     /// Open the routed profile management panel.
     OpenProfileManagementPanel,
 
+    /// Edit the fallback route for named profiles.
+    EditProfileFallbackConfig,
+
     /// Open thread-specific actions for the current conversation.
     OpenThreadPanel,
 

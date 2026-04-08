@@ -1562,7 +1562,7 @@ fn workflow_trigger_parameter_item(
 
     SelectionItem {
         name: format!("Edit {label}"),
-        description: Some(description.to_string()),
+        description: Some(description),
         selected_description: Some(
             "Open this trigger parameter in your external editor and save it back into workflow.yaml."
                 .to_string(),
