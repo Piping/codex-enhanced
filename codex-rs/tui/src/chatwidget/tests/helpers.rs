@@ -273,6 +273,7 @@ pub(super) async fn make_chatwidget_manual(
         had_work_activity: false,
         saw_plan_update_this_turn: false,
         saw_plan_item_this_turn: false,
+        history_timestamp_label_provider: Arc::new(|| "2026-04-08 03:04:05 +08:00".to_string()),
         last_plan_progress: None,
         plan_delta_buffer: String::new(),
         plan_item_active: false,

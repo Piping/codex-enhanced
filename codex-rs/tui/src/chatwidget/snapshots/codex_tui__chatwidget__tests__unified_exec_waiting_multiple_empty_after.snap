@@ -1,5 +1,7 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/exec_flow.rs
 expression: combined
 ---
 • Waited for background terminal · just fix
+
+─ 2026-04-08 03:04:05 +08:00 ───────────────────────────────────────────────────

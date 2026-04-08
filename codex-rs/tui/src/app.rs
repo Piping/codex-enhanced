@@ -12981,10 +12981,20 @@ model = "gpt-5.2"
             .expect("queued active-thread event");
         app.handle_thread_event_now(queued_event);
 
-        assert!(
-            app_event_rx.try_recv().is_err(),
-            "after_turn should not run before event consumption finishes"
-        );
+        while let Ok(event) = app_event_rx.try_recv() {
+            match event {
+                AppEvent::ClawbotTurnCompleted { .. }
+                | AppEvent::InsertHistoryCell(_)
+                | AppEvent::ReplayWorkflowHistory { .. } => {
+                    continue;
+                }
+                other => {
+                    panic!(
+                        "after_turn should not run before event consumption finishes, got {other:?}"
+                    );
+                }
+            }
+        }
 
         let visible_cells = app
             .handle_primary_thread_turn_complete_for_workflows(

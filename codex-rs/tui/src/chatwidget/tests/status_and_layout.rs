@@ -1346,6 +1346,36 @@ async fn final_reasoning_then_message_without_deltas_are_rendered() {
 }
 
 #[tokio::test]
+async fn completed_turn_history_renders_timestamp_separator_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    complete_user_message(&mut chat, "msg-user", "Add a timestamp to history");
+    complete_assistant_message(
+        &mut chat,
+        "msg-assistant",
+        "Timestamp rendered.",
+        /*phase*/ None,
+    );
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: Some("Timestamp rendered.".into()),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_chatwidget_snapshot!(
+        "completed_turn_history_renders_timestamp_separator",
+        combined
+    );
+}
+
+#[tokio::test]
 async fn deltas_then_same_final_message_are_rendered_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
