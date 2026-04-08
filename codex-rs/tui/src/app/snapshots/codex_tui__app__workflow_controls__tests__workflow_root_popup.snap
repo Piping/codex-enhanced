@@ -1,5 +1,5 @@
 ---
-source: tui/src/app.rs
+source: tui/src/app/workflow_controls.rs
 expression: popup
 ---
   Workflow
@@ -12,7 +12,7 @@ expression: popup
   director - job - summarize           Workflow job
   director - job - notify              Workflow job
   director - trigger - review_backlog  Manual · Enabled
-  director - trigger - triage          Manual · Enabled
-  director - trigger - followup        After Turn · Enabled
+  director - trigger - triage          Manual · Disabled
+  director - trigger - pulse           Interval (30m) · Enabled
 
   Press enter to confirm or esc to go back

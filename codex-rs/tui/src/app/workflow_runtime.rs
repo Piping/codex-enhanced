@@ -772,11 +772,6 @@ async fn run_background_workflow_selection(
                     "workflow trigger `{workflow_name}/{trigger_id}` is disabled"
                 )));
             }
-            if !matches!(trigger.kind, WorkflowTriggerKind::Manual) {
-                return Err(WorkflowRunError::Failed(format!(
-                    "workflow trigger `{workflow_name}/{trigger_id}` is not runnable as a queued manual trigger"
-                )));
-            }
             run_workflow_jobs(
                 client,
                 &registry,
@@ -1479,6 +1474,52 @@ jobs:
                 "unsubscribe_thread:thr_workflow".to_string(),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn non_manual_trigger_can_run_now_from_workflow_ui() {
+        let tempdir = tempdir().expect("tempdir");
+        let workflows_dir = tempdir.path().join(".codex/workflows");
+        std::fs::create_dir_all(&workflows_dir).expect("workflow dir");
+        std::fs::write(
+            workflows_dir.join("manual.yaml"),
+            r#"name: director
+
+triggers:
+  - type: after_turn
+    id: follow_up
+    jobs: [review_backlog]
+
+jobs:
+  review_backlog:
+    steps:
+      - prompt: summarize the backlog
+"#,
+        )
+        .expect("workflow fixture");
+        let client = FakeWorkflowRuntimeClient::new(vec![Ok(WorkflowTurnState {
+            status: TurnStatus::Completed,
+            error: None,
+            last_agent_message: Some("workflow reply".to_string()),
+        })]);
+        let result = run_background_workflow(
+            &client,
+            tempdir.path().to_path_buf(),
+            BackgroundWorkflowRunTarget::Trigger {
+                workflow_name: "director".to_string(),
+                trigger_id: "follow_up".to_string(),
+            },
+            CancellationToken::new(),
+        )
+        .await;
+
+        match result.outcome {
+            BackgroundWorkflowRunOutcome::Completed(results) => {
+                assert_eq!(results.len(), 1);
+                assert_eq!(results[0].message.as_deref(), Some("workflow reply"));
+            }
+            other => panic!("expected completed run, got {other:?}"),
+        }
     }
 
     #[tokio::test]

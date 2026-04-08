@@ -9,6 +9,8 @@ use super::workflow_definition::WorkflowContextMode;
 use super::workflow_definition::WorkflowResponseMode;
 use super::workflow_definition::WorkflowStep;
 use crate::app_event::WorkflowJobEditableField;
+use crate::app_event::WorkflowTriggerEditableField;
+use crate::app_event::WorkflowTriggerType;
 
 pub(crate) const DEFAULT_WORKFLOW_TEMPLATE_FILENAME: &str = "workflow.yaml";
 
@@ -107,6 +109,29 @@ pub(crate) fn toggle_trigger_enabled(
         let next_enabled = !enabled;
         trigger.insert(string_key("enabled"), YamlValue::Bool(next_enabled));
         Ok(next_enabled)
+    })
+}
+
+pub(crate) fn set_trigger_type(
+    workflow_path: &Path,
+    trigger_id: &str,
+    trigger_type: WorkflowTriggerType,
+) -> Result<String, String> {
+    mutate_trigger(workflow_path, trigger_id, |trigger| {
+        let current_parameter = trigger_parameter_seed_from_mapping(trigger);
+        clear_trigger_type_fields(trigger);
+        trigger.insert(
+            string_key("type"),
+            YamlValue::String(trigger_type_key(trigger_type).to_string()),
+        );
+        if let Some((parameter_key, default_value)) = trigger_type_parameter_defaults(trigger_type)
+        {
+            trigger.insert(
+                string_key(parameter_key),
+                YamlValue::String(current_parameter.unwrap_or_else(|| default_value.to_string())),
+            );
+        }
+        Ok(trigger_id.to_string())
     })
 }
 
@@ -218,6 +243,87 @@ pub(crate) fn write_job_field(
     }
 }
 
+pub(crate) fn trigger_field_seed(
+    workflow_path: &Path,
+    trigger_id: &str,
+    field: WorkflowTriggerEditableField,
+) -> Result<String, String> {
+    let document = load_yaml_document(workflow_path)?;
+    let trigger = workflow_trigger_mapping(&document, trigger_id)?;
+    match field {
+        WorkflowTriggerEditableField::Id => trigger
+            .get(string_key("id"))
+            .and_then(YamlValue::as_str)
+            .map(ToString::to_string)
+            .ok_or_else(|| format!("workflow trigger `{trigger_id}` does not define an `id`")),
+        WorkflowTriggerEditableField::Jobs => {
+            let jobs = trigger
+                .get(string_key("jobs"))
+                .map(|value| serde_yaml::from_value::<Vec<String>>(value.clone()))
+                .transpose()
+                .map_err(|err| err.to_string())?
+                .unwrap_or_default();
+            serialize_yaml_fragment(&jobs)
+        }
+        WorkflowTriggerEditableField::Parameter => trigger_parameter_seed_from_mapping(trigger)
+            .ok_or_else(|| format!("workflow trigger `{trigger_id}` has no editable parameter")),
+    }
+}
+
+pub(crate) fn write_trigger_field(
+    workflow_path: &Path,
+    trigger_id: &str,
+    field: WorkflowTriggerEditableField,
+    text: &str,
+) -> Result<String, String> {
+    match field {
+        WorkflowTriggerEditableField::Id => {
+            let next_trigger_id = text.trim();
+            if next_trigger_id.is_empty() {
+                return Err("workflow trigger id cannot be empty".to_string());
+            }
+            mutate_trigger(workflow_path, trigger_id, |trigger| {
+                trigger.insert(
+                    string_key("id"),
+                    YamlValue::String(next_trigger_id.to_string()),
+                );
+                Ok(next_trigger_id.to_string())
+            })
+        }
+        WorkflowTriggerEditableField::Jobs => {
+            let jobs = match text.trim() {
+                "" => Vec::new(),
+                _ => serde_yaml::from_str::<Vec<String>>(text).map_err(|err| err.to_string())?,
+            };
+            mutate_trigger(workflow_path, trigger_id, |trigger| {
+                trigger.insert(
+                    string_key("jobs"),
+                    serde_yaml::to_value(jobs).map_err(|err| err.to_string())?,
+                );
+                Ok(trigger_id.to_string())
+            })
+        }
+        WorkflowTriggerEditableField::Parameter => {
+            let next_value = text.trim();
+            if next_value.is_empty() {
+                return Err("workflow trigger parameter cannot be empty".to_string());
+            }
+            mutate_trigger(workflow_path, trigger_id, |trigger| {
+                let Some(parameter_key) = trigger_parameter_key_from_mapping(trigger) else {
+                    return Err(format!(
+                        "workflow trigger `{trigger_id}` has no editable parameter"
+                    ));
+                };
+                trigger.insert(
+                    string_key(parameter_key),
+                    YamlValue::String(next_value.to_string()),
+                );
+                Ok(trigger_id.to_string())
+            })
+        }
+    }
+}
+
 fn workflow_dir(cwd: &Path) -> PathBuf {
     cwd.join(".codex").join(WORKFLOW_DIR_NAME)
 }
@@ -284,6 +390,35 @@ fn workflow_job_mapping_mut<'a>(
         .ok_or_else(|| format!("workflow job `{job_name}` does not exist"))
 }
 
+fn workflow_trigger_mapping<'a>(
+    document: &'a YamlValue,
+    trigger_id: &str,
+) -> Result<&'a Mapping, String> {
+    let document = document
+        .as_mapping()
+        .ok_or_else(|| "workflow file root must be a YAML mapping".to_string())?;
+    let triggers = document
+        .get(string_key("triggers"))
+        .and_then(YamlValue::as_sequence)
+        .ok_or_else(|| "workflow file does not define a `triggers` sequence".to_string())?;
+
+    for (index, trigger) in triggers.iter().enumerate() {
+        let Some(trigger_mapping) = trigger.as_mapping() else {
+            continue;
+        };
+        let candidate_id = trigger_mapping
+            .get(string_key("id"))
+            .and_then(YamlValue::as_str)
+            .map(ToString::to_string)
+            .unwrap_or_else(|| format!("trigger-{}", index + 1));
+        if candidate_id == trigger_id {
+            return Ok(trigger_mapping);
+        }
+    }
+
+    Err(format!("workflow trigger `{trigger_id}` does not exist"))
+}
+
 fn workflow_trigger_mapping_mut<'a>(
     document: &'a mut YamlValue,
     trigger_id: &str,
@@ -340,6 +475,54 @@ fn serialize_yaml_fragment(value: &impl serde::Serialize) -> Result<String, Stri
     Ok(text.trim_start_matches("---\n").trim_end().to_string())
 }
 
+fn clear_trigger_type_fields(trigger: &mut Mapping) {
+    for key in ["type", "after", "every", "cron"] {
+        trigger.remove(&string_key(key));
+    }
+}
+
+fn trigger_type_key(trigger_type: WorkflowTriggerType) -> &'static str {
+    match trigger_type {
+        WorkflowTriggerType::Manual => "manual",
+        WorkflowTriggerType::BeforeTurn => "before_turn",
+        WorkflowTriggerType::AfterTurn => "after_turn",
+        WorkflowTriggerType::Idle => "idle",
+        WorkflowTriggerType::Interval => "interval",
+        WorkflowTriggerType::Cron => "cron",
+    }
+}
+
+fn trigger_type_parameter_defaults(
+    trigger_type: WorkflowTriggerType,
+) -> Option<(&'static str, &'static str)> {
+    match trigger_type {
+        WorkflowTriggerType::Idle => Some(("after", "5m")),
+        WorkflowTriggerType::Interval => Some(("every", "5m")),
+        WorkflowTriggerType::Cron => Some(("cron", "0 * * * *")),
+        WorkflowTriggerType::Manual
+        | WorkflowTriggerType::BeforeTurn
+        | WorkflowTriggerType::AfterTurn => None,
+    }
+}
+
+fn trigger_parameter_seed_from_mapping(trigger: &Mapping) -> Option<String> {
+    let parameter_key = trigger_parameter_key_from_mapping(trigger)?;
+    trigger
+        .get(string_key(parameter_key))
+        .and_then(YamlValue::as_str)
+        .map(ToString::to_string)
+}
+
+fn trigger_parameter_key_from_mapping(trigger: &Mapping) -> Option<&'static str> {
+    match trigger.get(string_key("type")).and_then(YamlValue::as_str) {
+        Some("idle") => Some("after"),
+        Some("interval") => Some("every"),
+        Some("cron") => Some("cron"),
+        Some("manual" | "before_turn" | "after_turn") | None => None,
+        Some(_) => None,
+    }
+}
+
 fn string_key(value: &str) -> YamlValue {
     YamlValue::String(value.to_string())
 }
@@ -359,6 +542,10 @@ mod tests {
 triggers:
   - type: manual
     id: review
+    jobs: [notify]
+  - type: interval
+    id: pulse
+    every: 30m
     jobs: [notify]
 
 jobs:
@@ -467,5 +654,51 @@ jobs:
         let steps = job_field_seed(&path, "notify", WorkflowJobEditableField::Steps).unwrap();
         assert!(steps.contains("summarize the changes"));
         assert!(steps.contains("cargo test -p codex-tui"));
+    }
+
+    #[test]
+    fn edit_trigger_fields_and_type_round_trip() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".codex/workflows/workflow.yaml");
+        write_workflow(&path);
+
+        assert_eq!(
+            trigger_field_seed(&path, "review", WorkflowTriggerEditableField::Id).unwrap(),
+            "review"
+        );
+        assert_eq!(
+            trigger_field_seed(&path, "pulse", WorkflowTriggerEditableField::Parameter).unwrap(),
+            "30m"
+        );
+
+        let next_trigger_id = write_trigger_field(
+            &path,
+            "review",
+            WorkflowTriggerEditableField::Id,
+            "review_now",
+        )
+        .unwrap();
+        assert_eq!(next_trigger_id, "review_now");
+        write_trigger_field(
+            &path,
+            "review_now",
+            WorkflowTriggerEditableField::Jobs,
+            "- notify\n- review_now\n",
+        )
+        .unwrap();
+        set_trigger_type(&path, "review_now", WorkflowTriggerType::Cron).unwrap();
+        write_trigger_field(
+            &path,
+            "review_now",
+            WorkflowTriggerEditableField::Parameter,
+            "*/15 * * * *",
+        )
+        .unwrap();
+
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("id: review_now"));
+        assert!(text.contains("type: cron"));
+        assert!(text.contains("cron: '*/15 * * * *'") || text.contains("cron: \"*/15 * * * *\""));
+        assert!(text.contains("- review_now"));
     }
 }

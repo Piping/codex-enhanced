@@ -1,0 +1,17 @@
+---
+source: tui/src/app/workflow_controls.rs
+expression: popup
+---
+  Trigger Type
+  director · pulse · manual.yaml
+
+  Type to search trigger types
+› Back         Return to the previous workflow menu.
+  Manual       Run only when triggered from the workflow menu.
+  Before Turn  Run automatically before the next user turn.
+  After Turn   Run automatically after the current turn finishes.
+  Idle         Run after the workspace has been idle for a duration.
+  Interval     Current type
+  Cron         Run on a cron schedule.
+
+  Press enter to confirm or esc to go back

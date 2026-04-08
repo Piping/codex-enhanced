@@ -5128,6 +5128,21 @@ impl App {
                 self.edit_workflow_job_field_from_ui(tui, workflow_path, job_name, field)
                     .await;
             }
+            AppEvent::SetWorkflowTriggerType {
+                workflow_path,
+                trigger_id,
+                trigger_type,
+            } => {
+                self.set_workflow_trigger_type_from_ui(workflow_path, trigger_id, trigger_type);
+            }
+            AppEvent::EditWorkflowTriggerField {
+                workflow_path,
+                trigger_id,
+                field,
+            } => {
+                self.edit_workflow_trigger_field_from_ui(tui, workflow_path, trigger_id, field)
+                    .await;
+            }
             AppEvent::StartManualWorkflowTrigger {
                 workflow_name,
                 trigger_id,
@@ -13278,6 +13293,7 @@ model = "gpt-5.2"
         assert!(app.btw_session.is_none());
         Ok(())
     }
+    #[tokio::test]
     async fn shutdown_first_exit_returns_immediate_exit_when_shutdown_submit_fails() {
         let mut app = make_test_app().await;
         let thread_id = ThreadId::new();
