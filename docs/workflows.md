@@ -68,6 +68,7 @@ Behavior notes:
 - Trigger `enabled: false` disables the trigger itself.
 - A disabled trigger cannot be started from `Run Now` until it is enabled again.
 - `Run Now` is available for any enabled trigger type, not only `manual`.
+- `After Turn` runs are dispatched as background workflow tasks after the turn finishes, so the main thread stays responsive and the transcript shows workflow start/completion cells separately.
 
 ## Trigger Types
 
@@ -136,4 +137,3 @@ From `director - trigger - pulse`, you can:
 - disable the trigger
 - switch `interval` to `idle`
 - change the parameter from `every: 30m` to `after: 30m`
-
