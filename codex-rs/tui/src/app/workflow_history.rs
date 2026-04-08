@@ -1,7 +1,8 @@
 use super::App;
 use super::workflow_runtime::WorkflowOutputDelivery;
 use super::workflow_runtime::WorkflowPhaseContext;
-use super::workflow_runtime::WorkflowRunPhase;
+use crate::app::workflow_definition::WorkflowTriggerKind;
+use crate::app::workflow_definition::load_workflow_registry;
 use crate::app_command::AppCommand;
 use crate::app_command::AppCommandView;
 use crate::app_event::AppEvent;
@@ -105,9 +106,8 @@ impl App {
 
         let mut cells: Vec<Arc<dyn HistoryCell>> = Vec::new();
         match self
-            .run_phase_workflows(
+            .run_before_turn_workflows(
                 app_server,
-                WorkflowRunPhase::BeforeTurn,
                 WorkflowPhaseContext {
                     current_user_turn: Some(current_user_turn.as_str()),
                     last_assistant_message: None,
@@ -308,56 +308,36 @@ impl App {
             return Vec::new();
         };
 
-        let results = match self
-            .run_phase_workflows(
-                app_server,
-                WorkflowRunPhase::AfterTurn,
-                WorkflowPhaseContext {
-                    current_user_turn: None,
-                    last_assistant_message: last_agent_message.as_deref(),
-                },
-            )
-            .await
-        {
-            Ok(results) => results,
+        let registry = match load_workflow_registry(self.config.cwd.as_path()) {
+            Ok(registry) => registry,
             Err(error) => {
-                self.chat_widget
-                    .add_error_message(format!("Workflow after_turn failed: {error}"));
+                self.chat_widget.add_error_message(format!(
+                    "Workflow after_turn failed: failed to load workflows: {error}"
+                ));
                 return Vec::new();
             }
         };
 
         let mut visible_cells = Vec::new();
-        for result in results {
-            let source =
-                WorkflowReplySource::new(workflow_job_source_hint(&result), /*action*/ None);
-            let completed_cell: Arc<dyn HistoryCell> = Arc::new(history_cell::new_info_event(
-                "Workflow job completed".to_string(),
-                Some(source.hint()),
-            ));
-            let visible_completed =
-                self.record_workflow_history_cell(primary_thread_id, completed_cell);
-
-            if let Some(cell) = visible_completed {
-                visible_cells.push(cell);
-            }
-
-            let Some(message) = result.message.filter(|message| !message.trim().is_empty()) else {
-                continue;
-            };
-
-            let next_visible = match result.delivery {
-                WorkflowOutputDelivery::AssistantCell => {
-                    let cell: Arc<dyn HistoryCell> =
-                        Arc::new(workflow_result_cell(&message, self.config.cwd.as_path()));
-                    self.record_workflow_history_cell(primary_thread_id, cell)
+        let phase_context = WorkflowPhaseContext {
+            current_user_turn: None,
+            last_assistant_message: last_agent_message.as_deref(),
+        };
+        for workflow in &registry.files {
+            for trigger in &workflow.triggers {
+                if !trigger.enabled || !matches!(trigger.kind, WorkflowTriggerKind::AfterTurn) {
+                    continue;
                 }
-                WorkflowOutputDelivery::MainThreadInput | WorkflowOutputDelivery::UserFollowup => {
-                    self.queue_workflow_followup_to_primary(message, source)
+
+                let cell = self.start_scheduled_workflow_trigger_run(
+                    app_server,
+                    workflow.name.clone(),
+                    trigger.id.clone(),
+                    phase_context,
+                );
+                if let Some(cell) = self.record_workflow_history_cell(primary_thread_id, cell) {
+                    visible_cells.push(cell);
                 }
-            };
-            if let Some(cell) = next_visible {
-                visible_cells.push(cell);
             }
         }
         visible_cells

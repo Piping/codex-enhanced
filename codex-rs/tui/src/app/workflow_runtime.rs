@@ -29,7 +29,6 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
-use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -66,6 +65,7 @@ pub(crate) enum BackgroundWorkflowRunTarget {
     Trigger {
         workflow_name: String,
         trigger_id: String,
+        phase_context: OwnedWorkflowPhaseContext,
     },
     Job {
         workflow_name: String,
@@ -133,15 +133,33 @@ pub(crate) enum WorkflowOutputDelivery {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WorkflowRunPhase {
-    BeforeTurn,
-    AfterTurn,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct WorkflowPhaseContext<'a> {
     pub(crate) current_user_turn: Option<&'a str>,
     pub(crate) last_assistant_message: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct OwnedWorkflowPhaseContext {
+    pub(crate) current_user_turn: Option<String>,
+    pub(crate) last_assistant_message: Option<String>,
+}
+
+impl OwnedWorkflowPhaseContext {
+    fn borrowed(&self) -> WorkflowPhaseContext<'_> {
+        WorkflowPhaseContext {
+            current_user_turn: self.current_user_turn.as_deref(),
+            last_assistant_message: self.last_assistant_message.as_deref(),
+        }
+    }
+}
+
+impl From<WorkflowPhaseContext<'_>> for OwnedWorkflowPhaseContext {
+    fn from(value: WorkflowPhaseContext<'_>) -> Self {
+        Self {
+            current_user_turn: value.current_user_turn.map(str::to_owned),
+            last_assistant_message: value.last_assistant_message.map(str::to_owned),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -376,36 +394,92 @@ impl WorkflowRuntimeClient for AppServerWorkflowRuntimeClient {
         turn_id: String,
     ) -> BoxFuture<'a, Result<WorkflowTurnState, String>> {
         Box::pin(async move {
-            let mut notifications = thread.notifications.lock().await;
             let mut last_agent_message = None;
             loop {
-                match notifications.recv().await {
-                    Some(ServerNotification::ItemCompleted(notification))
-                        if notification.thread_id == thread.thread_id
-                            && notification.turn_id == turn_id =>
-                    {
-                        update_last_workflow_agent_message(&mut last_agent_message, &notification);
-                    }
-                    Some(ServerNotification::TurnCompleted(notification))
-                        if notification.thread_id == thread.thread_id
-                            && notification.turn.id == turn_id =>
-                    {
-                        let status = notification.turn.status.clone();
-                        let error = notification.turn.error.clone().map(|error| error.message);
-                        return Ok(WorkflowTurnState {
-                            status,
-                            error,
-                            last_agent_message: last_agent_message
-                                .or_else(|| last_agent_message_for_turn_completed(&notification)),
-                        });
-                    }
-                    Some(_) => {}
-                    None => {
-                        return Err(format!(
-                            "workflow notification stream closed before turn `{turn_id}` completed"
-                        ));
+                {
+                    let mut notifications = thread.notifications.lock().await;
+                    loop {
+                        match notifications.try_recv() {
+                            Ok(ServerNotification::ItemCompleted(notification))
+                                if notification.thread_id == thread.thread_id
+                                    && notification.turn_id == turn_id =>
+                            {
+                                update_last_workflow_agent_message(
+                                    &mut last_agent_message,
+                                    &notification,
+                                );
+                            }
+                            Ok(ServerNotification::TurnCompleted(notification))
+                                if notification.thread_id == thread.thread_id
+                                    && notification.turn.id == turn_id =>
+                            {
+                                let status = notification.turn.status.clone();
+                                let error =
+                                    notification.turn.error.clone().map(|error| error.message);
+                                return Ok(WorkflowTurnState {
+                                    status,
+                                    error,
+                                    last_agent_message: last_agent_message.or_else(|| {
+                                        last_agent_message_for_turn_items(
+                                            notification.turn.items.as_slice(),
+                                        )
+                                    }),
+                                });
+                            }
+                            Ok(_) => {}
+                            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+                            | Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+                        }
                     }
                 }
+
+                let response: ThreadReadResponse = match self
+                    .request_handle
+                    .request_typed(ClientRequest::ThreadRead {
+                        request_id: request_id(),
+                        params: ThreadReadParams {
+                            thread_id: thread.thread_id.clone(),
+                            include_turns: true,
+                        },
+                    })
+                    .await
+                {
+                    Ok(response) => response,
+                    Err(err)
+                        if {
+                            let message = err.to_string();
+                            message
+                                .contains("includeTurns is unavailable before first user message")
+                                || message.contains("ephemeral threads do not support includeTurns")
+                        } =>
+                    {
+                        sleep(WORKFLOW_POLL_INTERVAL).await;
+                        continue;
+                    }
+                    Err(err) => {
+                        return Err(format!("failed to read workflow turn `{turn_id}`: {err}"));
+                    }
+                };
+                let Some(turn) = response
+                    .thread
+                    .turns
+                    .into_iter()
+                    .find(|turn| turn.id == turn_id)
+                else {
+                    sleep(WORKFLOW_POLL_INTERVAL).await;
+                    continue;
+                };
+                if let Some(message) = last_agent_message_for_turn_items(turn.items.as_slice()) {
+                    last_agent_message = Some(message);
+                }
+                if !matches!(turn.status, TurnStatus::InProgress) {
+                    return Ok(WorkflowTurnState {
+                        status: turn.status,
+                        error: turn.error.map(|error| error.message),
+                        last_agent_message,
+                    });
+                }
+                sleep(WORKFLOW_POLL_INTERVAL).await;
             }
         })
     }
@@ -453,10 +527,9 @@ impl WorkflowRuntimeClient for AppServerWorkflowRuntimeClient {
 
 #[allow(dead_code)]
 impl App {
-    pub(crate) async fn run_phase_workflows(
+    pub(crate) async fn run_before_turn_workflows(
         &self,
         app_server: &AppServerSession,
-        phase: WorkflowRunPhase,
         phase_context: WorkflowPhaseContext<'_>,
     ) -> Result<Vec<WorkflowJobRunResult>, String> {
         let registry = load_workflow_registry(self.config.cwd.as_path())
@@ -470,7 +543,7 @@ impl App {
         let mut results = Vec::new();
         for workflow in &registry.files {
             for trigger in &workflow.triggers {
-                if !trigger.enabled || !workflow_trigger_matches_phase(&trigger.kind, phase) {
+                if !trigger.enabled || !matches!(trigger.kind, WorkflowTriggerKind::BeforeTurn) {
                     continue;
                 }
                 results.extend(
@@ -501,7 +574,12 @@ impl App {
         trigger_id: String,
     ) -> Arc<dyn HistoryCell> {
         let label = format!("{workflow_name} · {trigger_id}");
-        match self.queue_or_start_trigger_run(app_server, workflow_name, trigger_id) {
+        match self.queue_or_start_trigger_run(
+            app_server,
+            workflow_name,
+            trigger_id,
+            OwnedWorkflowPhaseContext::default(),
+        ) {
             TriggerRunDispatch::Started => Arc::new(history_cell::new_info_event(
                 "Workflow trigger started".to_string(),
                 Some(label),
@@ -536,8 +614,24 @@ impl App {
         app_server: &AppServerSession,
         workflow_name: String,
         trigger_id: String,
-    ) {
-        let _ = self.queue_or_start_trigger_run(app_server, workflow_name, trigger_id);
+        phase_context: WorkflowPhaseContext<'_>,
+    ) -> Arc<dyn HistoryCell> {
+        let label = format!("{workflow_name} · {trigger_id}");
+        match self.queue_or_start_trigger_run(
+            app_server,
+            workflow_name,
+            trigger_id,
+            phase_context.into(),
+        ) {
+            TriggerRunDispatch::Started => Arc::new(history_cell::new_info_event(
+                "Workflow trigger started".to_string(),
+                Some(label),
+            )),
+            TriggerRunDispatch::Queued => Arc::new(history_cell::new_info_event(
+                "Workflow trigger queued".to_string(),
+                Some(label),
+            )),
+        }
     }
 
     pub(crate) fn dispatch_next_queued_trigger_run(&mut self, app_server: &AppServerSession) {
@@ -552,6 +646,7 @@ impl App {
             BackgroundWorkflowRunTarget::Trigger {
                 workflow_name: next.workflow_name,
                 trigger_id: next.trigger_id,
+                phase_context: next.phase_context,
             },
         );
     }
@@ -656,10 +751,11 @@ impl App {
         app_server: &AppServerSession,
         workflow_name: String,
         trigger_id: String,
+        phase_context: OwnedWorkflowPhaseContext,
     ) -> TriggerRunDispatch {
         if self.workflow_scheduler.has_running_trigger_run() {
             self.workflow_scheduler
-                .enqueue_trigger_run(workflow_name, trigger_id);
+                .enqueue_trigger_run(workflow_name, trigger_id, phase_context);
             self.sync_background_workflow_status();
             return TriggerRunDispatch::Queued;
         }
@@ -669,6 +765,7 @@ impl App {
             BackgroundWorkflowRunTarget::Trigger {
                 workflow_name,
                 trigger_id,
+                phase_context,
             },
         );
         TriggerRunDispatch::Started
@@ -752,6 +849,7 @@ async fn run_background_workflow_selection(
         BackgroundWorkflowRunTarget::Trigger {
             workflow_name,
             trigger_id,
+            phase_context,
         } => {
             let workflow = registry
                 .files
@@ -778,10 +876,7 @@ async fn run_background_workflow_selection(
                 workflow_name,
                 trigger_id,
                 &trigger.jobs,
-                WorkflowPhaseContext {
-                    current_user_turn: None,
-                    last_assistant_message: None,
-                },
+                phase_context.borrowed(),
                 Some(cancellation),
             )
             .await
@@ -813,16 +908,6 @@ async fn run_background_workflow_selection(
             .await
         }
     }
-}
-
-fn workflow_trigger_matches_phase(trigger: &WorkflowTriggerKind, phase: WorkflowRunPhase) -> bool {
-    matches!(
-        (trigger, phase),
-        (
-            &WorkflowTriggerKind::BeforeTurn,
-            WorkflowRunPhase::BeforeTurn
-        ) | (&WorkflowTriggerKind::AfterTurn, WorkflowRunPhase::AfterTurn)
-    )
 }
 
 async fn run_workflow_jobs(
@@ -1276,20 +1361,14 @@ fn update_last_workflow_agent_message(
     }
 }
 
-fn last_agent_message_for_turn_completed(
-    notification: &TurnCompletedNotification,
-) -> Option<String> {
-    notification
-        .turn
-        .items
-        .iter()
-        .fold(None, |_, item| match item {
-            ThreadItem::AgentMessage { text, .. } => {
-                let trimmed = text.trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_string())
-            }
-            _ => None,
-        })
+fn last_agent_message_for_turn_items(items: &[ThreadItem]) -> Option<String> {
+    items.iter().fold(None, |_, item| match item {
+        ThreadItem::AgentMessage { text, .. } => {
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        _ => None,
+    })
 }
 
 #[derive(Debug)]
@@ -1301,6 +1380,7 @@ enum WorkflowRunError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_app_server_protocol::TurnCompletedNotification;
     use codex_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
     use std::collections::VecDeque;
@@ -1508,6 +1588,7 @@ jobs:
             BackgroundWorkflowRunTarget::Trigger {
                 workflow_name: "director".to_string(),
                 trigger_id: "follow_up".to_string(),
+                phase_context: OwnedWorkflowPhaseContext::default(),
             },
             CancellationToken::new(),
         )
@@ -1639,6 +1720,82 @@ jobs:
             .await
             .expect("read workflow turn");
 
+        assert_eq!(
+            state,
+            WorkflowTurnState {
+                status: TurnStatus::Completed,
+                error: None,
+                last_agent_message: Some("workflow reply".to_string()),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn read_turn_retries_include_turns_errors_for_ephemeral_threads() {
+        let temp_dir = tempdir().expect("tempdir");
+        let config = build_config(&temp_dir).await;
+        let workflow_thread_notification_channels =
+            Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        let app_server = crate::start_embedded_app_server_for_picker(&config)
+            .await
+            .expect("embedded app server");
+        let client = AppServerWorkflowRuntimeClient::new(
+            &app_server,
+            workflow_thread_notification_channels.clone(),
+            config,
+            /*primary_thread_id*/ None,
+        );
+        let thread = client
+            .start_workflow_thread()
+            .await
+            .expect("start workflow thread");
+
+        let sender = workflow_thread_notification_channels
+            .lock()
+            .await
+            .get(&ThreadId::from_string(&thread.thread_id).expect("workflow thread id"))
+            .cloned()
+            .expect("workflow notification sender");
+
+        let read_turn = {
+            let client = client;
+            let thread = thread.clone();
+            tokio::spawn(async move { client.read_turn(&thread, "turn-1".to_string()).await })
+        };
+
+        sleep(Duration::from_millis(10)).await;
+        sender
+            .send(ServerNotification::ItemCompleted(
+                ItemCompletedNotification {
+                    item: ThreadItem::AgentMessage {
+                        id: "msg-1".to_string(),
+                        text: "workflow reply".to_string(),
+                        phase: None,
+                        memory_citation: None,
+                    },
+                    thread_id: thread.thread_id.clone(),
+                    turn_id: "turn-1".to_string(),
+                },
+            ))
+            .expect("item completed notification");
+        sender
+            .send(ServerNotification::TurnCompleted(
+                TurnCompletedNotification {
+                    thread_id: thread.thread_id.clone(),
+                    turn: codex_app_server_protocol::Turn {
+                        id: "turn-1".to_string(),
+                        items: Vec::new(),
+                        error: None,
+                        status: TurnStatus::Completed,
+                    },
+                },
+            ))
+            .expect("turn completed notification");
+
+        let state = read_turn
+            .await
+            .expect("join read_turn task")
+            .expect("read workflow turn");
         assert_eq!(
             state,
             WorkflowTurnState {

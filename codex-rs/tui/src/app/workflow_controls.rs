@@ -447,13 +447,13 @@ impl App {
         }
     }
 
-    fn resolve_editor_command_for_workflows(&mut self) -> Result<Vec<String>, ()> {
-        match external_editor::resolve_editor_command() {
-            Ok(cmd) => Ok(cmd),
+    fn resolve_editor_command_for_workflows(&mut self) -> Result<Vec<Vec<String>>, ()> {
+        match external_editor::resolve_editor_commands() {
+            Ok(cmds) => Ok(cmds),
             Err(external_editor::EditorError::MissingEditor) => {
                 self.chat_widget
                     .add_to_history(history_cell::new_error_event(
-                    "Cannot open external editor: set $VISUAL or $EDITOR before starting Codex."
+                    "Cannot open external editor: no usable editor found in $VISUAL, $EDITOR, or `vim`."
                         .to_string(),
                 ));
                 Err(())
