@@ -1,60 +1,137 @@
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
-<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
-<p align="center">
-  <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
-</p>
-</br>
-If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE.</a>
-</br>If you want the desktop app experience, run <code>codex app</code> or visit <a href="https://chatgpt.com/codex?app-landing-page=true">the Codex App page</a>.
-</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>.</p>
+# Codex Enhanced
 
----
+[中文版本](./README.zh-CN.md)
 
-## Quickstart
+> The Codex distribution built for real 24/7 use.
 
-### Installing and running Codex CLI
+`codex-enhanced` is a Codex distribution built on top of the OpenAI Codex CLI Rust stack. The goal is not to wrap the agent in more prompt theater. The goal is to turn Codex into an operator surface that can keep running across accounts, sessions, workflows, and external message channels.
 
-Install globally with your preferred package manager:
+Website: `https://codex-enhanced.com`
 
-```shell
-# Install using npm
-npm install -g @openai/codex
+## Why codex-enhanced
+
+Most AI CLIs compete on three things:
+
+- models
+- UI polish
+
+This distribution moves in the opposite direction:
+
+- assume the base agent is already strong enough
+- invest in multi-account routing, profile switching, long-session recovery, task orchestration, Feishu entrypoints, and cleaner operator UX
+- make Codex feel less like a terminal chatbot and more like a control surface that can receive messages, pick up tasks, and stay aligned over time
+
+If you need a Codex you can actually keep online and keep using, that is the point of this distribution.
+
+## Examples
+
+### 1. Multi-subscription and multi-profile operation, not manual env switching
+
+`/profile` opens a dedicated management panel with support for:
+
+- named profiles
+- runtime switching
+- fallback routes
+- profile switching policies for rate limits, auth failures, and service overload
+
+### 2. Conversations can be orchestrated as jobs
+
+`/workflow` manages `.codex/workflows/*.yaml` directly, with support for:
+
+- `before_turn`
+- `after_turn`
+- `manual`
+- `file_watch`
+- `idle`
+- `interval`
+- `cron`
+
+That makes Codex more than a prompt-response loop. It becomes a node inside a repeatable workflow.
+
+Docs:
+
+- [`docs/workflows.md`](./docs/workflows.md)
+
+### 3. Any session can be resumed instead of restarted
+
+`/resume` and the thread/session plumbing let you reconnect to saved work instead of rebuilding context from scratch every time.
+
+### 4. The terminal is not the only entrypoint
+
+`/clawbot` connects workspace-local Feishu sessions, thread binding, unread message queues, and reply forwarding into the same loop. A Feishu chat can be bound to the current thread, external messages can enter Codex, and final replies can be sent back out.
+
+## Install
+
+The primary install path for this distribution is PyPI:
+
+```bash
+pip3 install -U codex-enhanced
+codex-enhanced
 ```
 
-```shell
-# Install using Homebrew
-brew install --cask codex
-```
+## Capability Boundaries and Layering
 
-Then simply run `codex` to get started.
+### What it is built to solve
 
-<details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
+This distribution is strong at connecting the agent to real operating workflows, not at reinventing the underlying model platform.
 
-Each GitHub Release contains many executables, but in practice, you likely want one of these:
+Current strengths:
 
-- macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
-- Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
+- multi-subscription account management
+- multi-profile API routing and fallback
+- long-session recovery and continuity
+- workspace-local workflow orchestration
+- Feishu clawbot integration
+- local TUI information shaping and visibility control
+- stronger alignment flows via `question` and keyboard chord support
 
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
+### What it is not trying to be
 
-</details>
+- a replacement for every official hosted or distributed Codex surface
+- a general-purpose IM automation hub beyond the current Feishu focus
+- a zero-configuration black box for business workflow automation
 
-### Using Codex with your ChatGPT plan
+## Shipping Today
 
-Run `codex` and select **Sign in with ChatGPT**. We recommend signing into your ChatGPT account to use Codex as part of your Plus, Pro, Team, Edu, or Enterprise plan. [Learn more about what's included in your ChatGPT plan](https://help.openai.com/en/articles/11369540-codex-in-chatgpt).
+These are already implemented in the repository:
 
-You can also use Codex with an API key, but this requires [additional setup](https://developers.openai.com/codex/auth#sign-in-with-an-api-key).
+- multi-subscription account management and runtime account display
+- multi-profile API management and `/profile` route switching
+- `/workflow` task orchestration
+- `/resume` for arbitrary saved sessions
+- `/settings` for UI information control
+- `/clawbot` for Feishu send and receive flows
+- `pypi-release` distribution pipeline
+- stronger `question`-based alignment interactions
+- chord shortcut support
 
-## Docs
+## How It Works
 
-- [**Codex Documentation**](https://developers.openai.com/codex)
-- [**Contributing**](./docs/contributing.md)
-- [**Installing & building**](./docs/install.md)
-- [**Open source fund**](./docs/open-source-fund.md)
+The system is designed to stay inspectable:
 
-This repository is licensed under the [Apache-2.0 License](LICENSE).
+- profile routing state is persisted in `accounts/profile-router.json`
+- workflows live directly in `.codex/workflows/*.yaml`
+- Feishu clawbot sessions, bindings, and unread queues are managed by a workspace-local runtime
+- the `question` tool collects structured answers in the TUI instead of falling back to guesswork in free text
+- UI and interaction changes are heavily covered by snapshot tests for direct review
+
+Useful docs and examples:
+
+- [`docs/workflows.md`](./docs/workflows.md)
+- [`docs/tui-request-user-input.md`](./docs/tui-request-user-input.md)
+
+## Project Attribution
+
+This project does not start from zero. It builds on the OpenAI Codex CLI Rust, TUI, and app-server foundation, then pushes harder on the parts that matter in sustained use: account operations, session continuity, workflows, Feishu entrypoints, lower-noise UI, and operator ergonomics.
+
+## Closing
+
+If you only need a Codex that chats in a terminal, the official distribution is already enough.
+
+If you need a Codex that can stay online across accounts, inputs, tasks, and long-running sessions, the opening line still applies:
+
+**The Codex distribution built for real 24/7 use.**
+
+## License
+
+Apache-2.0
