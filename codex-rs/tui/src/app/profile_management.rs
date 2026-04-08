@@ -371,7 +371,6 @@ impl App {
             self.chat_widget.add_error_message(error_message);
             return;
         }
-        let retry_user_message = self.chat_widget.last_submitted_user_turn();
 
         match action {
             ProfileFallbackAction::RetrySameProfileFirst => {
@@ -411,14 +410,9 @@ impl App {
                         ));
                         return;
                     }
-                    if let Some(user_message) = retry_user_message.clone() {
-                        self.chat_widget.submit_profile_fallback_retry(
-                            user_message,
-                            format!("Retrying the last turn with profile `{next_profile_id}`."),
-                        );
-                    } else {
-                        self.chat_widget.add_error_message(error_message);
-                    }
+                    self.chat_widget.submit_profile_fallback_retry(format!(
+                        "Retrying the last turn with profile `{next_profile_id}`."
+                    ));
                 }
             }
             ProfileFallbackAction::SwitchProfileImmediately => {
@@ -447,14 +441,9 @@ impl App {
                     ));
                     return;
                 }
-                if let Some(user_message) = retry_user_message {
-                    self.chat_widget.submit_profile_fallback_retry(
-                        user_message,
-                        format!("Retrying the last turn with profile `{next_profile_id}`."),
-                    );
-                } else {
-                    self.chat_widget.add_error_message(error_message);
-                }
+                self.chat_widget.submit_profile_fallback_retry(format!(
+                    "Retrying the last turn with profile `{next_profile_id}`."
+                ));
             }
         }
     }

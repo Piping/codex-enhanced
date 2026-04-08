@@ -77,22 +77,29 @@ The `Type` picker supports:
 - `Manual`
 - `Before Turn`
 - `After Turn`
+- `File Watch`
 - `Idle`
 - `Interval`
 - `Cron`
 
 Changing the type updates the structured trigger fields in YAML:
 
+- `File Watch` watches the current workspace recursively and fires when a regular file or a directory changes
 - `Idle` uses `after`
 - `Interval` uses `every`
 - `Cron` uses `cron`
-- `Manual`, `Before Turn`, and `After Turn` do not require an extra schedule parameter
+- `Manual`, `Before Turn`, `After Turn`, and `File Watch` do not require an extra schedule parameter
 
 When the current type has a parameter, the trigger page exposes a matching action:
 
 - `Edit Idle Delay`
 - `Edit Interval`
 - `Edit Cron Schedule`
+
+Behavior notes:
+
+- `File Watch` uses the same global trigger queue as the other trigger types.
+- If the same `file_watch` trigger is already running or already queued, new matching file events are skipped (`overlap=skip`) instead of enqueueing duplicates.
 
 ## Typical Flow
 

@@ -101,6 +101,7 @@ pub(crate) enum WorkflowTriggerKind {
     Manual,
     BeforeTurn,
     AfterTurn,
+    FileWatch,
     Idle { after: String },
     Interval { every: String },
     Cron { cron: String },

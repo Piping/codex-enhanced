@@ -59,6 +59,12 @@ type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub(crate) type WorkflowThreadNotificationChannels =
     Arc<tokio::sync::Mutex<HashMap<ThreadId, mpsc::UnboundedSender<ServerNotification>>>>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkflowTriggerOverlapBehavior {
+    Queue,
+    Skip,
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BackgroundWorkflowRunTarget {
@@ -66,6 +72,7 @@ pub(crate) enum BackgroundWorkflowRunTarget {
         workflow_name: String,
         trigger_id: String,
         phase_context: OwnedWorkflowPhaseContext,
+        overlap_behavior: WorkflowTriggerOverlapBehavior,
     },
     Job {
         workflow_name: String,
@@ -579,6 +586,7 @@ impl App {
             workflow_name,
             trigger_id,
             OwnedWorkflowPhaseContext::default(),
+            WorkflowTriggerOverlapBehavior::Queue,
         ) {
             TriggerRunDispatch::Started => Arc::new(history_cell::new_info_event(
                 "Workflow trigger started".to_string(),
@@ -586,6 +594,10 @@ impl App {
             )),
             TriggerRunDispatch::Queued => Arc::new(history_cell::new_info_event(
                 "Workflow trigger queued".to_string(),
+                Some(label),
+            )),
+            TriggerRunDispatch::Skipped => Arc::new(history_cell::new_info_event(
+                "Workflow trigger skipped".to_string(),
                 Some(label),
             )),
         }
@@ -622,6 +634,7 @@ impl App {
             workflow_name,
             trigger_id,
             phase_context.into(),
+            WorkflowTriggerOverlapBehavior::Queue,
         ) {
             TriggerRunDispatch::Started => Arc::new(history_cell::new_info_event(
                 "Workflow trigger started".to_string(),
@@ -631,7 +644,81 @@ impl App {
                 "Workflow trigger queued".to_string(),
                 Some(label),
             )),
+            TriggerRunDispatch::Skipped => Arc::new(history_cell::new_info_event(
+                "Workflow trigger skipped".to_string(),
+                Some(label),
+            )),
         }
+    }
+
+    pub(crate) fn start_file_watch_workflow_trigger_run(
+        &mut self,
+        app_server: &AppServerSession,
+        workflow_name: String,
+        trigger_id: String,
+    ) -> Option<Arc<dyn HistoryCell>> {
+        let label = format!("{workflow_name} · {trigger_id}");
+        match self.queue_or_start_trigger_run(
+            app_server,
+            workflow_name,
+            trigger_id,
+            OwnedWorkflowPhaseContext::default(),
+            WorkflowTriggerOverlapBehavior::Skip,
+        ) {
+            TriggerRunDispatch::Started => Some(Arc::new(history_cell::new_info_event(
+                "Workflow trigger started".to_string(),
+                Some(label),
+            ))),
+            TriggerRunDispatch::Queued => Some(Arc::new(history_cell::new_info_event(
+                "Workflow trigger queued".to_string(),
+                Some(label),
+            ))),
+            TriggerRunDispatch::Skipped => None,
+        }
+    }
+
+    pub(crate) fn handle_workspace_file_changes_for_workflows(
+        &mut self,
+        app_server: &AppServerSession,
+        changed_paths: &[PathBuf],
+    ) -> Vec<Arc<dyn HistoryCell>> {
+        let Some(primary_thread_id) = self.primary_thread_id else {
+            return Vec::new();
+        };
+        if changed_paths.is_empty() {
+            return Vec::new();
+        }
+
+        let registry = match load_workflow_registry(self.config.cwd.as_path()) {
+            Ok(registry) => registry,
+            Err(error) => {
+                self.chat_widget.add_error_message(format!(
+                    "Workflow file_watch failed: failed to load workflows: {error}"
+                ));
+                return Vec::new();
+            }
+        };
+
+        let mut visible_cells = Vec::new();
+        for workflow in &registry.files {
+            for trigger in &workflow.triggers {
+                if !trigger.enabled || !matches!(trigger.kind, WorkflowTriggerKind::FileWatch) {
+                    continue;
+                }
+
+                let Some(cell) = self.start_file_watch_workflow_trigger_run(
+                    app_server,
+                    workflow.name.clone(),
+                    trigger.id.clone(),
+                ) else {
+                    continue;
+                };
+                if let Some(cell) = self.record_workflow_history_cell(primary_thread_id, cell) {
+                    visible_cells.push(cell);
+                }
+            }
+        }
+        visible_cells
     }
 
     pub(crate) fn dispatch_next_queued_trigger_run(&mut self, app_server: &AppServerSession) {
@@ -647,6 +734,7 @@ impl App {
                 workflow_name: next.workflow_name,
                 trigger_id: next.trigger_id,
                 phase_context: next.phase_context,
+                overlap_behavior: WorkflowTriggerOverlapBehavior::Queue,
             },
         );
     }
@@ -752,7 +840,19 @@ impl App {
         workflow_name: String,
         trigger_id: String,
         phase_context: OwnedWorkflowPhaseContext,
+        overlap_behavior: WorkflowTriggerOverlapBehavior,
     ) -> TriggerRunDispatch {
+        if matches!(overlap_behavior, WorkflowTriggerOverlapBehavior::Skip)
+            && (self
+                .workflow_scheduler
+                .has_active_trigger_run(&workflow_name, &trigger_id)
+                || self
+                    .workflow_scheduler
+                    .has_queued_trigger_run(&workflow_name, &trigger_id))
+        {
+            return TriggerRunDispatch::Skipped;
+        }
+
         if self.workflow_scheduler.has_running_trigger_run() {
             self.workflow_scheduler
                 .enqueue_trigger_run(workflow_name, trigger_id, phase_context);
@@ -766,6 +866,7 @@ impl App {
                 workflow_name,
                 trigger_id,
                 phase_context,
+                overlap_behavior,
             },
         );
         TriggerRunDispatch::Started
@@ -819,6 +920,7 @@ impl App {
 enum TriggerRunDispatch {
     Started,
     Queued,
+    Skipped,
 }
 
 async fn run_background_workflow(
@@ -850,6 +952,7 @@ async fn run_background_workflow_selection(
             workflow_name,
             trigger_id,
             phase_context,
+            overlap_behavior: _,
         } => {
             let workflow = registry
                 .files
@@ -994,9 +1097,10 @@ async fn run_workflow_job(
     let mut step_outputs = Vec::new();
     let mut last_prompt_response = None;
     for step in &job.config.steps {
-        let attempts = step.retry_attempts();
-        let mut last_error = None;
-        for attempt in 1..=attempts {
+        let configured_attempts = step.retry_attempts();
+        let mut attempt = 1;
+        let mut used_capacity_retry = false;
+        let step_error = loop {
             if cancellation.is_some_and(CancellationToken::is_cancelled) {
                 if let Some(thread) = thread.as_ref() {
                     let _ = client.unsubscribe_thread(thread.thread_id.clone()).await;
@@ -1018,24 +1122,29 @@ async fn run_workflow_job(
                         last_prompt_response = Some(output.clone());
                     }
                     step_outputs.push(output);
-                    last_error = None;
-                    break;
+                    break None;
                 }
                 Ok(None) => {
-                    last_error = None;
-                    break;
+                    break None;
                 }
                 Err(error) => {
-                    last_error = Some(error);
-                    if attempt < attempts
-                        && !matches!(last_error, Some(WorkflowRunError::Cancelled))
-                    {
+                    let should_retry = !matches!(error, WorkflowRunError::Cancelled)
+                        && (attempt < configured_attempts
+                            || (!used_capacity_retry
+                                && should_retry_selected_model_capacity_error(&error)));
+                    if should_retry {
+                        if attempt >= configured_attempts {
+                            used_capacity_retry = true;
+                        }
                         sleep(retry_backoff_delay(attempt)).await;
+                        attempt = attempt.saturating_add(1);
+                        continue;
                     }
+                    break Some(error);
                 }
             }
-        }
-        if let Some(error) = last_error {
+        };
+        if let Some(error) = step_error {
             if let Some(thread) = thread.as_ref() {
                 let _ = client.unsubscribe_thread(thread.thread_id.clone()).await;
             }
@@ -1349,6 +1458,14 @@ fn retry_backoff_delay(attempt: u32) -> Duration {
     Duration::from_secs(seconds.max(1))
 }
 
+fn should_retry_selected_model_capacity_error(error: &WorkflowRunError) -> bool {
+    matches!(
+        error,
+        WorkflowRunError::Failed(message)
+            if message.contains("Selected model is at capacity. Please try a different model.")
+    )
+}
+
 fn update_last_workflow_agent_message(
     last_agent_message: &mut Option<String>,
     notification: &ItemCompletedNotification,
@@ -1557,6 +1674,67 @@ jobs:
     }
 
     #[tokio::test]
+    async fn prompt_workflow_job_retries_selected_model_capacity_once() {
+        let tempdir = tempdir().expect("tempdir");
+        let workflows_dir = tempdir.path().join(".codex/workflows");
+        std::fs::create_dir_all(&workflows_dir).expect("workflow dir");
+        std::fs::write(
+            workflows_dir.join("manual.yaml"),
+            r#"name: director
+
+jobs:
+  review_backlog:
+    steps:
+      - prompt: summarize the backlog
+"#,
+        )
+        .expect("workflow fixture");
+        let client = FakeWorkflowRuntimeClient::new(vec![
+            Ok(WorkflowTurnState {
+                status: TurnStatus::Failed,
+                error: Some(
+                    "Selected model is at capacity. Please try a different model.".to_string(),
+                ),
+                last_agent_message: None,
+            }),
+            Ok(WorkflowTurnState {
+                status: TurnStatus::Completed,
+                error: None,
+                last_agent_message: Some("workflow reply".to_string()),
+            }),
+        ]);
+        let result = run_background_workflow(
+            &client,
+            tempdir.path().to_path_buf(),
+            BackgroundWorkflowRunTarget::Job {
+                workflow_name: "director".to_string(),
+                job_name: "review_backlog".to_string(),
+            },
+            CancellationToken::new(),
+        )
+        .await;
+
+        match result.outcome {
+            BackgroundWorkflowRunOutcome::Completed(results) => {
+                assert_eq!(results.len(), 1);
+                assert_eq!(results[0].message.as_deref(), Some("workflow reply"));
+            }
+            other => panic!("expected completed run, got {other:?}"),
+        }
+        assert_eq!(
+            client.calls.lock().expect("calls lock").clone(),
+            vec![
+                "start_workflow_thread".to_string(),
+                "start_turn:thr_workflow:Workflow: director\nTrigger: job:review_backlog\nJob: review_backlog\n\nCurrent workflow prompt:\nsummarize the backlog".to_string(),
+                "read_turn:thr_workflow:turn_workflow".to_string(),
+                "start_turn:thr_workflow:Workflow: director\nTrigger: job:review_backlog\nJob: review_backlog\n\nCurrent workflow prompt:\nsummarize the backlog".to_string(),
+                "read_turn:thr_workflow:turn_workflow".to_string(),
+                "unsubscribe_thread:thr_workflow".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn non_manual_trigger_can_run_now_from_workflow_ui() {
         let tempdir = tempdir().expect("tempdir");
         let workflows_dir = tempdir.path().join(".codex/workflows");
@@ -1589,6 +1767,7 @@ jobs:
                 workflow_name: "director".to_string(),
                 trigger_id: "follow_up".to_string(),
                 phase_context: OwnedWorkflowPhaseContext::default(),
+                overlap_behavior: WorkflowTriggerOverlapBehavior::Queue,
             },
             CancellationToken::new(),
         )

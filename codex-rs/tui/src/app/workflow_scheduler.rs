@@ -92,6 +92,25 @@ impl WorkflowSchedulerState {
         self.running_workflows.values().any(|run| run.is_trigger)
     }
 
+    pub(crate) fn has_active_trigger_run(&self, workflow_name: &str, trigger_id: &str) -> bool {
+        self.running_workflows.values().any(|run| {
+            matches!(
+                &run.target,
+                BackgroundWorkflowRunTarget::Trigger {
+                    workflow_name: active_workflow_name,
+                    trigger_id: active_trigger_id,
+                    ..
+                } if active_workflow_name == workflow_name && active_trigger_id == trigger_id
+            )
+        })
+    }
+
+    pub(crate) fn has_queued_trigger_run(&self, workflow_name: &str, trigger_id: &str) -> bool {
+        self.queued_trigger_runs
+            .iter()
+            .any(|run| run.workflow_name == workflow_name && run.trigger_id == trigger_id)
+    }
+
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn enqueue_trigger_run(
         &mut self,

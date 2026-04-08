@@ -869,6 +869,21 @@ async fn capture_and_restore_thread_input_state_preserves_profile_fallback_retry
     assert!(chat.retry_last_user_turn_for_profile_fallback(
         "Retrying the last turn on profile `primary`.".to_string()
     ));
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    assert_eq!(
+        items,
+        vec![UserInput::Text {
+            text: "continue".to_string(),
+            text_elements: Vec::new(),
+        }]
+    );
+    assert_eq!(
+        chat.last_submitted_user_turn(),
+        Some(UserMessage::from("continue"))
+    );
 }
 
 #[tokio::test]

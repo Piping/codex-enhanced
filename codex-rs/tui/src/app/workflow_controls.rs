@@ -1160,6 +1160,7 @@ impl App {
                     WorkflowTriggerType::Manual,
                     WorkflowTriggerType::BeforeTurn,
                     WorkflowTriggerType::AfterTurn,
+                    WorkflowTriggerType::FileWatch,
                     WorkflowTriggerType::Idle,
                     WorkflowTriggerType::Interval,
                     WorkflowTriggerType::Cron,
@@ -1703,6 +1704,7 @@ fn workflow_trigger_type_label(trigger_type: WorkflowTriggerType) -> &'static st
         WorkflowTriggerType::Manual => "Manual",
         WorkflowTriggerType::BeforeTurn => "Before Turn",
         WorkflowTriggerType::AfterTurn => "After Turn",
+        WorkflowTriggerType::FileWatch => "File Watch",
         WorkflowTriggerType::Idle => "Idle",
         WorkflowTriggerType::Interval => "Interval",
         WorkflowTriggerType::Cron => "Cron",
@@ -1714,6 +1716,7 @@ fn workflow_trigger_kind_display(kind: &WorkflowTriggerKind) -> String {
         WorkflowTriggerKind::Manual => "Manual".to_string(),
         WorkflowTriggerKind::BeforeTurn => "Before Turn".to_string(),
         WorkflowTriggerKind::AfterTurn => "After Turn".to_string(),
+        WorkflowTriggerKind::FileWatch => "File Watch".to_string(),
         WorkflowTriggerKind::Idle { after } => format!("Idle ({after})"),
         WorkflowTriggerKind::Interval { every } => format!("Interval ({every})"),
         WorkflowTriggerKind::Cron { cron } => format!("Cron ({cron})"),
@@ -1725,6 +1728,9 @@ fn workflow_trigger_type_description(trigger_type: WorkflowTriggerType) -> &'sta
         WorkflowTriggerType::Manual => "Run only when triggered from the workflow menu.",
         WorkflowTriggerType::BeforeTurn => "Run automatically before the next user turn.",
         WorkflowTriggerType::AfterTurn => "Run automatically after the current turn finishes.",
+        WorkflowTriggerType::FileWatch => {
+            "Run automatically when workspace files change. Overlapping runs are skipped."
+        }
         WorkflowTriggerType::Idle => "Run after the workspace has been idle for a duration.",
         WorkflowTriggerType::Interval => "Run on a fixed repeating interval.",
         WorkflowTriggerType::Cron => "Run on a cron schedule.",
@@ -1745,6 +1751,10 @@ fn workflow_trigger_matches_type(
             | (
                 &WorkflowTriggerKind::AfterTurn,
                 WorkflowTriggerType::AfterTurn
+            )
+            | (
+                &WorkflowTriggerKind::FileWatch,
+                WorkflowTriggerType::FileWatch
             )
             | (&WorkflowTriggerKind::Idle { .. }, WorkflowTriggerType::Idle)
             | (
@@ -1770,7 +1780,8 @@ fn workflow_trigger_parameter_metadata(
         }
         WorkflowTriggerKind::Manual
         | WorkflowTriggerKind::BeforeTurn
-        | WorkflowTriggerKind::AfterTurn => None,
+        | WorkflowTriggerKind::AfterTurn
+        | WorkflowTriggerKind::FileWatch => None,
     }
 }
 
