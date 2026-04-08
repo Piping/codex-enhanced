@@ -68,6 +68,7 @@ Behavior notes:
 - Trigger `enabled: false` disables the trigger itself.
 - A disabled trigger cannot be started from `Run Now` until it is enabled again.
 - `Run Now` is available for any enabled trigger type, not only `manual`.
+- If a trigger resolves only to disabled or otherwise unrunnable jobs, the run fails visibly instead of silently doing nothing.
 - `After Turn` runs are dispatched as background workflow tasks after the turn finishes, so the main thread stays responsive and the transcript shows workflow start/completion cells separately.
 
 ## Trigger Types

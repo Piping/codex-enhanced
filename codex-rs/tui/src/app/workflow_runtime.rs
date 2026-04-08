@@ -140,6 +140,12 @@ pub(crate) enum WorkflowOutputDelivery {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkflowDisabledJobBehavior {
+    Skip,
+    RunRootJobs,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct WorkflowPhaseContext<'a> {
     pub(crate) current_user_turn: Option<&'a str>,
     pub(crate) last_assistant_message: Option<&'a str>,
@@ -561,6 +567,7 @@ impl App {
                         &trigger.id,
                         &trigger.jobs,
                         phase_context,
+                        WorkflowDisabledJobBehavior::Skip,
                         /*cancellation*/ None,
                     )
                     .await
@@ -980,6 +987,7 @@ async fn run_background_workflow_selection(
                 trigger_id,
                 &trigger.jobs,
                 phase_context.borrowed(),
+                WorkflowDisabledJobBehavior::Skip,
                 Some(cancellation),
             )
             .await
@@ -1006,6 +1014,7 @@ async fn run_background_workflow_selection(
                     current_user_turn: None,
                     last_assistant_message: None,
                 },
+                WorkflowDisabledJobBehavior::RunRootJobs,
                 Some(cancellation),
             )
             .await
@@ -1020,6 +1029,7 @@ async fn run_workflow_jobs(
     trigger_id: &str,
     root_jobs: &[String],
     phase_context: WorkflowPhaseContext<'_>,
+    disabled_job_behavior: WorkflowDisabledJobBehavior,
     cancellation: Option<&CancellationToken>,
 ) -> Result<Vec<WorkflowJobRunResult>, WorkflowRunError> {
     let ordered = ordered_jobs_for_roots(registry, root_jobs)
@@ -1033,7 +1043,11 @@ async fn run_workflow_jobs(
         let job = registry.jobs.get(&job_name).ok_or_else(|| {
             WorkflowRunError::Failed(format!("workflow job `{job_name}` does not exist"))
         })?;
-        if !job.config.enabled {
+        let should_run_disabled_job = matches!(
+            disabled_job_behavior,
+            WorkflowDisabledJobBehavior::RunRootJobs
+        ) && root_jobs.iter().any(|root_job| root_job == &job_name);
+        if !job.config.enabled && !should_run_disabled_job {
             completed.insert(job_name, false);
             continue;
         }
@@ -1057,6 +1071,11 @@ async fn run_workflow_jobs(
         .await?;
         completed.insert(job.name.clone(), true);
         results.push(result);
+    }
+    if results.is_empty() {
+        return Err(WorkflowRunError::Failed(format!(
+            "workflow `{workflow_name}/{trigger_id}` did not run any enabled jobs"
+        )));
     }
     Ok(results)
 }
@@ -1779,6 +1798,93 @@ jobs:
                 assert_eq!(results[0].message.as_deref(), Some("workflow reply"));
             }
             other => panic!("expected completed run, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_job_run_ignores_disabled_root_flag() {
+        let tempdir = tempdir().expect("tempdir");
+        let workflows_dir = tempdir.path().join(".codex/workflows");
+        std::fs::create_dir_all(&workflows_dir).expect("workflow dir");
+        std::fs::write(
+            workflows_dir.join("manual.yaml"),
+            r#"name: director
+
+jobs:
+  review_backlog:
+    enabled: false
+    steps:
+      - prompt: summarize the backlog
+"#,
+        )
+        .expect("workflow fixture");
+        let client = FakeWorkflowRuntimeClient::new(vec![Ok(WorkflowTurnState {
+            status: TurnStatus::Completed,
+            error: None,
+            last_agent_message: Some("workflow reply".to_string()),
+        })]);
+        let result = run_background_workflow(
+            &client,
+            tempdir.path().to_path_buf(),
+            BackgroundWorkflowRunTarget::Job {
+                workflow_name: "director".to_string(),
+                job_name: "review_backlog".to_string(),
+            },
+            CancellationToken::new(),
+        )
+        .await;
+
+        match result.outcome {
+            BackgroundWorkflowRunOutcome::Completed(results) => {
+                assert_eq!(results.len(), 1);
+                assert_eq!(results[0].message.as_deref(), Some("workflow reply"));
+            }
+            other => panic!("expected completed run, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn trigger_run_fails_when_all_target_jobs_are_disabled() {
+        let tempdir = tempdir().expect("tempdir");
+        let workflows_dir = tempdir.path().join(".codex/workflows");
+        std::fs::create_dir_all(&workflows_dir).expect("workflow dir");
+        std::fs::write(
+            workflows_dir.join("manual.yaml"),
+            r#"name: director
+
+triggers:
+  - type: after_turn
+    id: follow_up
+    jobs: [review_backlog]
+
+jobs:
+  review_backlog:
+    enabled: false
+    steps:
+      - prompt: summarize the backlog
+"#,
+        )
+        .expect("workflow fixture");
+        let client = FakeWorkflowRuntimeClient::new(Vec::new());
+        let result = run_background_workflow(
+            &client,
+            tempdir.path().to_path_buf(),
+            BackgroundWorkflowRunTarget::Trigger {
+                workflow_name: "director".to_string(),
+                trigger_id: "follow_up".to_string(),
+                phase_context: OwnedWorkflowPhaseContext::default(),
+                overlap_behavior: WorkflowTriggerOverlapBehavior::Queue,
+            },
+            CancellationToken::new(),
+        )
+        .await;
+
+        match result.outcome {
+            BackgroundWorkflowRunOutcome::Failed(error) => assert_eq!(
+                error,
+                "workflow `director/follow_up` did not run any enabled jobs".to_string()
+            ),
+            other => panic!("expected failed run, got {other:?}"),
         }
     }
 
