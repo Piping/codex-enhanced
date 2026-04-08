@@ -225,9 +225,11 @@ mod thread_session_state;
 mod workflow_controls;
 mod workflow_definition;
 mod workflow_editor;
+mod workflow_file_watch;
 mod workflow_history;
 pub(crate) mod workflow_runtime;
 mod workflow_scheduler;
+mod workflow_yaml;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
@@ -245,6 +247,7 @@ use self::side::SideParentStatusChange;
 use self::side::SideThreadState;
 use self::startup_prompts::*;
 use self::thread_events::*;
+use self::workflow_file_watch::WorkflowFileWatchState;
 use self::workflow_history::WorkflowHistoryState;
 use self::workflow_scheduler::WorkflowSchedulerState;
 
@@ -1058,6 +1061,7 @@ pub(crate) struct App {
     // persist an older toggle after a newer one.
     pending_hook_enabled_writes: HashMap<String, Option<bool>>,
     workflow_thread_notification_channels: workflow_runtime::WorkflowThreadNotificationChannels,
+    workflow_file_watch: Option<WorkflowFileWatchState>,
     workflow_scheduler: WorkflowSchedulerState,
     workflow_history: WorkflowHistoryState,
     btw_session: Option<BtwSessionState>,
@@ -1894,6 +1898,7 @@ impl App {
                 workflow_name,
                 trigger_id: target_name,
                 phase_context: workflow_runtime::OwnedWorkflowPhaseContext::default(),
+                overlap_behavior: workflow_runtime::WorkflowTriggerOverlapBehavior::Queue,
             }
         } else {
             workflow_runtime::BackgroundWorkflowRunTarget::Job {
@@ -4452,6 +4457,7 @@ See the Codex keymap documentation for supported actions and examples."
             workflow_thread_notification_channels: Arc::new(
                 tokio::sync::Mutex::new(HashMap::new()),
             ),
+            workflow_file_watch: None,
             workflow_scheduler: WorkflowSchedulerState::default(),
             workflow_history: WorkflowHistoryState::default(),
             btw_session: None,
@@ -4464,6 +4470,14 @@ See the Codex keymap documentation for supported actions and examples."
             #[cfg(test)]
             clawbot_outbound_reactions: Vec::new(),
         };
+        match WorkflowFileWatchState::new(app.config.cwd.as_path(), app.app_event_tx.clone()) {
+            Ok(state) => {
+                app.workflow_file_watch = Some(state);
+            }
+            Err(err) => {
+                tracing::warn!("failed to start workflow file watcher: {err}");
+            }
+        }
         if let Some(started) = initial_started_thread {
             let thread_id = started.session.thread_id;
             app.enqueue_primary_thread_session(started.session, started.turns)
@@ -5164,6 +5178,26 @@ See the Codex keymap documentation for supported actions and examples."
             } => {
                 self.edit_workflow_trigger_field_from_ui(tui, workflow_path, trigger_id, field)
                     .await;
+            }
+            AppEvent::WorkflowWorkspaceFilesChanged { changed_paths } => {
+                let relevant_paths = changed_paths
+                    .into_iter()
+                    .filter(|path| {
+                        workflow_file_watch::is_relevant_workspace_change(
+                            self.config.cwd.as_path(),
+                            path.as_path(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                if !relevant_paths.is_empty() {
+                    let cells = self.handle_workspace_file_changes_for_workflows(
+                        app_server,
+                        relevant_paths.as_slice(),
+                    );
+                    for cell in cells {
+                        self.insert_visible_history_cell(tui, cell);
+                    }
+                }
             }
             AppEvent::StartManualWorkflowTrigger {
                 workflow_name,
@@ -10611,6 +10645,7 @@ guardian_approval = true
             workflow_thread_notification_channels: Arc::new(
                 tokio::sync::Mutex::new(HashMap::new()),
             ),
+            workflow_file_watch: None,
             workflow_scheduler: WorkflowSchedulerState::default(),
             workflow_history: WorkflowHistoryState::default(),
             btw_session: None,
@@ -10687,6 +10722,7 @@ guardian_approval = true
                 workflow_thread_notification_channels: Arc::new(tokio::sync::Mutex::new(
                     HashMap::new(),
                 )),
+                workflow_file_watch: None,
                 workflow_scheduler: WorkflowSchedulerState::default(),
                 workflow_history: WorkflowHistoryState::default(),
                 btw_session: None,
@@ -10779,6 +10815,29 @@ jobs:
     steps:
       - prompt: |
           send workflow update
+"#,
+        )?;
+        Ok(())
+    }
+
+    fn write_test_file_watch_workflow(workspace_cwd: &Path) -> Result<()> {
+        let workflows_dir = workspace_cwd.join(".codex/workflows");
+        std::fs::create_dir_all(&workflows_dir)?;
+        std::fs::write(
+            workflows_dir.join("file_watch.yaml"),
+            r#"name: watcher
+
+triggers:
+  - type: file_watch
+    id: refresh
+    jobs: [summarize]
+
+jobs:
+  summarize:
+    context: embed
+    steps:
+      - prompt: |
+          summarize the latest file changes
 "#,
         )?;
         Ok(())
@@ -13231,6 +13290,47 @@ model = "gpt-5.2"
             vec!["director · fast".to_string()]
         );
         assert!(app.queued_trigger_labels().is_empty());
+    }
+
+    #[tokio::test]
+    async fn file_watch_triggers_share_the_global_queue_and_skip_duplicates() -> Result<()> {
+        let mut app = make_test_app().await;
+        write_test_file_watch_workflow(app.config.cwd.as_path())?;
+
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await?;
+        let thread_id = started.session.thread_id;
+        app.primary_thread_id = Some(thread_id);
+        app.primary_session_configured = Some(started.session);
+        app.active_thread_id = Some(thread_id);
+
+        let running =
+            app.start_test_manual_workflow_trigger_run("director".to_string(), "slow".to_string());
+        assert!(running.is_some());
+
+        let first = app.handle_workspace_file_changes_for_workflows(
+            &app_server,
+            &[app.config.cwd.as_path().join("src")],
+        );
+        let second = app.handle_workspace_file_changes_for_workflows(
+            &app_server,
+            &[app.config.cwd.as_path().join("src/lib.rs")],
+        );
+
+        assert_eq!(first.len(), 1);
+        assert!(second.is_empty());
+        assert_eq!(
+            app.background_workflow_labels(),
+            vec!["director · slow".to_string()]
+        );
+        assert_eq!(
+            app.queued_trigger_labels(),
+            vec!["watcher · refresh".to_string()]
+        );
+        Ok(())
     }
 
     #[tokio::test]

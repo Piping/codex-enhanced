@@ -11823,6 +11823,7 @@ impl ChatWidget {
         self.last_submitted_user_turn.is_some()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn last_submitted_user_turn(&self) -> Option<UserMessage> {
         self.last_submitted_user_turn.clone()
     }
@@ -11834,9 +11835,9 @@ impl ChatWidget {
         if self.profile_retry_attempted {
             return false;
         }
-        let Some(user_message) = self.last_submitted_user_turn.clone() else {
+        if self.last_submitted_user_turn.is_none() {
             return false;
-        };
+        }
 
         self.profile_retry_attempted = true;
         self.submit_pending_steers_after_interrupt = false;
@@ -11845,15 +11846,12 @@ impl ChatWidget {
             history_message,
             /*hint*/ None,
         ));
-        self.submit_user_message(user_message);
+        self.submit_user_message(UserMessage::from("continue"));
         true
     }
 
-    pub(crate) fn submit_profile_fallback_retry(
-        &mut self,
-        user_message: UserMessage,
-        history_message: String,
-    ) {
+    pub(crate) fn submit_profile_fallback_retry(&mut self, history_message: String) {
+        let user_message = UserMessage::from("continue");
         self.last_submitted_user_turn = Some(user_message.clone());
         self.profile_retry_attempted = true;
         self.submit_pending_steers_after_interrupt = false;

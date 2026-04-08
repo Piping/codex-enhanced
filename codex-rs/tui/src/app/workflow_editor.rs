@@ -8,6 +8,7 @@ use serde_yaml::Value as YamlValue;
 use super::workflow_definition::WorkflowContextMode;
 use super::workflow_definition::WorkflowResponseMode;
 use super::workflow_definition::WorkflowStep;
+use super::workflow_yaml::serialize_yaml_value;
 use crate::app_event::WorkflowJobEditableField;
 use crate::app_event::WorkflowTriggerEditableField;
 use crate::app_event::WorkflowTriggerType;
@@ -344,7 +345,7 @@ fn load_yaml_document(workflow_path: &Path) -> Result<YamlValue, String> {
 }
 
 fn save_yaml_document(workflow_path: &Path, document: &YamlValue) -> Result<(), String> {
-    let contents = serde_yaml::to_string(document).map_err(|err| {
+    let contents = serialize_yaml_value(document).map_err(|err| {
         format!(
             "failed to serialize workflow file `{}`: {err}",
             workflow_path.display()
@@ -471,8 +472,9 @@ fn mutate_trigger<T>(
 }
 
 fn serialize_yaml_fragment(value: &impl serde::Serialize) -> Result<String, String> {
-    let text = serde_yaml::to_string(value).map_err(|err| err.to_string())?;
-    Ok(text.trim_start_matches("---\n").trim_end().to_string())
+    let value = serde_yaml::to_value(value).map_err(|err| err.to_string())?;
+    let text = serialize_yaml_value(&value)?;
+    Ok(text.trim_end().to_string())
 }
 
 fn clear_trigger_type_fields(trigger: &mut Mapping) {
@@ -486,6 +488,7 @@ fn trigger_type_key(trigger_type: WorkflowTriggerType) -> &'static str {
         WorkflowTriggerType::Manual => "manual",
         WorkflowTriggerType::BeforeTurn => "before_turn",
         WorkflowTriggerType::AfterTurn => "after_turn",
+        WorkflowTriggerType::FileWatch => "file_watch",
         WorkflowTriggerType::Idle => "idle",
         WorkflowTriggerType::Interval => "interval",
         WorkflowTriggerType::Cron => "cron",
@@ -501,7 +504,8 @@ fn trigger_type_parameter_defaults(
         WorkflowTriggerType::Cron => Some(("cron", "0 * * * *")),
         WorkflowTriggerType::Manual
         | WorkflowTriggerType::BeforeTurn
-        | WorkflowTriggerType::AfterTurn => None,
+        | WorkflowTriggerType::AfterTurn
+        | WorkflowTriggerType::FileWatch => None,
     }
 }
 
@@ -518,7 +522,7 @@ fn trigger_parameter_key_from_mapping(trigger: &Mapping) -> Option<&'static str>
         Some("idle") => Some("after"),
         Some("interval") => Some("every"),
         Some("cron") => Some("cron"),
-        Some("manual" | "before_turn" | "after_turn") | None => None,
+        Some("manual" | "before_turn" | "after_turn" | "file_watch") | None => None,
         Some(_) => None,
     }
 }
@@ -588,6 +592,8 @@ jobs:
         assert!(enabled_again);
         let enabled_text = fs::read_to_string(&path).unwrap();
         assert!(enabled_text.contains("enabled: true"));
+        assert!(enabled_text.contains("prompt: |"));
+        assert!(enabled_text.contains("send an update"));
     }
 
     #[test]
@@ -652,6 +658,7 @@ jobs:
             "- prepare\n- publish"
         );
         let steps = job_field_seed(&path, "notify", WorkflowJobEditableField::Steps).unwrap();
+        assert!(steps.contains("prompt: |"));
         assert!(steps.contains("summarize the changes"));
         assert!(steps.contains("cargo test -p codex-tui"));
     }
@@ -700,5 +707,10 @@ jobs:
         assert!(text.contains("type: cron"));
         assert!(text.contains("cron: '*/15 * * * *'") || text.contains("cron: \"*/15 * * * *\""));
         assert!(text.contains("- review_now"));
+
+        set_trigger_type(&path, "review_now", WorkflowTriggerType::FileWatch).unwrap();
+        let file_watch_text = fs::read_to_string(&path).unwrap();
+        assert!(file_watch_text.contains("type: file_watch"));
+        assert!(!file_watch_text.contains("cron:"));
     }
 }

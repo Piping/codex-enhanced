@@ -10,6 +10,7 @@ expression: popup
   Manual       Run only when triggered from the workflow menu.
   Before Turn  Run automatically before the next user turn.
   After Turn   Run automatically after the current turn finishes.
+  File Watch   Run automatically when workspace files change. Overlapping runs are skipped.
   Idle         Run after the workspace has been idle for a duration.
   Interval     Current type
   Cron         Run on a cron schedule.

@@ -164,6 +164,7 @@ pub(crate) enum WorkflowTriggerType {
     Manual,
     BeforeTurn,
     AfterTurn,
+    FileWatch,
     Idle,
     Interval,
     Cron,
@@ -708,6 +709,10 @@ pub(crate) enum AppEvent {
         workflow_path: PathBuf,
         trigger_id: String,
         field: WorkflowTriggerEditableField,
+    },
+
+    WorkflowWorkspaceFilesChanged {
+        changed_paths: Vec<PathBuf>,
     },
 
     StartBtwDiscussion {
