@@ -1,10 +1,11 @@
 ---
-source: tui/src/chatwidget/tests/exec_flow.rs
+source: tui/src/chatwidget/tests/status_and_layout.rs
 expression: combined
 ---
-↳ Interacted with background terminal · just fix
-  └ pwd
 
-• Waited for background terminal · just fix
+› Add a timestamp to history
+
+
+• Timestamp rendered.
 
 ─ 2026-04-08 03:04:05 +08:00 ───────────────────────────────────────────────────

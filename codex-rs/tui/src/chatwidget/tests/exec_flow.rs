@@ -1502,6 +1502,46 @@ async fn apply_patch_manual_flow_snapshot() {
 }
 
 #[tokio::test]
+async fn apply_patch_hidden_diff_history_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.display_preferences.set_enabled(
+        crate::display_preferences::DisplayPreferenceKey::PatchDiffs,
+        /*enabled*/ false,
+    );
+
+    let mut apply_changes = HashMap::new();
+    apply_changes.insert(
+        test_project_path().join("src").join("lib.rs"),
+        FileChange::Add {
+            content: "pub fn hidden() {}\n".to_string(),
+        },
+    );
+    apply_changes.insert(
+        test_project_path().join("README.md"),
+        FileChange::Add {
+            content: "# hidden patch\n".to_string(),
+        },
+    );
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+            call_id: "c1".into(),
+            turn_id: "turn-c1".into(),
+            auto_approved: true,
+            changes: apply_changes,
+        }),
+    });
+    let approved_lines = drain_insert_history(&mut rx)
+        .pop()
+        .expect("hidden patch summary cell");
+
+    assert_chatwidget_snapshot!(
+        "apply_patch_hidden_diff_history",
+        lines_to_single_string(&approved_lines)
+    );
+}
+
+#[tokio::test]
 async fn apply_patch_approval_sends_op_with_call_id() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     // Simulate receiving an approval request with a distinct event id and call id.

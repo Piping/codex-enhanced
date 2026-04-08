@@ -995,8 +995,8 @@ pub(crate) struct ChatWidget {
     needs_final_message_separator: bool,
     // Whether the current turn performed "work" (exec commands, MCP tool calls, patch applications).
     //
-    // This gates rendering of the "Worked for …" separator so purely conversational turns don't
-    // show an empty divider.
+    // This only gates rendering of the "Worked for …" label on separators. It is reset when a
+    // work separator is emitted or when the turn completes.
     had_work_activity: bool,
     // Whether the current turn emitted a plan update.
     saw_plan_update_this_turn: bool,
@@ -1004,6 +1004,10 @@ pub(crate) struct ChatWidget {
     // later steer. This is cleared when the user submits a steer so the plan popup only appears
     // if a newer proposed plan arrives afterward.
     saw_plan_item_this_turn: bool,
+    // Produces the timestamp label shown on completed-turn history separators.
+    history_timestamp_label_provider: Arc<dyn Fn() -> String + Send + Sync>,
+    // Last elapsed-seconds value emitted on a work separator, used as the baseline for the next one.
+    last_separator_elapsed_secs: Option<u64>,
     // Latest `update_plan` checklist task counts for terminal-title rendering.
     last_plan_progress: Option<(usize, usize)>,
     // Incremental buffer for streamed plan content.
@@ -2585,22 +2589,19 @@ impl ChatWidget {
             self.collect_runtime_metrics_delta();
             let runtime_metrics =
                 (!self.turn_runtime_metrics.is_empty()).then_some(self.turn_runtime_metrics);
-            let show_work_separator = self.had_work_activity
-                && (self.needs_final_message_separator || runtime_metrics.is_some());
-            if show_work_separator || runtime_metrics.is_some() {
-                let elapsed_seconds = if show_work_separator {
-                    duration_ms
-                        .and_then(|duration_ms| u64::try_from(duration_ms).ok())
-                        .map(|duration_ms| duration_ms / 1_000)
-                        .or_else(|| {
-                            self.bottom_pane
-                                .status_widget()
-                                .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
-                        })
+            let should_add_turn_separator =
+                self.needs_final_message_separator || runtime_metrics.is_some();
+            if should_add_turn_separator {
+                let elapsed_seconds = if self.had_work_activity {
+                    self.bottom_pane
+                        .status_widget()
+                        .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
+                        .map(|current| self.worked_elapsed_from(current))
                 } else {
                     None
                 };
                 self.add_to_history(history_cell::FinalMessageSeparator::new(
+                    Some(self.current_history_timestamp_label()),
                     elapsed_seconds,
                     runtime_metrics,
                 ));
@@ -4447,8 +4448,15 @@ impl ChatWidget {
             // If the previous turn inserted non-stream history (exec output, patch status, MCP
             // calls), render a separator before starting the next streamed assistant message.
             if self.needs_final_message_separator && self.had_work_activity {
+                let elapsed_seconds = self
+                    .bottom_pane
+                    .status_widget()
+                    .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
+                    .map(|current| self.worked_elapsed_from(current));
                 self.add_to_history(history_cell::FinalMessageSeparator::new(
-                    /*elapsed_seconds*/ None, /*runtime_metrics*/ None,
+                    None,
+                    elapsed_seconds,
+                    None,
                 ));
                 self.needs_final_message_separator = false;
             } else if self.needs_final_message_separator {
@@ -4468,6 +4476,21 @@ impl ChatWidget {
             self.run_catch_up_commit_tick();
         }
         self.request_redraw();
+    }
+
+    fn worked_elapsed_from(&mut self, current_elapsed: u64) -> u64 {
+        let baseline = match self.last_separator_elapsed_secs {
+            Some(last) if current_elapsed < last => 0,
+            Some(last) => last,
+            None => 0,
+        };
+        let elapsed = current_elapsed.saturating_sub(baseline);
+        self.last_separator_elapsed_secs = Some(current_elapsed);
+        elapsed
+    }
+
+    fn current_history_timestamp_label(&self) -> String {
+        (self.history_timestamp_label_provider)()
     }
 
     /// Finalizes an exec call while preserving the active exec cell grouping contract.
@@ -5157,6 +5180,10 @@ impl ChatWidget {
             had_work_activity: false,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
+            history_timestamp_label_provider: Arc::new(|| {
+                Local::now().format("%Y-%m-%d %H:%M:%S %:z").to_string()
+            }),
+            last_separator_elapsed_secs: None,
             last_plan_progress: None,
             plan_delta_buffer: String::new(),
             plan_item_active: false,

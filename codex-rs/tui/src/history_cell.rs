@@ -1384,13 +1384,19 @@ pub(crate) struct PatchHistoryCell {
 impl HistoryCell for PatchHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         if !self.display_preferences.show_patch_diffs() {
-            let file_count = self.changes.len();
-            let noun = if file_count == 1 { "file" } else { "files" };
-            return vec![
-                format!("• Edited {file_count} {noun} (diff hidden)")
-                    .dim()
-                    .into(),
-            ];
+            let mut files = self
+                .changes
+                .keys()
+                .map(|path| display_path_for(path, &self.cwd))
+                .collect::<Vec<_>>();
+            files.sort_unstable();
+            let summary = format!("Edited files: {}", files.join(", "));
+            return PrefixedWrappedHistoryCell::new(
+                Line::from(Span::from(summary).dim()),
+                "• ".dim(),
+                "  ".dim(),
+            )
+            .display_lines(width);
         }
         create_diff_summary(&self.changes, &self.cwd, width as usize)
     }
@@ -3429,20 +3435,22 @@ pub(crate) fn new_reasoning_raw_block(
 #[derive(Debug)]
 /// A visual divider between turns, optionally showing how long the assistant "worked for".
 ///
-/// This separator is only emitted for turns that performed concrete work (e.g., running commands,
-/// applying patches, making MCP tool calls), so purely conversational turns do not show an empty
-/// divider.
+/// Completed turns can use this to show a local timestamp, while in-turn work handoffs can omit
+/// the timestamp and only show work-related labels.
 pub struct FinalMessageSeparator {
+    timestamp_label: Option<String>,
     elapsed_seconds: Option<u64>,
     runtime_metrics: Option<RuntimeMetricsSummary>,
 }
 impl FinalMessageSeparator {
     /// Creates a separator; completed turns should pass protocol turn duration when available.
     pub(crate) fn new(
+        timestamp_label: Option<String>,
         elapsed_seconds: Option<u64>,
         runtime_metrics: Option<RuntimeMetricsSummary>,
     ) -> Self {
         Self {
+            timestamp_label,
             elapsed_seconds,
             runtime_metrics,
         }
@@ -3451,6 +3459,9 @@ impl FinalMessageSeparator {
 impl HistoryCell for FinalMessageSeparator {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut label_parts = Vec::new();
+        if let Some(timestamp_label) = self.timestamp_label.as_ref() {
+            label_parts.push(timestamp_label.clone());
+        }
         if let Some(elapsed_seconds) = self
             .elapsed_seconds
             .filter(|seconds| *seconds > 60)
@@ -4101,7 +4112,7 @@ mod tests {
             turn_ttft_ms: 0,
             turn_ttfm_ms: 0,
         };
-        let cell = FinalMessageSeparator::new(Some(12), Some(summary));
+        let cell = FinalMessageSeparator::new(None, Some(12), Some(summary));
         let rendered = render_lines(&cell.display_lines(/*width*/ 600));
 
         assert_eq!(rendered.len(), 1);
@@ -4119,11 +4130,24 @@ mod tests {
 
     #[test]
     fn final_message_separator_includes_worked_label_after_one_minute() {
-        let cell = FinalMessageSeparator::new(Some(61), /*runtime_metrics*/ None);
+        let cell = FinalMessageSeparator::new(None, Some(61), /*runtime_metrics*/ None);
         let rendered = render_lines(&cell.display_lines(/*width*/ 200));
 
         assert_eq!(rendered.len(), 1);
         assert!(rendered[0].contains("Worked for"));
+    }
+
+    #[test]
+    fn final_message_separator_includes_timestamp_label() {
+        let cell = FinalMessageSeparator::new(
+            Some("2026-04-08 03:04:05 +08:00".to_string()),
+            /*elapsed_seconds*/ None,
+            /*runtime_metrics*/ None,
+        );
+        let rendered = render_lines(&cell.display_lines(/*width*/ 80));
+
+        assert_eq!(rendered.len(), 1);
+        assert!(rendered[0].contains("2026-04-08 03:04:05 +08:00"));
     }
 
     #[test]
@@ -5044,12 +5068,18 @@ mod tests {
     }
 
     #[test]
-    fn patch_event_hides_diff_summary_when_disabled() {
+    fn patch_event_hides_diff_summary_when_disabled_and_lists_relative_paths() {
         let mut changes = HashMap::new();
         changes.insert(
-            PathBuf::from("src/lib.rs"),
+            test_cwd().join("src").join("lib.rs"),
             FileChange::Add {
                 content: "pub fn demo() {}\n".to_string(),
+            },
+        );
+        changes.insert(
+            test_cwd().join("README.md"),
+            FileChange::Add {
+                content: "# demo\n".to_string(),
             },
         );
         let display_preferences = DisplayPreferences::default();
@@ -5058,9 +5088,16 @@ mod tests {
             /*enabled*/ false,
         );
 
-        let cell = new_patch_event(changes, Path::new("/tmp/project"), display_preferences);
+        let cell = new_patch_event(changes, &test_cwd(), display_preferences);
         let rendered = render_lines(&cell.display_lines(/*width*/ 80));
-        assert_eq!(rendered, vec!["• Edited 1 file (diff hidden)"]);
+        assert_eq!(
+            rendered,
+            vec![format!(
+                "• Edited files: {}, {}",
+                PathBuf::from("README.md").display(),
+                PathBuf::from("src").join("lib.rs").display()
+            )]
+        );
     }
 
     #[test]
