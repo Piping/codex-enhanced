@@ -117,12 +117,33 @@ pub(crate) enum WorkflowControlsDestination {
         workflow_path: PathBuf,
         trigger_id: String,
     },
+    TriggerType {
+        workflow_path: PathBuf,
+        trigger_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WorkflowJobEditableField {
     Needs,
     Steps,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkflowTriggerEditableField {
+    Id,
+    Jobs,
+    Parameter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkflowTriggerType {
+    Manual,
+    BeforeTurn,
+    AfterTurn,
+    Idle,
+    Interval,
+    Cron,
 }
 
 #[derive(Debug, Clone)]
@@ -409,6 +430,18 @@ pub(crate) enum AppEvent {
         workflow_path: PathBuf,
         job_name: String,
         field: WorkflowJobEditableField,
+    },
+
+    SetWorkflowTriggerType {
+        workflow_path: PathBuf,
+        trigger_id: String,
+        trigger_type: WorkflowTriggerType,
+    },
+
+    EditWorkflowTriggerField {
+        workflow_path: PathBuf,
+        trigger_id: String,
+        field: WorkflowTriggerEditableField,
     },
 
     StartBtwDiscussion {

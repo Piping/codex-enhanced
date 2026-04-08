@@ -1,0 +1,165 @@
+name: pypi-release-artifacts
+
+on:
+  workflow_call:
+    inputs:
+      checkout_ref:
+        required: true
+        type: string
+      release_tag:
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.release_tag }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build-artifact-${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: ""
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            runtime_binary_name: codex
+            release_asset_name: codex-aarch64-apple-darwin.tar.gz
+            build_args: --bin codex
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            runtime_binary_name: codex
+            release_asset_name: codex-x86_64-apple-darwin.tar.gz
+            build_args: --bin codex
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            runtime_binary_name: codex
+            release_asset_name: codex-x86_64-unknown-linux-gnu.tar.gz
+            build_args: --bin codex
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            runtime_binary_name: codex.exe
+            release_asset_name: codex-x86_64-pc-windows-msvc.zip
+            build_args: --bin codex --bin codex-windows-sandbox-setup --bin codex-command-runner
+    steps:
+      - name: Checkout release ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.checkout_ref }}
+
+      - uses: dtolnay/rust-toolchain@1.93.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Clear workspace build rustflags for CI release builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_ENCODED_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_BUILD_RUSTFLAGS=" >> "$GITHUB_ENV"
+
+      - name: Use default macOS linker
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_ENCODED_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_BUILD_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS=" >> "$GITHUB_ENV"
+
+      - name: Install Linux build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libcap-dev pkg-config protobuf-compiler
+
+      - name: Install macOS build dependencies
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v protoc >/dev/null 2>&1; then
+            brew install protobuf
+          fi
+
+      - name: Install Windows build dependencies
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          if (-not (Get-Command protoc -ErrorAction SilentlyContinue)) {
+            choco install protoc -y --no-progress
+          }
+
+      - name: Build release binaries
+        shell: bash
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --target "${{ matrix.target }}" ${{ matrix.build_args }}
+
+      - name: Stage runtime artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/runtime-artifact"
+          cp "codex-rs/target/${{ matrix.target }}/release/${{ matrix.runtime_binary_name }}" \
+            "${RUNNER_TEMP}/runtime-artifact/${{ matrix.runtime_binary_name }}"
+
+      - name: Stage release asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_dir="${RUNNER_TEMP}/release-asset"
+          mkdir -p "${release_dir}"
+
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            cp "codex-rs/target/${{ matrix.target }}/release/codex.exe" "${release_dir}/codex.exe"
+            cp "codex-rs/target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe" "${release_dir}/codex-windows-sandbox-setup.exe"
+            cp "codex-rs/target/${{ matrix.target }}/release/codex-command-runner.exe" "${release_dir}/codex-command-runner.exe"
+          else
+            cp "codex-rs/target/${{ matrix.target }}/release/codex" "${release_dir}/codex"
+          fi
+
+      - name: Archive Unix release asset
+        if: ${{ runner.os != 'Windows' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_dir="${RUNNER_TEMP}/release-asset"
+          archive_dir="${RUNNER_TEMP}/release-archive"
+          mkdir -p "${archive_dir}"
+          tar -C "${release_dir}" -czf "${archive_dir}/${{ matrix.release_asset_name }}" codex
+
+      - name: Archive Windows release asset
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $releaseDir = Join-Path $env:RUNNER_TEMP "release-asset"
+          $archiveDir = Join-Path $env:RUNNER_TEMP "release-archive"
+          New-Item -ItemType Directory -Path $archiveDir -Force | Out-Null
+          Compress-Archive -Path (Join-Path $releaseDir '*') -DestinationPath (Join-Path $archiveDir '${{ matrix.release_asset_name }}') -Force
+
+      - name: Upload runtime binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pypi-runtime-${{ matrix.target }}
+          path: ${{ runner.temp }}/runtime-artifact/*
+          if-no-files-found: error
+
+      - name: Upload GitHub release asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: pypi-release-asset-${{ matrix.target }}
+          path: ${{ runner.temp }}/release-archive/*
+          if-no-files-found: error

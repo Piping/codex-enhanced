@@ -3,7 +3,7 @@ source: tui/src/app/workflow_controls.rs
 expression: popup
 ---
   Workflow
-  Manage workflow files, jobs, and manual triggers directly.
+  Manage workflow files, jobs, and triggers directly.
 
   Type to search workflows
 › Background Tasks      Insert a background task snapshot into the transcript. /ps shows the same
