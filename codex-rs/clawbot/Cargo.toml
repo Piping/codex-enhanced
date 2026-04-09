@@ -13,28 +13,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-openlark = { version = "0.15.0-rc.1", default-features = false, features = [
-    "ai",
-    "analytics",
-    "application",
-    "auth",
-    "base",
-    "bitable",
-    "cardkit",
-    "communication",
-    "docs",
-    "helpdesk",
-    "hr",
-    "mail",
-    "meeting",
-    "platform",
-    "protocol",
-    "security",
-    "user",
-    "webhook",
-    "websocket",
-    "workflow",
-] }
+openlark = { version = "0.15.0", default-features = false, features = ["auth", "communication", "websocket"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
