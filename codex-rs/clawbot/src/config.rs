@@ -38,7 +38,12 @@ impl FeishuConfig {
         !self.app_id.trim().is_empty() && !self.app_secret.trim().is_empty()
     }
 
-    pub fn is_bot_sender(&self, open_id: Option<&str>, user_id: Option<&str>) -> bool {
+    pub fn is_bot_sender(
+        &self,
+        open_id: Option<&str>,
+        user_id: Option<&str>,
+        app_id: Option<&str>,
+    ) -> bool {
         self.bot_open_id
             .as_deref()
             .zip(open_id)
@@ -48,6 +53,7 @@ impl FeishuConfig {
                 .as_deref()
                 .zip(user_id)
                 .is_some_and(|(bot_user_id, sender_user_id)| bot_user_id == sender_user_id)
+            || app_id.is_some_and(|sender_app_id| sender_app_id == self.app_id)
     }
 
     pub fn is_empty(&self) -> bool {

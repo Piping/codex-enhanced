@@ -4,11 +4,15 @@ use std::path::Path;
 use anyhow::Context;
 use anyhow::Result;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::TurnStatus;
 use codex_clawbot::CachedUnreadMessage;
 use codex_clawbot::ClawbotRuntime;
+use codex_clawbot::ClawbotStore;
 use codex_clawbot::ClawbotTurnMode;
 use codex_clawbot::FeishuConfig;
 use codex_clawbot::FeishuProviderRuntime;
+use codex_clawbot::PendingClawbotTurn;
 use codex_clawbot::ProviderEvent;
 use codex_clawbot::ProviderMessageRef;
 use codex_clawbot::ProviderOutboundReaction;
@@ -33,13 +37,6 @@ use crate::app_server_session::AppServerSession;
 use crate::app_server_session::ThreadSessionState;
 
 const FEISHU_AUTO_ACK_EMOJI_TYPE: &str = "TONGUE";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PendingClawbotTurn {
-    pub(crate) turn_id: String,
-    pub(crate) session: ProviderSessionRef,
-    pub(crate) turn_mode: ClawbotTurnMode,
-}
 
 impl App {
     pub(super) async fn sync_clawbot_workspace(&mut self, app_server: &mut AppServerSession) {
@@ -68,6 +65,8 @@ impl App {
                 tracing::warn!(error = %err, "failed to refresh clawbot Feishu sessions");
             }
         }
+        self.restore_clawbot_pending_turns()?;
+        self.reconcile_clawbot_pending_turns(app_server).await?;
 
         let runtime = ClawbotRuntime::load(workspace_root)?;
         let sessions_to_drain = runtime
@@ -81,6 +80,88 @@ impl App {
         for session in sessions_to_drain {
             self.dispatch_next_clawbot_message(app_server, &session)
                 .await?;
+        }
+        Ok(())
+    }
+
+    fn clawbot_store(&self) -> Result<ClawbotStore> {
+        let workspace_root = self
+            .clawbot_workspace_root
+            .clone()
+            .or_else(|| Some(self.config.cwd.to_path_buf()))
+            .context("missing clawbot workspace root")?;
+        Ok(ClawbotStore::new(workspace_root))
+    }
+
+    fn restore_clawbot_pending_turns(&mut self) -> Result<()> {
+        let pending_turns = self.clawbot_store()?.load_pending_turns()?;
+        self.clawbot_pending_turns.clear();
+        for pending_turn in pending_turns {
+            let thread_id = ThreadId::from_string(&pending_turn.thread_id).with_context(|| {
+                format!("invalid clawbot thread id `{}`", pending_turn.thread_id)
+            })?;
+            self.clawbot_pending_turns
+                .entry(thread_id)
+                .or_default()
+                .push_back(pending_turn);
+        }
+        Ok(())
+    }
+
+    async fn reconcile_clawbot_pending_turns(
+        &mut self,
+        app_server: &mut AppServerSession,
+    ) -> Result<()> {
+        let pending_turns = self
+            .clawbot_pending_turns
+            .values()
+            .flat_map(|queue| queue.iter().cloned())
+            .collect::<Vec<_>>();
+        for pending_turn in pending_turns {
+            let thread_id = ThreadId::from_string(&pending_turn.thread_id).with_context(|| {
+                format!("invalid clawbot thread id `{}`", pending_turn.thread_id)
+            })?;
+            let thread = match app_server
+                .thread_read(thread_id, /*include_turns*/ true)
+                .await
+            {
+                Ok(thread) => thread,
+                Err(err) => {
+                    tracing::warn!(
+                        thread_id = pending_turn.thread_id,
+                        turn_id = pending_turn.turn_id,
+                        error = %err,
+                        "failed to reconcile clawbot pending turn; clearing stale entry"
+                    );
+                    let _ = self.remove_pending_clawbot_turn(thread_id, &pending_turn.turn_id)?;
+                    continue;
+                }
+            };
+            let Some(turn) = thread
+                .turns
+                .iter()
+                .find(|turn| turn.id == pending_turn.turn_id)
+                .cloned()
+            else {
+                if !matches!(thread.status, ThreadStatus::Active { .. }) {
+                    let _ = self.remove_pending_clawbot_turn(thread_id, &pending_turn.turn_id)?;
+                }
+                continue;
+            };
+            match turn.status {
+                TurnStatus::Completed | TurnStatus::Failed | TurnStatus::Interrupted => {
+                    self.handle_clawbot_turn_completed(app_server, thread_id, turn)
+                        .await?;
+                }
+                TurnStatus::InProgress => {
+                    self.attach_clawbot_bound_thread_if_needed(app_server, thread_id)
+                        .await?;
+                    if let Some(channel) = self.thread_event_channels.get(&thread_id) {
+                        let mut store = channel.store.lock().await;
+                        store.active_turn_id = Some(turn.id);
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -170,7 +251,7 @@ impl App {
             return Ok(());
         };
         let next_session = if let Some(pending) =
-            self.take_pending_clawbot_turn(thread_id, &turn.id)
+            self.take_pending_clawbot_turn(thread_id, &turn.id)?
         {
             let reply_text = if let Some(text) = clawbot_outbound_text_for_turn(&turn) {
                 Some(text)
@@ -217,6 +298,18 @@ impl App {
                 self.send_clawbot_thread_reply(workspace_root.as_path(), &pending.session, text)
                     .await?;
             }
+            let mut runtime = ClawbotRuntime::load(workspace_root.clone())?;
+            let removed = runtime.take_next_unread_message(&pending.session)?;
+            if removed.as_ref().map(|entry| entry.message_id.as_str())
+                != Some(pending.message_id.as_str())
+            {
+                tracing::warn!(
+                    session = pending.session.session_id,
+                    expected = pending.message_id,
+                    actual = removed.as_ref().map(|entry| entry.message_id.as_str()),
+                    "clawbot unread FIFO state drifted while completing turn"
+                );
+            }
             Some(pending.session)
         } else {
             let runtime = ClawbotRuntime::load(workspace_root)?;
@@ -238,7 +331,7 @@ impl App {
         let Some(workspace_root) = self.clawbot_workspace_root.clone() else {
             return Ok(());
         };
-        let mut runtime = ClawbotRuntime::load(workspace_root.clone())?;
+        let runtime = ClawbotRuntime::load(workspace_root.clone())?;
         let Some(binding) = runtime.load_binding_for_session(session)? else {
             let _ = append_diagnostic_event(
                 workspace_root.as_path(),
@@ -270,6 +363,22 @@ impl App {
                 "bridge.dispatch_skipped",
                 serde_json::json!({
                     "reason": "thread_busy",
+                    "session_id": session.session_id,
+                    "thread_id": thread_id,
+                }),
+            );
+            return Ok(());
+        }
+        if self
+            .clawbot_pending_turns
+            .get(&thread_id)
+            .is_some_and(|queue| queue.iter().any(|pending| pending.session == *session))
+        {
+            let _ = append_diagnostic_event(
+                workspace_root.as_path(),
+                "bridge.dispatch_skipped",
+                serde_json::json!({
+                    "reason": "pending_turn",
                     "session_id": session.session_id,
                     "thread_id": thread_id,
                 }),
@@ -329,18 +438,13 @@ impl App {
                 "text": message.text.clone(),
             }),
         );
-        self.register_pending_clawbot_turn(thread_id, session.clone(), turn_id, turn_mode);
-        let removed = runtime.take_next_unread_message(session)?;
-        if removed.as_ref().map(|entry| entry.message_id.as_str())
-            != Some(message.message_id.as_str())
-        {
-            tracing::warn!(
-                session = session.session_id,
-                expected = message.message_id,
-                actual = removed.as_ref().map(|entry| entry.message_id.as_str()),
-                "clawbot unread FIFO state drifted while dispatching"
-            );
-        }
+        self.register_pending_clawbot_turn(
+            thread_id,
+            session.clone(),
+            turn_id,
+            message.message_id.clone(),
+            turn_mode,
+        );
         Ok(())
     }
 
@@ -564,24 +668,40 @@ impl App {
         thread_id: ThreadId,
         session: ProviderSessionRef,
         turn_id: String,
+        message_id: String,
         turn_mode: ClawbotTurnMode,
     ) {
+        let pending_turn = PendingClawbotTurn {
+            thread_id: thread_id.to_string(),
+            turn_id,
+            session,
+            message_id,
+            turn_mode,
+        };
         self.clawbot_pending_turns
             .entry(thread_id)
             .or_default()
-            .push_back(PendingClawbotTurn {
-                turn_id,
-                session,
-                turn_mode,
-            });
+            .push_back(pending_turn.clone());
+        if let Err(err) = self
+            .clawbot_store()
+            .and_then(|store| store.upsert_pending_turn(pending_turn))
+        {
+            tracing::warn!(
+                thread_id = %thread_id,
+                error = %err,
+                "failed to persist clawbot pending turn"
+            );
+        }
     }
 
     fn take_pending_clawbot_turn(
         &mut self,
         thread_id: ThreadId,
         turn_id: &str,
-    ) -> Option<PendingClawbotTurn> {
-        let queue = self.clawbot_pending_turns.get_mut(&thread_id)?;
+    ) -> Result<Option<PendingClawbotTurn>> {
+        let Some(queue) = self.clawbot_pending_turns.get_mut(&thread_id) else {
+            return Ok(None);
+        };
         let pending = queue
             .iter()
             .position(|pending| pending.turn_id == turn_id)
@@ -589,7 +709,19 @@ impl App {
         if queue.is_empty() {
             self.clawbot_pending_turns.remove(&thread_id);
         }
-        pending
+        if pending.is_some() {
+            let _ = self.remove_pending_clawbot_turn(thread_id, turn_id)?;
+        }
+        Ok(pending)
+    }
+
+    fn remove_pending_clawbot_turn(
+        &mut self,
+        thread_id: ThreadId,
+        turn_id: &str,
+    ) -> Result<Option<PendingClawbotTurn>> {
+        self.clawbot_store()?
+            .remove_pending_turn(&thread_id.to_string(), turn_id)
     }
 
     fn clawbot_turn_mode_for_turn(

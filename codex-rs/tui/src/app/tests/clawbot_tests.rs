@@ -1,6 +1,7 @@
 use super::*;
 use crate::app_event::ClawbotForwardingChannel;
 use codex_clawbot::ClawbotRuntime;
+use codex_clawbot::ClawbotStore;
 use codex_clawbot::ClawbotTurnMode;
 use codex_clawbot::ProviderEvent as ClawbotProviderEvent;
 use codex_clawbot::ProviderKind as ClawbotProviderKind;
@@ -93,8 +94,10 @@ async fn noninteractive_clawbot_request_user_input_builds_auto_response() {
     app.clawbot_pending_turns.insert(
         thread_id,
         VecDeque::from([PendingClawbotTurn {
+            thread_id: thread_id.to_string(),
             turn_id: "turn-1".to_string(),
             session: ProviderSessionRef::new(ClawbotProviderKind::Feishu, "chat_auto"),
+            message_id: "msg-1".to_string(),
             turn_mode: ClawbotTurnMode::NonInteractive,
         }]),
     );
@@ -133,8 +136,10 @@ async fn noninteractive_clawbot_permissions_request_builds_auto_response() {
     app.clawbot_pending_turns.insert(
         thread_id,
         VecDeque::from([PendingClawbotTurn {
+            thread_id: thread_id.to_string(),
             turn_id: "turn-1".to_string(),
             session: ProviderSessionRef::new(ClawbotProviderKind::Feishu, "chat_auto"),
+            message_id: "msg-1".to_string(),
             turn_mode: ClawbotTurnMode::NonInteractive,
         }]),
     );
@@ -214,7 +219,7 @@ async fn clawbot_turn_completed_forwards_reply_and_drains_next_message() -> Resu
         .expect("first pending turn");
     let queued_runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
         .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
-    assert_eq!(queued_runtime.snapshot().unread_message_count, 1);
+    assert_eq!(queued_runtime.snapshot().unread_message_count, 2);
 
     app.enqueue_thread_notification(
         thread_id,
@@ -258,7 +263,160 @@ async fn clawbot_turn_completed_forwards_reply_and_drains_next_message() -> Resu
     );
     let drained_runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
         .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
-    assert_eq!(drained_runtime.snapshot().unread_message_count, 0);
+    assert_eq!(drained_runtime.snapshot().unread_message_count, 1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn clawbot_restart_recovers_pending_turn_and_forwards_reply() -> Result<()> {
+    let mut app = make_test_app().await;
+    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let tempdir = tempdir()?;
+    app.config.cwd = tempdir.path().to_path_buf().abs();
+
+    let (thread_id, session) =
+        bind_test_clawbot_session(&mut app, &mut app_server, "chat_restart").await?;
+
+    app.handle_clawbot_provider_event(
+        &mut app_server,
+        ClawbotProviderEvent::InboundMessage(codex_clawbot::ProviderInboundMessage {
+            session: session.clone(),
+            message_id: "msg_1".to_string(),
+            text: "hello after restart".to_string(),
+            received_at: 1,
+        }),
+    )
+    .await
+    .expect("handle clawbot inbound");
+
+    let original_turn_id = app
+        .clawbot_pending_turns
+        .get(&thread_id)
+        .and_then(|queue| queue.front())
+        .map(|pending| pending.turn_id.clone())
+        .expect("pending turn");
+    let store = ClawbotStore::new(app.config.cwd.to_path_buf());
+    assert_eq!(store.load_pending_turns().expect("pending turns").len(), 1);
+
+    let mut restarted_app = make_test_app().await;
+    restarted_app.config.cwd = tempdir.path().to_path_buf().abs();
+    restarted_app.sync_clawbot_workspace(&mut app_server).await;
+
+    assert_eq!(
+        restarted_app
+            .clawbot_pending_turns
+            .get(&thread_id)
+            .map(std::collections::VecDeque::len),
+        Some(1)
+    );
+
+    restarted_app
+        .handle_clawbot_turn_completed(
+            &mut app_server,
+            thread_id,
+            test_turn(
+                &original_turn_id,
+                TurnStatus::Completed,
+                vec![ThreadItem::AgentMessage {
+                    id: "agent-1".to_string(),
+                    text: "restart reply".to_string(),
+                    phase: None,
+                    memory_citation: None,
+                }],
+            ),
+        )
+        .await
+        .expect("complete restored clawbot turn");
+
+    assert_eq!(
+        restarted_app.clawbot_outbound_messages,
+        vec![ProviderOutboundTextMessage {
+            session,
+            text: "restart reply".to_string(),
+        }]
+    );
+
+    let runtime = ClawbotRuntime::load(restarted_app.config.cwd.to_path_buf())
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+    assert_eq!(runtime.snapshot().unread_message_count, 0);
+    assert_eq!(
+        store.load_pending_turns().expect("pending turns"),
+        Vec::new()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn clawbot_sync_clears_stale_pending_turn_and_redelivers_unread() -> Result<()> {
+    let mut app = make_test_app().await;
+    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let tempdir = tempdir()?;
+    app.config.cwd = tempdir.path().to_path_buf().abs();
+
+    let (thread_id, session) =
+        bind_test_clawbot_session(&mut app, &mut app_server, "chat_stale").await?;
+
+    let mut runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+    runtime
+        .apply_provider_event(ClawbotProviderEvent::InboundMessage(
+            codex_clawbot::ProviderInboundMessage {
+                session: session.clone(),
+                message_id: "msg_1".to_string(),
+                text: "deliver me".to_string(),
+                received_at: 1,
+            },
+        ))
+        .expect("queue unread");
+
+    let store = ClawbotStore::new(app.config.cwd.to_path_buf());
+    store
+        .upsert_pending_turn(PendingClawbotTurn {
+            thread_id: thread_id.to_string(),
+            turn_id: "stale-turn".to_string(),
+            session: session.clone(),
+            message_id: "msg_1".to_string(),
+            turn_mode: ClawbotTurnMode::NonInteractive,
+        })
+        .expect("persist stale pending turn");
+    app.clawbot_pending_turns.clear();
+
+    app.sync_clawbot_workspace(&mut app_server).await;
+
+    assert_eq!(
+        app.clawbot_pending_turns
+            .get(&thread_id)
+            .map(std::collections::VecDeque::len),
+        Some(1)
+    );
+    assert_eq!(app.clawbot_outbound_reactions.len(), 1);
+    assert_eq!(
+        store
+            .load_pending_turns()
+            .expect("pending turns")
+            .into_iter()
+            .map(|pending| pending.turn_id)
+            .collect::<Vec<_>>(),
+        app.clawbot_pending_turns
+            .get(&thread_id)
+            .expect("pending queue")
+            .iter()
+            .map(|pending| pending.turn_id.clone())
+            .collect::<Vec<_>>()
+    );
+    assert_ne!(
+        app.clawbot_pending_turns
+            .get(&thread_id)
+            .and_then(|queue| queue.front())
+            .map(|pending| pending.turn_id.as_str()),
+        Some("stale-turn")
+    );
 
     Ok(())
 }

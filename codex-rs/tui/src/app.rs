@@ -109,6 +109,7 @@ use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
+use codex_clawbot::PendingClawbotTurn;
 #[cfg(test)]
 use codex_clawbot::ProviderOutboundReaction;
 #[cfg(test)]
@@ -201,7 +202,6 @@ use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
 use self::btw::BtwSessionState;
-use self::clawbot::PendingClawbotTurn;
 use self::key_chord::KeyChordAction;
 use self::key_chord::KeyChordResolution;
 use self::key_chord::KeyChordState;
