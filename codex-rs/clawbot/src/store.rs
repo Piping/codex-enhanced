@@ -12,6 +12,7 @@ use crate::config::ClawbotConfig;
 use crate::model::CLAWBOT_BINDINGS_RELATIVE_PATH;
 use crate::model::CLAWBOT_CONFIG_RELATIVE_PATH;
 use crate::model::CLAWBOT_INBOUND_RECEIPTS_RELATIVE_PATH;
+use crate::model::CLAWBOT_PENDING_TURNS_RELATIVE_PATH;
 use crate::model::CLAWBOT_RELATIVE_DIR;
 use crate::model::CLAWBOT_RUNTIME_RELATIVE_PATH;
 use crate::model::CLAWBOT_SESSIONS_RELATIVE_PATH;
@@ -19,6 +20,7 @@ use crate::model::CLAWBOT_UNREAD_MESSAGES_RELATIVE_PATH;
 use crate::model::CachedUnreadMessage;
 use crate::model::ClawbotSnapshot;
 use crate::model::InboundMessageReceipt;
+use crate::model::PendingClawbotTurn;
 use crate::model::ProviderKind;
 use crate::model::ProviderRuntimeState;
 use crate::model::ProviderSession;
@@ -66,6 +68,11 @@ impl ClawbotStore {
 
     pub fn runtime_path(&self) -> PathBuf {
         self.workspace_root.join(CLAWBOT_RUNTIME_RELATIVE_PATH)
+    }
+
+    pub fn pending_turns_path(&self) -> PathBuf {
+        self.workspace_root
+            .join(CLAWBOT_PENDING_TURNS_RELATIVE_PATH)
     }
 
     pub fn inbound_receipts_path(&self) -> PathBuf {
@@ -293,6 +300,52 @@ impl ClawbotStore {
         let message = unread_messages.remove(index);
         self.save_unread_messages(&unread_messages)?;
         Ok(Some(message))
+    }
+
+    pub fn load_pending_turns(&self) -> Result<Vec<PendingClawbotTurn>> {
+        read_optional_json_file(&self.pending_turns_path())
+            .with_context(|| format!("failed to load {}", self.pending_turns_path().display()))
+    }
+
+    pub fn save_pending_turns(&self, pending_turns: &[PendingClawbotTurn]) -> Result<()> {
+        let mut sorted = pending_turns.to_vec();
+        sorted.sort_by(|left, right| {
+            left.thread_id
+                .cmp(&right.thread_id)
+                .then(left.turn_id.cmp(&right.turn_id))
+                .then(left.session.session_id.cmp(&right.session.session_id))
+                .then(left.message_id.cmp(&right.message_id))
+        });
+        sorted.dedup_by(|left, right| {
+            left.thread_id == right.thread_id && left.turn_id == right.turn_id
+        });
+        self.write_json_file(&self.pending_turns_path(), &sorted)
+    }
+
+    pub fn upsert_pending_turn(&self, pending_turn: PendingClawbotTurn) -> Result<()> {
+        let mut pending_turns = self.load_pending_turns()?;
+        pending_turns.retain(|existing| {
+            existing.thread_id != pending_turn.thread_id || existing.turn_id != pending_turn.turn_id
+        });
+        pending_turns.push(pending_turn);
+        self.save_pending_turns(&pending_turns)
+    }
+
+    pub fn remove_pending_turn(
+        &self,
+        thread_id: &str,
+        turn_id: &str,
+    ) -> Result<Option<PendingClawbotTurn>> {
+        let mut pending_turns = self.load_pending_turns()?;
+        let Some(index) = pending_turns
+            .iter()
+            .position(|pending| pending.thread_id == thread_id && pending.turn_id == turn_id)
+        else {
+            return Ok(None);
+        };
+        let pending_turn = pending_turns.remove(index);
+        self.save_pending_turns(&pending_turns)?;
+        Ok(Some(pending_turn))
     }
 
     pub fn load_inbound_receipts(&self) -> Result<Vec<InboundMessageReceipt>> {
