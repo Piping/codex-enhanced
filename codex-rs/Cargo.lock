@@ -6891,94 +6891,25 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
 name = "openlark"
-version = "0.15.0-rc.1"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe508c03b5517af1605c03235638f9be5736d89c2c921c73b5e0c24c97014541"
+checksum = "3ad168187bbb6fc22aa95df6c684b4d1d3345ca36c16f342270e75dbf869b3d8"
 dependencies = [
  "chrono",
- "openlark-ai",
- "openlark-analytics",
- "openlark-application",
  "openlark-auth",
- "openlark-cardkit",
  "openlark-client",
  "openlark-communication",
  "openlark-core",
- "openlark-docs",
- "openlark-helpdesk",
- "openlark-hr",
- "openlark-mail",
- "openlark-meeting",
- "openlark-platform",
- "openlark-protocol",
- "openlark-security",
- "openlark-user",
- "openlark-webhook",
- "openlark-workflow",
  "serde",
  "serde_json",
  "serde_repr",
-]
-
-[[package]]
-name = "openlark-ai"
-version = "0.15.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "437bc45fefa2eaef48b51104cde5ecd46e19972a41da26951d6fd24e16851a0b"
-dependencies = [
- "anyhow",
- "async-trait",
- "openlark-core",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
-name = "openlark-analytics"
-version = "0.15.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4f6b4997b64c556a11fbc8765d69854a517a58faa6b0a74b6230423382c1fd3"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "futures",
- "log",
- "once_cell",
- "openlark-core",
- "rand 0.8.5",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "serde_repr",
- "thiserror 2.0.18",
- "tokio",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "openlark-application"
-version = "0.15.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e13fc6037b46ca9409ae2b2514612a023d09b171b7c425463ec6434edd959028"
-dependencies = [
- "openlark-core",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
 ]
 
 [[package]]
 name = "openlark-auth"
-version = "0.15.0-rc.2"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8311905dc8fc2a5042fdfe5a836f03cf6ca3046f102dada2222be30f194de357"
+checksum = "3fee5a868321d6307fbbda4dd3a127a50b2d90375072bdbc5cbd1e633a545db4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -6999,22 +6930,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "openlark-cardkit"
-version = "0.15.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c62aeb9d280b283e1293392c6ec5c5e22d2bea52663b34a5cb041560c4738465"
-dependencies = [
- "openlark-core",
- "serde",
- "serde_json",
- "tracing",
-]
-
-[[package]]
 name = "openlark-client"
-version = "0.15.0-rc.2"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08ccb83d3ce877c8c1a505f415ff755e5029f5f291ebcf203570a866e089d461"
+checksum = "da8bcf21d0d5e5beef862a29c794679d50d5d376e9f9ea4a851e081356628910"
 dependencies = [
  "chrono",
  "futures-util",
@@ -7037,9 +6956,9 @@ dependencies = [
 
 [[package]]
 name = "openlark-communication"
-version = "0.15.0-rc.2"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4dc90d7df526fca7490734bd5b6a6f107dbfb2f9eb1f6ad7a9aa55fd6eef42f"
+checksum = "d102d0ad5f63ebbe729e7f513bce18cb0e45bd0da6efb346e8b281ea5b619b1f"
 dependencies = [
  "openlark-core",
  "reqwest",
@@ -7050,9 +6969,9 @@ dependencies = [
 
 [[package]]
 name = "openlark-core"
-version = "0.15.0-rc.2"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e135b64cab6d8a7c9db3ee78d2ee97ddf8761a99b0a964020313777a2fe70ca6"
+checksum = "336a10748627ee7c57fc2d80d686b210065670bc7c01a17cacd6e85fd7548975"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -7075,213 +6994,6 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
-]
-
-[[package]]
-name = "openlark-docs"
-version = "0.15.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34bb68d37e3cec00d4e9b9499c40a6add97f23d715a1ce736a1a008573a15401"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64 0.22.1",
- "chrono",
- "futures",
- "futures-util",
- "log",
- "once_cell",
- "openlark-core",
- "rand 0.8.5",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "serde_repr",
- "thiserror 2.0.18",
- "tokio",
- "url",
- "urlencoding",
- "uuid",
-]
-
-[[package]]
-name = "openlark-helpdesk"
-version = "0.15.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b2c2a905897a1d546aff303a07d65dd4dde7e29eb7461259f1391cfea027077"
-dependencies = [
- "openlark-core",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "openlark-hr"
-version = "0.15.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ab434c649a8f1d27265a284d9745b860a5ae81d2d5de4ef020d190efe466473"
-dependencies = [
- "anyhow",
- "async-trait",
- "log",
- "openlark-core",
- "rand 0.8.5",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
-name = "openlark-mail"
-version = "0.15.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c884205245b3c89106e929cd546451eaf9cc105e06329e3cbec754dc77d74016"
-dependencies = [
- "openlark-core",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "openlark-meeting"
-version = "0.15.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b51fa17f59697a3bb1861e62e6474338fdf3fb7dd6cbfcba848fd4094946aa0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "openlark-core",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "openlark-platform"
-version = "0.15.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ecf4038d68ca80830c188b947128e45681a38d998a363e72032786c8eaf76f8"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "futures",
- "log",
- "once_cell",
- "openlark-core",
- "rand 0.8.5",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "serde_repr",
- "thiserror 2.0.18",
- "tokio",
- "url",
- "urlencoding",
- "uuid",
-]
-
-[[package]]
-name = "openlark-protocol"
-version = "0.15.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e51d6c682fe4e39ac528f2aaa53f3a36e212bcbbc537c7b3b7244f2bfe123acc"
-dependencies = [
- "bytes",
- "prost 0.13.5",
- "prost-build",
-]
-
-[[package]]
-name = "openlark-security"
-version = "0.15.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "029be662cd74764e034e9b07189350491b36750d37b7c7458352bf7aef9392b1"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64 0.22.1",
- "chrono",
- "hmac",
- "log",
- "openlark-core",
- "rand 0.8.5",
- "reqwest",
- "serde",
- "serde_json",
- "serde_repr",
- "sha2",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "url",
- "urlencoding",
- "uuid",
-]
-
-[[package]]
-name = "openlark-user"
-version = "0.15.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f6192b2beb505c1efa81d854de57f0cf53cfcf92caad4b5cc6b253a6bdf7b7a"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "futures",
- "log",
- "once_cell",
- "openlark-core",
- "rand 0.8.5",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "serde_repr",
- "thiserror 2.0.18",
- "tokio",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "openlark-webhook"
-version = "0.15.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6ec41748444100f1c516c438c5186de09632ce9256aaad5c1e19948046212a0"
-dependencies = [
- "openlark-core",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "openlark-workflow"
-version = "0.15.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f54035a3c78a58f0fd2201f46459c27e78b0f0bbf2dc61934f44c620f8fcd874"
-dependencies = [
- "openlark-core",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -8004,7 +7716,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.114",
