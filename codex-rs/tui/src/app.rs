@@ -5326,6 +5326,10 @@ impl App {
                 self.submit_thread_op(tui, app_server, thread_id, op.into())
                     .await?;
             }
+            AppEvent::SubmitWorkflowFollowup { thread_id, op } => {
+                self.submit_thread_op(tui, app_server, thread_id, op.into())
+                    .await?;
+            }
             AppEvent::ThreadHistoryEntryResponse { thread_id, event } => {
                 self.enqueue_thread_history_entry_response(thread_id, event)
                     .await?;
@@ -13039,7 +13043,7 @@ model = "gpt-5.2"
             .try_recv()
             .expect("expected workflow follow-up submission")
         {
-            AppEvent::SubmitThreadOp {
+            AppEvent::SubmitWorkflowFollowup {
                 thread_id: submit_thread_id,
                 op: Op::UserTurn { items, .. },
             } => {
@@ -13118,7 +13122,7 @@ model = "gpt-5.2"
             .try_recv()
             .expect("expected inactive primary workflow follow-up submission")
         {
-            AppEvent::SubmitThreadOp {
+            AppEvent::SubmitWorkflowFollowup {
                 thread_id: submit_thread_id,
                 op: Op::UserTurn { items, .. },
             } => {
@@ -13385,7 +13389,7 @@ model = "gpt-5.2"
             .try_recv()
             .expect("expected queued workflow follow-up")
         {
-            AppEvent::SubmitThreadOp {
+            AppEvent::SubmitWorkflowFollowup {
                 thread_id: submit_thread_id,
                 op: Op::UserTurn { items, .. },
             } => {
@@ -13400,6 +13404,54 @@ model = "gpt-5.2"
             }
             other => panic!("expected workflow follow-up submission, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn workflow_followup_completion_retriggers_after_turn() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+        write_test_after_turn_workflow(app.config.cwd.as_path())?;
+
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start thread");
+        let thread_id = started.session.thread_id;
+        app.enqueue_primary_thread_session(started.session, Vec::new())
+            .await?;
+        app.active_thread_id = Some(ThreadId::new());
+        while app_event_rx.try_recv().is_ok() {}
+
+        app.handle_app_server_event(
+            &app_server,
+            AppServerEvent::ServerNotification(turn_completed_notification_with_agent_message(
+                thread_id,
+                "turn-followup",
+                TurnStatus::Completed,
+                "workflow-originated follow-up reply",
+            )),
+        )
+        .await;
+
+        assert_eq!(
+            app.background_workflow_labels(),
+            vec!["director · followup".to_string()]
+        );
+        while let Ok(event) = app_event_rx.try_recv() {
+            match event {
+                AppEvent::ClawbotTurnCompleted { .. }
+                | AppEvent::InsertHistoryCell(_)
+                | AppEvent::ReplayWorkflowHistory { .. } => {}
+                other => panic!("unexpected event after workflow follow-up completion: {other:?}"),
+            }
+        }
+
+        Ok(())
     }
 
     #[tokio::test]
