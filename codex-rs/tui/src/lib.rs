@@ -132,6 +132,7 @@ mod history_cell;
 mod ide_context;
 pub(crate) mod insert_history;
 pub use insert_history::insert_history_lines;
+mod insight;
 mod key_hint;
 mod keymap;
 mod keymap_setup;

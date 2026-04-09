@@ -1,0 +1,289 @@
+---
+source: tui/src/insight/report.rs
+expression: html
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex Insight Report</title>
+  <style>
+    :root {
+      --bg: #f7f3ea;
+      --panel: #fffdf8;
+      --ink: #1d1a17;
+      --muted: #6d655d;
+      --line: #ded4c6;
+      --accent: #b44c2f;
+      --accent-soft: #f2dfd8;
+      --shadow: rgba(36, 24, 14, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Iowan Old Style", "Palatino Linotype", "Noto Serif SC", serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(180, 76, 47, 0.10), transparent 32%),
+        linear-gradient(180deg, #f3ecde 0%, var(--bg) 38%, #f9f6ef 100%);
+      line-height: 1.55;
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 32px 20px 64px;
+    }
+    header {
+      padding: 28px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: linear-gradient(135deg, rgba(255,255,255,0.92), rgba(255,247,240,0.98));
+      box-shadow: 0 14px 40px var(--shadow);
+    }
+    h1, h2, h3 { margin: 0 0 12px; }
+    h1 { font-size: clamp(2rem, 4vw, 3.2rem); }
+    h2 { margin-top: 36px; font-size: 1.45rem; }
+    .muted { color: var(--muted); }
+    .toc {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 18px;
+    }
+    .toc a {
+      color: var(--accent);
+      text-decoration: none;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,0.7);
+    }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+      margin-top: 22px;
+    }
+    .card {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--panel);
+      box-shadow: 0 8px 24px var(--shadow);
+    }
+    .card strong {
+      display: block;
+      font-size: 1.45rem;
+      margin-top: 6px;
+    }
+    section {
+      margin-top: 28px;
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: rgba(255, 253, 248, 0.92);
+      box-shadow: 0 10px 30px var(--shadow);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+      font-size: 0.95rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    th {
+      color: var(--muted);
+      font-weight: 700;
+    }
+    code {
+      font-family: "SFMono-Regular", "Menlo", monospace;
+      font-size: 0.92em;
+      background: #f4eee4;
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+    ul { padding-left: 20px; }
+    .pill {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 0.86rem;
+      margin-right: 8px;
+    }
+    .metric-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .metric-strip span {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 7px 12px;
+      background: #fff;
+    }
+    .root {
+      scroll-margin-top: 20px;
+    }
+    .small { font-size: 0.9rem; }
+    @media (max-width: 720px) {
+      main { padding: 18px 14px 40px; }
+      header, section { padding: 18px; border-radius: 18px; }
+      table, thead, tbody, tr, th, td { display: block; }
+      thead { display: none; }
+      td {
+        padding: 8px 0;
+        border-bottom: none;
+      }
+      tr {
+        padding: 12px 0;
+        border-bottom: 1px solid var(--line);
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <span class="pill">/insight</span>
+      <span class="pill">Local heuristics fallback / 本地启发式回退</span>
+      <h1>Codex Insight Report</h1>
+      <p class="muted">Dashboard first, drill-down later. Mixed CN/EN report. Generated at 2026-04-08 12:30:00 UTC.</p>
+      <p class="muted small">History window: 2026-04-08 12:30:00 UTC → 2026-04-08 12:40:00 UTC</p>
+      <div class="toc">
+        <a href="#summary">Executive Summary</a>
+        <a href="#top-sessions">Top Sessions</a>
+        <a href="#token-analysis">Token Analysis</a>
+        <a href="#time-analysis">Time Analysis</a>
+        <a href="#failure-analysis">Failure Analysis</a>
+        <a href="#tool-analysis">Tool / Patch Analysis</a>
+        <a href="#patterns">Common Patterns</a>
+        <a href="#suggestions">Efficiency Suggestions</a>
+        <a href="#drilldown">Root Session Drill-down</a>
+        <a href="#methodology">Methodology</a>
+      </div>
+      <div class="cards">
+        <div class="card"><span class="muted">Root Sessions</span><strong>1</strong></div>
+        <div class="card"><span class="muted">Threads</span><strong>1</strong></div>
+        <div class="card"><span class="muted">Tokens</span><strong>12,345</strong></div>
+        <div class="card"><span class="muted">Exact Tool Runtime</span><strong>0s</strong></div>
+        <div class="card"><span class="muted">Failure Rate</span><strong>0.0%</strong></div>
+        <div class="card"><span class="muted">History Span</span><strong>10m 0s</strong></div>
+      </div>
+    </header>
+
+    <section id="summary">
+      <h2>Executive Summary / 概览</h2>
+      <p>Total tokens: <strong>12,345</strong>. Counted operations: <strong>0</strong>. Failures: <strong>0</strong>.</p>
+      <p class="muted">Scanned 1 rollout file(s); skipped 0. Archived thread(s): 0.</p>
+    </section>
+
+    <section id="top-sessions">
+      <h2>Top Sessions / 高消耗会话</h2>
+      <table>
+        <thead>
+          <tr><th>Root Session</th><th>Threads</th><th>Tokens</th><th>Wall Span</th><th>Failures</th></tr>
+        </thead>
+        <tbody><tr><td><a href="#root-00000000-0000-0000-0000-000000000001">Investigate /insight</a></td><td>0</td><td>12,345</td><td>10m 0s</td><td>0</td></tr></tbody>
+      </table>
+    </section>
+
+    <section id="token-analysis">
+      <h2>Token Analysis / Token 分析</h2>
+      <div class="metric-strip">
+        <span>Total: 12,345</span>
+        <span>Input: 0</span>
+        <span>Output: 0</span>
+        <span>Reasoning Output: 0</span>
+      </div>
+    </section>
+
+    <section id="time-analysis">
+      <h2>Time Analysis / 时间分析</h2>
+      <div class="metric-strip">
+        <span>History Span: 10m 0s</span>
+        <span>Cumulative Thread Span: 10m 0s</span>
+        <span>Exact Tool Runtime: 0s</span>
+        <span>Estimated User Wait: 2m 0s</span>
+        <span>Residual Model/UI Time: 3m 0s</span>
+      </div>
+      <p class="muted small">Residual time is a conservative estimate after subtracting exact persisted tool durations and estimated user idle gaps.</p>
+    </section>
+
+    <section id="failure-analysis">
+      <h2>Failure Analysis / 失败分析</h2>
+      <div class="metric-strip">
+        <span>Exec failures: 0</span>
+        <span>MCP failures: 0</span>
+        <span>Dynamic tool failures: 0</span>
+        <span>Patch failures: 0</span>
+        <span>API errors: 0</span>
+      </div>
+    </section>
+
+    <section id="tool-analysis">
+      <h2>Tool / Patch Analysis / 工具与补丁</h2>
+      <div class="metric-strip">
+        <span>Exec commands: 0</span>
+        <span>Tool calls: 0</span>
+        <span>Patches: 0</span>
+        <span>Patched files: 0</span>
+        <span>User messages: 0</span>
+        <span>Completed turns: 0</span>
+      </div>
+    </section>
+
+    <section id="patterns">
+      <h2>Common Patterns / 共性模式</h2>
+      <ul><li>Pattern A</li></ul>
+    </section>
+
+    <section id="suggestions">
+      <h2>Efficiency Suggestions / 效率建议</h2>
+      <ul><li>Suggestion A</li></ul>
+    </section>
+
+    <section id="drilldown">
+      <h2>Root Session Drill-down / 根会话下钻</h2>
+      <section class="root" id="root-00000000-0000-0000-0000-000000000001">
+  <h3>Investigate /insight</h3>
+  <p class="muted small">Root thread: <code>00000000-0000-0000-0000-000000000001</code> · Rollout: <code>sessions/root.jsonl</code> · CWD: <code>/repo</code></p>
+  <div class="metric-strip">
+    <span>Threads: 0</span>
+    <span>Tokens: 12,345</span>
+    <span>Wall Span: 10m 0s</span>
+    <span>Exact Tool Runtime: 0s</span>
+    <span>Failure Rate: 0.0%</span>
+  </div>
+  <p class="muted small">Timeline: 2026-04-08 12:30:00 UTC → 2026-04-08 12:40:00 UTC</p>
+  <table>
+    <thead>
+      <tr><th>Thread</th><th>Source</th><th>Tokens</th><th>Wall Span</th><th>Tool Calls</th><th>Patches</th><th>Rollout</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</section>
+    </section>
+
+    <section id="methodology">
+      <h2>Methodology / 指标说明</h2>
+      <ul>
+        <li><strong>Exact</strong>: exec command, MCP tool, and dynamic tool durations come from persisted rollout events.</li>
+        <li><strong>Exact</strong>: wall-clock spans come from persisted rollout timestamps.</li>
+        <li><strong>Estimated</strong>: user wait is measured as the gap from a completed turn to the next user message when that gap is observable in history.</li>
+        <li><strong>Estimated</strong>: residual model/UI time is the remaining thread span after subtracting exact tool runtime and estimated user wait.</li>
+        <li><strong>Failure rate</strong>: failures / counted operations, where counted operations are exec + MCP + dynamic tools + patch applications + API error incidents.</li>
+        <li><strong>Narrative layer</strong>: this report used Local heuristics fallback / 本地启发式回退, so pattern and suggestion sections are deterministic local heuristics instead of a model-generated write-up.</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>
