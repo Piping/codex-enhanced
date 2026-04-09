@@ -2,12 +2,14 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::config::ClawbotConfig;
+use crate::config::ClawbotTurnMode;
 
 pub const CLAWBOT_RELATIVE_DIR: &str = ".codex/clawbot";
 pub const CLAWBOT_CONFIG_RELATIVE_PATH: &str = ".codex/clawbot/config.toml";
 pub const CLAWBOT_SESSIONS_RELATIVE_PATH: &str = ".codex/clawbot/sessions.json";
 pub const CLAWBOT_BINDINGS_RELATIVE_PATH: &str = ".codex/clawbot/bindings.json";
 pub const CLAWBOT_UNREAD_MESSAGES_RELATIVE_PATH: &str = ".codex/clawbot/unread_messages.jsonl";
+pub const CLAWBOT_PENDING_TURNS_RELATIVE_PATH: &str = ".codex/clawbot/pending_turns.json";
 pub const CLAWBOT_RUNTIME_RELATIVE_PATH: &str = ".codex/clawbot/runtime.json";
 pub const CLAWBOT_INBOUND_RECEIPTS_RELATIVE_PATH: &str = ".codex/clawbot/inbound_receipts.json";
 pub const CLAWBOT_DIAGNOSTICS_RELATIVE_PATH: &str = ".codex/clawbot/diagnostics.jsonl";
@@ -172,6 +174,15 @@ impl CachedUnreadMessage {
     pub fn session_ref(&self) -> ProviderSessionRef {
         ProviderSessionRef::new(self.provider, self.session_id.clone())
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PendingClawbotTurn {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub session: ProviderSessionRef,
+    pub message_id: String,
+    pub turn_mode: ClawbotTurnMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

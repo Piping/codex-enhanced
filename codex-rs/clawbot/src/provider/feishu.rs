@@ -329,7 +329,11 @@ fn normalize_message_receive_event(
         );
         return None;
     }
-    if config.is_bot_sender(sender.open_id.as_deref(), sender.user_id.as_deref()) {
+    if config.is_bot_sender(
+        sender.open_id.as_deref(),
+        sender.user_id.as_deref(),
+        sender.app_id.as_deref(),
+    ) {
         let _ = append_diagnostic_event(
             workspace_root,
             "feishu.message_dropped",
@@ -340,6 +344,7 @@ fn normalize_message_receive_event(
                 "chat_type": chat_type,
                 "sender_open_id": sender.open_id,
                 "sender_user_id": sender.user_id,
+                "sender_app_id": sender.app_id,
             }),
         );
         return None;
@@ -370,6 +375,9 @@ fn normalize_message_receive_event(
             "chat_id": chat_id.clone(),
             "chat_type": chat_type.clone(),
             "message_id": message.message_id.clone(),
+            "sender_open_id": sender.open_id.clone(),
+            "sender_user_id": sender.user_id.clone(),
+            "sender_app_id": sender.app_id.clone(),
             "text": normalized_text.clone(),
         }),
     );
@@ -519,6 +527,8 @@ struct FeishuUserId {
     open_id: Option<String>,
     user_id: Option<String>,
     union_id: Option<String>,
+    #[serde(default)]
+    app_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -634,6 +644,7 @@ mod tests {
                         open_id: Some("ou_123".to_string()),
                         user_id: None,
                         union_id: None,
+                        app_id: None,
                     },
                 },
                 message: super::FeishuEventMessage {
@@ -665,6 +676,7 @@ mod tests {
                         open_id: Some("ou_member".to_string()),
                         user_id: None,
                         union_id: None,
+                        app_id: None,
                     },
                 },
                 message: super::FeishuEventMessage {
@@ -716,6 +728,7 @@ mod tests {
                         open_id: Some("ou_bot".to_string()),
                         user_id: None,
                         union_id: None,
+                        app_id: None,
                     },
                 },
                 message: super::FeishuEventMessage {
@@ -750,6 +763,49 @@ mod tests {
     }
 
     #[test]
+    fn message_receive_event_skips_app_authored_messages() {
+        let envelope = super::FeishuMessageReceiveEnvelope {
+            event: super::FeishuMessageReceiveEvent {
+                sender: super::FeishuEventSender {
+                    sender_id: super::FeishuUserId {
+                        open_id: None,
+                        user_id: None,
+                        union_id: None,
+                        app_id: Some("cli_app_123".to_string()),
+                    },
+                },
+                message: super::FeishuEventMessage {
+                    message_id: "msg_bot_app_1".to_string(),
+                    create_time: serde_json::json!("456"),
+                    chat_id: Some("chat_group_123".to_string()),
+                    chat_type: Some("group".to_string()),
+                    message_type: Some("text".to_string()),
+                    msg_type: None,
+                    content: Some("{\"text\":\"hello group\"}".to_string()),
+                    body: None,
+                },
+                chat: Some(super::FeishuEventChat {
+                    chat_id: "chat_group_123".to_string(),
+                    chat_type: Some("group".to_string()),
+                    name: Some("tracker".to_string()),
+                }),
+            },
+        };
+
+        assert_eq!(
+            normalize_message_receive_event(
+                envelope,
+                &FeishuConfig {
+                    app_id: "cli_app_123".to_string(),
+                    ..FeishuConfig::default()
+                },
+                Path::new("/tmp"),
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn message_receive_event_uses_chat_fallbacks_for_group_payloads() {
         let envelope = super::FeishuMessageReceiveEnvelope {
             event: super::FeishuMessageReceiveEvent {
@@ -758,6 +814,7 @@ mod tests {
                         open_id: Some("ou_member".to_string()),
                         user_id: None,
                         union_id: None,
+                        app_id: None,
                     },
                 },
                 message: super::FeishuEventMessage {
@@ -814,6 +871,7 @@ mod tests {
                     open_id: Some("ou_123".to_string()),
                     user_id: None,
                     union_id: None,
+                    app_id: None,
                 },
                 last_message_create_time: Some("456".to_string()),
             },
