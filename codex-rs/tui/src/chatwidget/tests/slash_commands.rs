@@ -1,5 +1,6 @@
 use super::*;
 use pretty_assertions::assert_eq;
+use std::time::Duration;
 
 #[tokio::test]
 async fn slash_compact_eagerly_queues_follow_up_before_turn_start() {
@@ -239,6 +240,140 @@ async fn slash_copy_state_clears_on_thread_rollback() {
     });
 
     assert_eq!(chat.last_copyable_output, None);
+}
+
+#[tokio::test]
+async fn slash_insight_generates_report_and_announces_path() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let temp_home = tempdir().unwrap();
+    let codex_home = temp_home.path().to_path_buf();
+    let sessions_dir = codex_home.join("sessions");
+    std::fs::create_dir_all(&sessions_dir).unwrap();
+    chat.config.codex_home = codex_home.clone();
+    chat.config.sqlite_home = codex_home.clone();
+
+    let thread_id = ThreadId::new();
+    let rollout_path =
+        sessions_dir.join("rollout-2026-04-08T12-00-00-00000000-0000-0000-0000-000000000001.jsonl");
+    let rollout = [
+        serde_json::to_string(&codex_protocol::protocol::RolloutLine {
+            timestamp: "2026-04-08T12:00:00Z".to_string(),
+            item: codex_protocol::protocol::RolloutItem::SessionMeta(
+                codex_protocol::protocol::SessionMetaLine {
+                    meta: codex_protocol::protocol::SessionMeta {
+                        id: thread_id,
+                        forked_from_id: None,
+                        timestamp: "2026-04-08T12:00:00Z".to_string(),
+                        cwd: PathBuf::from("/repo"),
+                        originator: "codex".to_string(),
+                        cli_version: "0.0.0".to_string(),
+                        source: SessionSource::Cli,
+                        agent_nickname: None,
+                        agent_role: None,
+                        agent_path: None,
+                        model_provider: Some("openai".to_string()),
+                        base_instructions: None,
+                        dynamic_tools: None,
+                        memory_mode: None,
+                    },
+                    git: None,
+                },
+            ),
+        })
+        .unwrap(),
+        serde_json::to_string(&codex_protocol::protocol::RolloutLine {
+            timestamp: "2026-04-08T12:00:05Z".to_string(),
+            item: codex_protocol::protocol::RolloutItem::EventMsg(EventMsg::UserMessage(
+                UserMessageEvent {
+                    message: "## My request for Codex: analyze local sessions".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                },
+            )),
+        })
+        .unwrap(),
+        serde_json::to_string(&codex_protocol::protocol::RolloutLine {
+            timestamp: "2026-04-08T12:00:10Z".to_string(),
+            item: codex_protocol::protocol::RolloutItem::EventMsg(EventMsg::TokenCount(
+                TokenCountEvent {
+                    info: Some(TokenUsageInfo {
+                        total_token_usage: TokenUsage {
+                            input_tokens: 80,
+                            cached_input_tokens: 0,
+                            output_tokens: 20,
+                            reasoning_output_tokens: 5,
+                            total_tokens: 100,
+                        },
+                        last_token_usage: TokenUsage::default(),
+                        model_context_window: Some(128000),
+                    }),
+                    rate_limits: None,
+                },
+            )),
+        })
+        .unwrap(),
+        serde_json::to_string(&codex_protocol::protocol::RolloutLine {
+            timestamp: "2026-04-08T12:00:12Z".to_string(),
+            item: codex_protocol::protocol::RolloutItem::EventMsg(EventMsg::ExecCommandEnd(
+                ExecCommandEndEvent {
+                    call_id: "call-1".to_string(),
+                    process_id: None,
+                    turn_id: "turn-1".to_string(),
+                    command: vec!["rg".to_string(), "insight".to_string()],
+                    cwd: PathBuf::from("/repo"),
+                    parsed_cmd: Vec::new(),
+                    source: ExecCommandSource::Agent,
+                    interaction_input: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    aggregated_output: String::new(),
+                    exit_code: 0,
+                    duration: Duration::from_secs(1),
+                    formatted_output: String::new(),
+                    status: CoreExecCommandStatus::Completed,
+                },
+            )),
+        })
+        .unwrap(),
+    ]
+    .join("\n");
+    std::fs::write(&rollout_path, rollout).unwrap();
+
+    chat.dispatch_command(SlashCommand::Insight);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected immediate status message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Generating /insight report from local sessions"),
+        "unexpected initial message: {rendered:?}"
+    );
+
+    let final_cell = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match rx.recv().await {
+                Some(AppEvent::InsertHistoryCell(cell)) => break cell,
+                Some(_) => continue,
+                None => panic!("expected report completion cell"),
+            }
+        }
+    })
+    .await
+    .expect("completion event should arrive");
+    let rendered = lines_to_single_string(&final_cell.display_lines(u16::MAX));
+    let mut sanitized = rendered.replace(codex_home.display().to_string().as_str(), "$CODEX_HOME");
+    if let Some(start) = sanitized.find("insight-")
+        && let Some(end) = sanitized[start..].find(".html")
+    {
+        sanitized.replace_range(
+            start..start + end + ".html".len(),
+            "insight-<timestamp>.html",
+        );
+    }
+    assert_chatwidget_snapshot!("slash_insight_report_ready_message", sanitized);
+    assert!(rendered.contains("Insight report generated:"));
+    assert!(codex_home.join("reports").exists());
 }
 
 #[tokio::test]

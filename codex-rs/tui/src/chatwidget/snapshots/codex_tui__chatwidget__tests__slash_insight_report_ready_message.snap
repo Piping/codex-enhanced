@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+expression: sanitized
+---
+• Insight report generated: $CODEX_HOME/reports/insight-<timestamp>.html Patterns and suggestions used local heuristics fallback in this build.
