@@ -7,6 +7,7 @@ use std::collections::VecDeque;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 
 const WORKFLOW_DIR_NAME: &str = "workflows";
 
@@ -49,14 +50,39 @@ pub(crate) enum WorkflowResponseMode {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(untagged)]
 pub(crate) enum WorkflowStep {
-    Run { run: String, retry: Option<u32> },
-    Prompt { prompt: String, retry: Option<u32> },
+    Run {
+        run: String,
+        retry: Option<u32>,
+        timeout: Option<String>,
+    },
+    Prompt {
+        prompt: String,
+        retry: Option<u32>,
+        timeout: Option<String>,
+    },
 }
 
 impl WorkflowStep {
     pub(crate) fn retry_attempts(&self) -> u32 {
         match self {
             Self::Run { retry, .. } | Self::Prompt { retry, .. } => retry.unwrap_or(1),
+        }
+    }
+
+    pub(crate) fn timeout(&self, default_timeout: Duration) -> Result<Duration, String> {
+        let timeout = match self {
+            Self::Run { timeout, .. } | Self::Prompt { timeout, .. } => timeout,
+        };
+        timeout.as_ref().map_or(Ok(default_timeout), |timeout| {
+            humantime::parse_duration(timeout)
+                .map_err(|err| format!("invalid step timeout `{timeout}`: {err}"))
+        })
+    }
+
+    pub(crate) fn kind(&self) -> &'static str {
+        match self {
+            Self::Run { .. } => "run",
+            Self::Prompt { .. } => "prompt",
         }
     }
 }
@@ -215,6 +241,15 @@ pub(crate) fn load_workflow_registry(
                     "workflow `{workflow_name}` job `{job_name}` in `{}` must define at least one step",
                     path.display()
                 )));
+            }
+            for step in &job.steps {
+                if let Err(err) = step.timeout(Duration::from_secs(30)) {
+                    return Err(WorkflowDefinitionError::Invalid(format!(
+                        "workflow `{workflow_name}` job `{job_name}` in `{}` has invalid {} step timeout: {err}",
+                        path.display(),
+                        step.kind()
+                    )));
+                }
             }
             if matches!(job.context, WorkflowContextMode::Embed)
                 && job
@@ -380,4 +415,58 @@ fn pop_next_job(ready: &mut VecDeque<String>, registry: &LoadedWorkflowRegistry)
         .min_by_key(|(_, definition_index)| *definition_index)
         .map(|(index, _)| index)?;
     ready.remove(best_index)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn workflow_step_timeout_uses_default_when_unset() {
+        let step = WorkflowStep::Prompt {
+            prompt: "summarize".to_string(),
+            retry: None,
+            timeout: None,
+        };
+
+        assert_eq!(
+            step.timeout(Duration::from_secs(30)).unwrap(),
+            Duration::from_secs(30)
+        );
+    }
+
+    #[test]
+    fn load_workflow_registry_rejects_invalid_step_timeout() {
+        let dir = tempdir().unwrap();
+        let workflows_dir = dir.path().join(".codex/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        let workflow_path = workflows_dir.join("workflow.yaml");
+        fs::write(
+            &workflow_path,
+            r#"name: director
+
+jobs:
+  notify:
+    steps:
+      - prompt: summarize the changes
+        timeout: not-a-duration
+"#,
+        )
+        .unwrap();
+
+        let error = load_workflow_registry(dir.path()).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains(&format!(
+                "workflow `director` job `notify` in `{}` has invalid prompt step timeout",
+                workflow_path.display()
+            )),
+            "unexpected error message: {message}"
+        );
+        assert!(
+            message.contains("invalid step timeout `not-a-duration`"),
+            "unexpected error message: {message}"
+        );
+    }
 }

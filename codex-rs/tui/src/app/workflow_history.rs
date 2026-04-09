@@ -248,7 +248,7 @@ impl App {
             );
             return visible_cell;
         };
-        self.app_event_tx.send(AppEvent::SubmitThreadOp {
+        self.app_event_tx.send(AppEvent::SubmitWorkflowFollowup {
             thread_id: primary_thread_id,
             op,
         });

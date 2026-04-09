@@ -4,7 +4,7 @@
 
 > 真正 24/7 使用的 Codex 发行版。
 
-[English](./README.md) · [Website](https://codex-enhanced.com) · [工作流文档](./docs/workflows.md) · [结构化输入 UI](./docs/tui-request-user-input.md)
+[English](./README.md) · [Website](https://codex-enhanced.com) · [工作流文档](./docs/workflows.md) · [Slash Command 文档](./docs/slash_commands.md) · [结构化输入 UI](./docs/tui-request-user-input.md)
 
 </div>
 
@@ -33,6 +33,7 @@
 | --- | --- | --- |
 | 多 profile 路由 | `/profile` | 在运行时切换命名 profile、管理 fallback route，并在限流或鉴权失败时继续运转，而不是改完配置再重启。 |
 | 工作流编排 | `/workflow` | 直接管理 `.codex/workflows/*.yaml`，手动运行 job，或者挂接 `before_turn`、`after_turn`、`interval`、`cron`、`file_watch` 等触发器。 |
+| 会话洞察报告 | `/insight` | 扫描本地 Codex session，并在 `~/.codex/reports/` 下生成离线 HTML 分析报告，便于回看 rollout 和逐层钻取。 |
 | 会话连续性 | `/resume` | 把保存过的工作续上，而不是每次从零重建长上下文。 |
 | 外部消息桥接 | `/clawbot` | 把 workspace-local 的飞书会话绑定到 Codex thread，接收未读消息并把最终回复发回外部。 |
 | UI 与对齐控制 | `/settings`、`question`、键盘 chord | 降低界面噪音，在 TUI 中收集结构化答案，并让人工参与点更明确。 |
@@ -158,6 +159,7 @@ jobs:
 - [`codex-rs/`](./codex-rs) 是 Rust 工作区，包含 CLI、TUI、workflow、app-server 和 clawbot 集成
 - [`sdk/python-runtime-enhanced/`](./sdk/python-runtime-enhanced) 是 `codex-enhanced` 的 Python wheel 打包目录
 - [`docs/workflows.md`](./docs/workflows.md) 说明 workflow 文件、trigger 和 job 管理方式
+- [`docs/slash_commands.md`](./docs/slash_commands.md) 说明 TUI slash commands，包括 `/insight`
 - [`docs/tui-request-user-input.md`](./docs/tui-request-user-input.md) 说明 `question` 使用的结构化输入浮层
 
 ## 能力边界

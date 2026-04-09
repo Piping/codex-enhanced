@@ -54,6 +54,7 @@ use uuid::Uuid;
 
 const WORKFLOW_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const WORKFLOW_INTERRUPT_SETTLE_TIMEOUT: Duration = Duration::from_secs(1);
+const WORKFLOW_STEP_TIMEOUT: Duration = Duration::from_secs(30);
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub(crate) type WorkflowThreadNotificationChannels =
@@ -571,10 +572,7 @@ impl App {
                         /*cancellation*/ None,
                     )
                     .await
-                    .map_err(|error| match error {
-                        WorkflowRunError::Failed(message) => message,
-                        WorkflowRunError::Cancelled => "workflow run cancelled".to_string(),
-                    })?,
+                    .map_err(workflow_run_error_message)?,
                 );
             }
         }
@@ -941,7 +939,7 @@ async fn run_background_workflow(
         {
             Ok(results) => BackgroundWorkflowRunOutcome::Completed(results),
             Err(WorkflowRunError::Cancelled) => BackgroundWorkflowRunOutcome::Cancelled,
-            Err(WorkflowRunError::Failed(error)) => BackgroundWorkflowRunOutcome::Failed(error),
+            Err(error) => BackgroundWorkflowRunOutcome::Failed(workflow_run_error_message(error)),
         };
     BackgroundWorkflowRunResult { target, outcome }
 }
@@ -1117,8 +1115,16 @@ async fn run_workflow_job(
     let mut last_prompt_response = None;
     for step in &job.config.steps {
         let configured_attempts = step.retry_attempts();
+        let step_timeout = step.timeout(WORKFLOW_STEP_TIMEOUT).map_err(|err| {
+            WorkflowRunError::Failed(format!(
+                "workflow `{workflow_name}` job `{}` has invalid {} step timeout: {err}",
+                job.name,
+                step.kind()
+            ))
+        })?;
         let mut attempt = 1;
         let mut used_capacity_retry = false;
+        let mut used_timeout_retry = false;
         let step_error = loop {
             if cancellation.is_some_and(CancellationToken::is_cancelled) {
                 if let Some(thread) = thread.as_ref() {
@@ -1133,8 +1139,15 @@ async fn run_workflow_job(
                 phase_context,
                 cancellation,
             };
-            let result =
-                execute_workflow_step(client, &mut thread, context, step, &step_outputs).await;
+            let result = execute_workflow_step(
+                client,
+                &mut thread,
+                context,
+                step,
+                step_timeout,
+                &step_outputs,
+            )
+            .await;
             match result {
                 Ok(Some(output)) => {
                     if matches!(step, WorkflowStep::Prompt { .. }) {
@@ -1147,13 +1160,22 @@ async fn run_workflow_job(
                     break None;
                 }
                 Err(error) => {
+                    let should_retry_capacity =
+                        !used_capacity_retry && should_retry_selected_model_capacity_error(&error);
+                    let should_retry_timeout =
+                        !used_timeout_retry && should_retry_workflow_timeout(&error);
                     let should_retry = !matches!(error, WorkflowRunError::Cancelled)
                         && (attempt < configured_attempts
-                            || (!used_capacity_retry
-                                && should_retry_selected_model_capacity_error(&error)));
+                            || should_retry_capacity
+                            || should_retry_timeout);
                     if should_retry {
                         if attempt >= configured_attempts {
-                            used_capacity_retry = true;
+                            if should_retry_capacity {
+                                used_capacity_retry = true;
+                            }
+                            if should_retry_timeout {
+                                used_timeout_retry = true;
+                            }
                         }
                         sleep(retry_backoff_delay(attempt)).await;
                         attempt = attempt.saturating_add(1);
@@ -1193,11 +1215,18 @@ async fn execute_workflow_step(
     thread: &mut Option<WorkflowThreadSession>,
     context: WorkflowStepExecutionContext<'_>,
     step: &WorkflowStep,
+    step_timeout: Duration,
     step_outputs: &[String],
 ) -> Result<Option<String>, WorkflowRunError> {
     match step {
         WorkflowStep::Run { run, .. } => {
-            run_workflow_command(run, &context.job.workflow_path, context.cancellation).await
+            run_workflow_command(
+                run,
+                &context.job.workflow_path,
+                step_timeout,
+                context.cancellation,
+            )
+            .await
         }
         WorkflowStep::Prompt { prompt, .. } => {
             let thread = match thread {
@@ -1219,7 +1248,7 @@ async fn execute_workflow_step(
                 context.phase_context,
                 step_outputs,
             );
-            run_workflow_prompt(client, &thread, prompt, context.cancellation).await
+            run_workflow_prompt(client, &thread, prompt, step_timeout, context.cancellation).await
         }
     }
 }
@@ -1228,21 +1257,38 @@ async fn run_workflow_prompt(
     client: &dyn WorkflowRuntimeClient,
     thread: &WorkflowThreadSession,
     prompt: String,
+    step_timeout: Duration,
     cancellation: Option<&CancellationToken>,
 ) -> Result<Option<String>, WorkflowRunError> {
     let turn_id = client
         .start_turn(thread.thread_id.clone(), thread.cwd.clone(), prompt)
         .await
         .map_err(WorkflowRunError::Failed)?;
+    let deadline = tokio::time::Instant::now() + step_timeout;
     loop {
         if cancellation.is_some_and(CancellationToken::is_cancelled) {
             interrupt_active_workflow_turn(client, thread, turn_id.clone()).await;
             return Err(WorkflowRunError::Cancelled);
         }
-        let turn = client
-            .read_turn(thread, turn_id.clone())
+        let Some(remaining) = deadline.checked_duration_since(tokio::time::Instant::now()) else {
+            interrupt_active_workflow_turn(client, thread, turn_id.clone()).await;
+            return Err(WorkflowRunError::TimedOut(format!(
+                "workflow prompt timed out after {}",
+                humantime::format_duration(step_timeout)
+            )));
+        };
+        let turn = match tokio::time::timeout(remaining, client.read_turn(thread, turn_id.clone()))
             .await
-            .map_err(WorkflowRunError::Failed)?;
+        {
+            Ok(turn) => turn.map_err(WorkflowRunError::Failed)?,
+            Err(_) => {
+                interrupt_active_workflow_turn(client, thread, turn_id.clone()).await;
+                return Err(WorkflowRunError::TimedOut(format!(
+                    "workflow prompt timed out after {}",
+                    humantime::format_duration(step_timeout)
+                )));
+            }
+        };
         match turn.status {
             TurnStatus::Completed => return Ok(turn.last_agent_message),
             TurnStatus::Interrupted => return Err(WorkflowRunError::Cancelled),
@@ -1252,7 +1298,16 @@ async fn run_workflow_prompt(
                         .unwrap_or_else(|| "workflow prompt turn failed".to_string()),
                 ));
             }
-            TurnStatus::InProgress => sleep(WORKFLOW_POLL_INTERVAL).await,
+            TurnStatus::InProgress => {
+                if tokio::time::Instant::now() >= deadline {
+                    interrupt_active_workflow_turn(client, thread, turn_id.clone()).await;
+                    return Err(WorkflowRunError::TimedOut(format!(
+                        "workflow prompt timed out after {}",
+                        humantime::format_duration(step_timeout)
+                    )));
+                }
+                sleep(WORKFLOW_POLL_INTERVAL).await;
+            }
         }
     }
 }
@@ -1277,6 +1332,7 @@ async fn interrupt_active_workflow_turn(
 async fn run_workflow_command(
     command: &str,
     workflow_path: &std::path::Path,
+    step_timeout: Duration,
     cancellation: Option<&CancellationToken>,
 ) -> Result<Option<String>, WorkflowRunError> {
     #[cfg(windows)]
@@ -1316,7 +1372,13 @@ async fn run_workflow_command(
                 std::future::pending::<()>().await;
             }
         } => return Err(WorkflowRunError::Cancelled),
-        output = &mut wait_with_output => output,
+        output = tokio::time::timeout(step_timeout, &mut wait_with_output) => output
+            .map_err(|_| {
+                WorkflowRunError::TimedOut(format!(
+                    "workflow command `{command}` timed out after {}",
+                    humantime::format_duration(step_timeout)
+                ))
+            })?,
     }
     .map_err(|err| {
         WorkflowRunError::Failed(format!("failed to run workflow command `{command}`: {err}"))
@@ -1485,6 +1547,17 @@ fn should_retry_selected_model_capacity_error(error: &WorkflowRunError) -> bool 
     )
 }
 
+fn should_retry_workflow_timeout(error: &WorkflowRunError) -> bool {
+    matches!(error, WorkflowRunError::TimedOut(_))
+}
+
+fn workflow_run_error_message(error: WorkflowRunError) -> String {
+    match error {
+        WorkflowRunError::Failed(message) | WorkflowRunError::TimedOut(message) => message,
+        WorkflowRunError::Cancelled => "workflow run cancelled".to_string(),
+    }
+}
+
 fn update_last_workflow_agent_message(
     last_agent_message: &mut Option<String>,
     notification: &ItemCompletedNotification,
@@ -1510,6 +1583,7 @@ fn last_agent_message_for_turn_items(items: &[ThreadItem]) -> Option<String> {
 #[derive(Debug)]
 enum WorkflowRunError {
     Failed(String),
+    TimedOut(String),
     Cancelled,
 }
 
@@ -1523,6 +1597,7 @@ mod tests {
     use std::sync::Mutex;
     use tempfile::TempDir;
     use tempfile::tempdir;
+    use tokio::time;
 
     async fn build_config(temp_dir: &TempDir) -> Config {
         ConfigBuilder::default()
@@ -1750,6 +1825,79 @@ jobs:
                 "read_turn:thr_workflow:turn_workflow".to_string(),
                 "unsubscribe_thread:thr_workflow".to_string(),
             ]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn prompt_workflow_job_uses_configured_timeout_for_retry() {
+        let tempdir = tempdir().expect("tempdir");
+        let workflows_dir = tempdir.path().join(".codex/workflows");
+        std::fs::create_dir_all(&workflows_dir).expect("workflow dir");
+        std::fs::write(
+            workflows_dir.join("manual.yaml"),
+            r#"name: director
+
+jobs:
+  review_backlog:
+    steps:
+      - prompt: summarize the backlog
+        timeout: 1s
+"#,
+        )
+        .expect("workflow fixture");
+        let client = FakeWorkflowRuntimeClient::new(Vec::new());
+        let run = run_background_workflow(
+            &client,
+            tempdir.path().to_path_buf(),
+            BackgroundWorkflowRunTarget::Job {
+                workflow_name: "director".to_string(),
+                job_name: "review_backlog".to_string(),
+            },
+            CancellationToken::new(),
+        );
+        tokio::pin!(run);
+
+        let configured_timeout = Duration::from_secs(1);
+        tokio::task::yield_now().await;
+        time::advance(
+            configured_timeout
+                + WORKFLOW_INTERRUPT_SETTLE_TIMEOUT
+                + retry_backoff_delay(1)
+                + configured_timeout
+                + WORKFLOW_INTERRUPT_SETTLE_TIMEOUT
+                + Duration::from_secs(1),
+        )
+        .await;
+
+        let result = run.await;
+        match result.outcome {
+            BackgroundWorkflowRunOutcome::Failed(error) => {
+                assert_eq!(error, "workflow prompt timed out after 1s".to_string())
+            }
+            other => panic!("expected failed timeout run, got {other:?}"),
+        }
+
+        let calls = client.calls.lock().expect("calls lock").clone();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.starts_with("start_turn:"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.starts_with("interrupt_turn:"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.starts_with("unsubscribe_thread:"))
+                .count(),
+            1
         );
     }
 

@@ -4,7 +4,7 @@
 
 > The Codex distribution built for real 24/7 use.
 
-[中文版本](./README.zh-CN.md) · [Website](https://codex-enhanced.com) · [Workflows](./docs/workflows.md) · [Structured Input UI](./docs/tui-request-user-input.md)
+[中文版本](./README.zh-CN.md) · [Website](https://codex-enhanced.com) · [Workflows](./docs/workflows.md) · [Slash Commands](./docs/slash_commands.md) · [Structured Input UI](./docs/tui-request-user-input.md)
 
 </div>
 
@@ -33,6 +33,7 @@ That is the core idea: make Codex feel less like a terminal chatbot and more lik
 | --- | --- | --- |
 | Multi-profile routing | `/profile` | Switch named profiles at runtime, manage fallback routes, and recover from rate limits or auth failures without rewriting local environment state. |
 | Workflow orchestration | `/workflow` | Manage `.codex/workflows/*.yaml`, run jobs manually, and attach triggers such as `before_turn`, `after_turn`, `interval`, `cron`, and `file_watch`. |
+| Session insight report | `/insight` | Scan local Codex sessions and generate an offline HTML report under `~/.codex/reports/` for rollout analysis and drill-down. |
 | Session continuity | `/resume` | Reconnect to saved work instead of reconstructing long-running context from scratch. |
 | External message bridge | `/clawbot` | Bind workspace-local Feishu sessions to Codex threads, capture unread messages, and forward final replies back out. |
 | UI and alignment control | `/settings`, `question`, keyboard chords | Reduce noise, collect structured answers in the TUI, and keep operator interactions explicit. |
@@ -158,6 +159,7 @@ If you want to inspect or extend the project, start here:
 - [`codex-rs/`](./codex-rs) contains the Rust workspace, including the CLI, TUI, workflow support, app-server pieces, and clawbot integration
 - [`sdk/python-runtime-enhanced/`](./sdk/python-runtime-enhanced) contains the Python wheel packaging for `codex-enhanced`
 - [`docs/workflows.md`](./docs/workflows.md) explains workflow files, triggers, and job management
+- [`docs/slash_commands.md`](./docs/slash_commands.md) documents TUI slash commands including `/insight`
 - [`docs/tui-request-user-input.md`](./docs/tui-request-user-input.md) explains the structured input overlay used for `question`
 
 ## Capability Boundaries
