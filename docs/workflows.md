@@ -70,6 +70,9 @@ Behavior notes:
 - `Run Now` is available for any enabled trigger type, not only `manual`.
 - If a trigger resolves only to disabled or otherwise unrunnable jobs, the run fails visibly instead of silently doing nothing.
 - `After Turn` runs are dispatched as background workflow tasks after the turn finishes, so the main thread stays responsive and the transcript shows workflow start/completion cells separately.
+- `response: user` follow-ups can recursively re-trigger `after_turn`. The chain naturally stops when the workflow returns an empty reply, because no follow-up turn is queued.
+- Workflow steps default to a 30s timeout. Override this per step with `timeout`, for example `timeout: 5m`.
+- Timeout failures participate in workflow step retry behavior, including one automatic timeout retry.
 
 ## Trigger Types
 
@@ -131,6 +134,7 @@ jobs:
     steps:
       - prompt: |
           Send a concise update.
+        timeout: 2m
 ```
 
 The root menu includes:

@@ -220,6 +220,12 @@ pub(crate) enum AppEvent {
         op: AppCommand,
     },
 
+    /// Submit a workflow-generated follow-up back to the primary thread.
+    SubmitWorkflowFollowup {
+        thread_id: ThreadId,
+        op: Op,
+    },
+
     /// Deliver a synthetic history lookup response to a specific thread channel.
     ThreadHistoryEntryResponse {
         thread_id: ThreadId,

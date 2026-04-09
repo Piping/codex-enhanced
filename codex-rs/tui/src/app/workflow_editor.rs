@@ -648,7 +648,9 @@ jobs:
             WorkflowJobEditableField::Steps,
             r#"- prompt: |
     summarize the changes
+  timeout: 5m
 - run: cargo test -p codex-tui
+  timeout: 2m
 "#,
         )
         .unwrap();
@@ -660,7 +662,9 @@ jobs:
         let steps = job_field_seed(&path, "notify", WorkflowJobEditableField::Steps).unwrap();
         assert!(steps.contains("prompt: |"));
         assert!(steps.contains("summarize the changes"));
+        assert!(steps.contains("timeout: 5m"));
         assert!(steps.contains("cargo test -p codex-tui"));
+        assert!(steps.contains("timeout: 2m"));
     }
 
     #[test]
