@@ -350,6 +350,7 @@ use crate::history_cell::HookCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::WebSearchCell;
+use crate::insight;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 #[cfg(test)]
@@ -5685,6 +5686,10 @@ impl ChatWidget {
                         /*refreshing_rate_limits*/ false, /*request_id*/ None,
                     );
                 }
+            }
+            SlashCommand::Insight => {
+                self.add_info_message(insight::start_message(), /*hint*/ None);
+                insight::spawn_report_generation(self.config.clone(), self.app_event_tx.clone());
             }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();

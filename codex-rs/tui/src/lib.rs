@@ -127,6 +127,7 @@ mod get_git_diff;
 mod history_cell;
 pub(crate) mod insert_history;
 pub use insert_history::insert_history_lines;
+mod insight;
 mod key_hint;
 mod line_truncation;
 pub(crate) mod live_wrap;
