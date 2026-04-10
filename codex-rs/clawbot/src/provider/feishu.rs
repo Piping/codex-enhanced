@@ -15,7 +15,6 @@ use open_lark::openlark_communication::im::im::v1::message::create::CreateMessag
 use open_lark::openlark_communication::im::im::v1::message::create::CreateMessageRequest;
 use open_lark::openlark_communication::im::im::v1::message::models::ReceiveIdType;
 use open_lark::openlark_communication::im::im::v1::message::models::UserIdType;
-use open_lark::openlark_communication::im::im::v1::message::reaction::delete::DeleteMessageReactionRequest;
 use open_lark::openlark_communication::im::im::v1::message::reaction::list::ListMessageReactionsRequest;
 use open_lark::openlark_communication::im::im::v1::message::reaction::models::CreateMessageReactionBody;
 use open_lark::openlark_communication::im::im::v1::message::reaction::models::MessageReaction;
@@ -116,7 +115,7 @@ impl FeishuProviderRuntime {
         }
     }
 
-    pub async fn add_reaction(&self, reaction: ProviderOutboundReaction) -> Result<()> {
+    pub async fn add_reaction(&self, reaction: ProviderOutboundReaction) -> Result<Option<String>> {
         if reaction.target.provider != ProviderKind::Feishu {
             return Err(anyhow!(
                 "cannot send {} reaction via Feishu runtime",
@@ -147,6 +146,12 @@ impl FeishuProviderRuntime {
         .await
         .map_err(|error| anyhow!("failed to add Feishu message reaction: {error}"))?;
         if response.is_success() {
+            let reaction_id = response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("reaction_id"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
             let _ = append_diagnostic_event(
                 self.workspace_root.as_path(),
                 "feishu.add_reaction_succeeded",
@@ -154,9 +159,10 @@ impl FeishuProviderRuntime {
                     "session_id": session_id,
                     "message_id": message_id,
                     "emoji_type": emoji_type,
+                    "reaction_id": reaction_id,
                 }),
             );
-            Ok(())
+            Ok(reaction_id)
         } else {
             let error = anyhow!("failed to add Feishu message reaction: {}", response.msg());
             let _ = append_diagnostic_event(
@@ -217,12 +223,8 @@ impl FeishuProviderRuntime {
         }
 
         for reaction_id in &reaction_ids {
-            DeleteMessageReactionRequest::new(config.clone())
-                .message_id(reaction.target.message_id.clone())
-                .reaction_id(reaction_id.clone())
-                .execute()
-                .await
-                .map_err(|error| anyhow!("failed to remove Feishu message reaction: {error}"))?;
+            self.remove_reaction_by_id(reaction.clone(), reaction_id)
+                .await?;
         }
 
         let _ = append_diagnostic_event(
@@ -233,6 +235,52 @@ impl FeishuProviderRuntime {
                 "message_id": reaction.target.message_id,
                 "emoji_type": reaction.emoji_type,
                 "removed_count": reaction_ids.len(),
+                "remove_mode": "listed",
+            }),
+        );
+        Ok(())
+    }
+
+    pub async fn remove_reaction_by_id(
+        &self,
+        reaction: ProviderOutboundReaction,
+        reaction_id: &str,
+    ) -> Result<()> {
+        if reaction.target.provider != ProviderKind::Feishu {
+            return Err(anyhow!(
+                "cannot send {} reaction via Feishu runtime",
+                reaction.target.provider.title()
+            ));
+        }
+
+        let request: ApiRequest<Value> = ApiRequest::delete(format!(
+            "{}/{}/reactions/{}",
+            IM_V1_MESSAGES, reaction.target.message_id, reaction_id
+        ));
+        let response = open_lark::openlark_core::http::Transport::<Value>::request(
+            request,
+            &self.messaging_config()?,
+            Some(Default::default()),
+        )
+        .await
+        .map_err(|error| anyhow!("failed to remove Feishu message reaction: {error}"))?;
+        if !response.is_success() {
+            return Err(anyhow!(
+                "failed to remove Feishu message reaction: {}",
+                response.msg()
+            ));
+        }
+
+        let _ = append_diagnostic_event(
+            self.workspace_root.as_path(),
+            "feishu.remove_reaction_succeeded",
+            serde_json::json!({
+                "session_id": reaction.target.session_id,
+                "message_id": reaction.target.message_id,
+                "emoji_type": reaction.emoji_type,
+                "removed_count": 1,
+                "reaction_id": reaction_id,
+                "remove_mode": "direct",
             }),
         );
         Ok(())
