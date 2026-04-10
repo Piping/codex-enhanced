@@ -2,6 +2,7 @@ use crate::app_backtrack::BacktrackState;
 use crate::app_command::AppCommand;
 use crate::app_command::AppCommandView;
 use crate::app_event::AppEvent;
+use crate::app_event::ClawbotControlsDestination;
 use crate::app_event::ExitMode;
 use crate::app_event::FeedbackCategory;
 use crate::app_event::RateLimitRefreshOrigin;
@@ -1154,6 +1155,7 @@ pub(crate) struct App {
     workflow_history: WorkflowHistoryState,
     btw_session: Option<BtwSessionState>,
     btw_closing_thread_ids: HashSet<ThreadId>,
+    clawbot_controls_destination: ClawbotControlsDestination,
     clawbot_workspace_root: Option<PathBuf>,
     clawbot_provider_task: Option<JoinHandle<()>>,
     clawbot_pending_turns: HashMap<ThreadId, VecDeque<PendingClawbotTurn>>,
@@ -1161,6 +1163,8 @@ pub(crate) struct App {
     clawbot_outbound_messages: Vec<ProviderOutboundTextMessage>,
     #[cfg(test)]
     clawbot_outbound_reactions: Vec<ProviderOutboundReaction>,
+    #[cfg(test)]
+    clawbot_removed_outbound_reactions: Vec<ProviderOutboundReaction>,
 }
 
 #[derive(Default)]
@@ -4472,6 +4476,7 @@ impl App {
             workflow_history: WorkflowHistoryState::default(),
             btw_session: None,
             btw_closing_thread_ids: HashSet::new(),
+            clawbot_controls_destination: ClawbotControlsDestination::Root,
             clawbot_workspace_root: None,
             clawbot_provider_task: None,
             clawbot_pending_turns: HashMap::new(),
@@ -4479,6 +4484,8 @@ impl App {
             clawbot_outbound_messages: Vec::new(),
             #[cfg(test)]
             clawbot_outbound_reactions: Vec::new(),
+            #[cfg(test)]
+            clawbot_removed_outbound_reactions: Vec::new(),
         };
         match WorkflowFileWatchState::new(app.config.cwd.as_path(), app.app_event_tx.clone()) {
             Ok(state) => {
@@ -5226,6 +5233,9 @@ impl App {
             AppEvent::OpenClawbotManagement => {
                 self.open_clawbot_management_popup();
             }
+            AppEvent::OpenClawbotManagementView { destination } => {
+                self.open_clawbot_management_view(destination);
+            }
             AppEvent::OpenClawbotFeishuConfigPrompt { field } => {
                 self.open_clawbot_feishu_config_prompt(field);
             }
@@ -5234,9 +5244,6 @@ impl App {
                     self.chat_widget
                         .add_error_message(format!("Failed to save Clawbot config: {err}"));
                 }
-            }
-            AppEvent::OpenClawbotManualBindPrompt => {
-                self.open_clawbot_manual_bind_prompt();
             }
             AppEvent::SaveClawbotManualBindSessionId { session_id } => {
                 if let Err(err) = self
@@ -5253,14 +5260,12 @@ impl App {
                         .add_error_message(format!("Failed to save Clawbot turn mode: {err}"));
                 }
             }
-            AppEvent::ClawbotDisconnectCurrentThread => {
-                if let Err(err) = self.clawbot_disconnect_current_thread() {
-                    self.chat_widget
-                        .add_error_message(format!("Failed to disconnect Clawbot binding: {err}"));
-                }
-            }
-            AppEvent::ClawbotSetCurrentThreadForwarding { channel, enabled } => {
-                if let Err(err) = self.clawbot_set_current_thread_forwarding(channel, enabled) {
+            AppEvent::ClawbotSetThreadForwarding {
+                thread_id,
+                channel,
+                enabled,
+            } => {
+                if let Err(err) = self.clawbot_set_thread_forwarding(thread_id, channel, enabled) {
                     self.chat_widget
                         .add_error_message(format!("Failed to update Clawbot forwarding: {err}"));
                 }
@@ -5284,6 +5289,15 @@ impl App {
                         "Failed to restart Clawbot Feishu runtime: {err}"
                     ));
                 }
+            }
+            AppEvent::ClawbotDisconnectThread { thread_id } => {
+                if let Err(err) = self.clawbot_disconnect_thread(thread_id) {
+                    self.chat_widget
+                        .add_error_message(format!("Failed to disconnect Clawbot binding: {err}"));
+                }
+            }
+            AppEvent::EditClawbotStateFile { label, path } => {
+                self.edit_clawbot_state_file_from_ui(tui, label, path).await;
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
@@ -10637,6 +10651,7 @@ guardian_approval = true
             workflow_history: WorkflowHistoryState::default(),
             btw_session: None,
             btw_closing_thread_ids: HashSet::new(),
+            clawbot_controls_destination: ClawbotControlsDestination::Root,
             clawbot_workspace_root: None,
             clawbot_provider_task: None,
             clawbot_pending_turns: HashMap::new(),
@@ -10644,6 +10659,8 @@ guardian_approval = true
             clawbot_outbound_messages: Vec::new(),
             #[cfg(test)]
             clawbot_outbound_reactions: Vec::new(),
+            #[cfg(test)]
+            clawbot_removed_outbound_reactions: Vec::new(),
         }
     }
 
@@ -10712,6 +10729,7 @@ guardian_approval = true
                 workflow_history: WorkflowHistoryState::default(),
                 btw_session: None,
                 btw_closing_thread_ids: HashSet::new(),
+                clawbot_controls_destination: ClawbotControlsDestination::Root,
                 clawbot_workspace_root: None,
                 clawbot_provider_task: None,
                 clawbot_pending_turns: HashMap::new(),
@@ -10719,6 +10737,8 @@ guardian_approval = true
                 clawbot_outbound_messages: Vec::new(),
                 #[cfg(test)]
                 clawbot_outbound_reactions: Vec::new(),
+                #[cfg(test)]
+                clawbot_removed_outbound_reactions: Vec::new(),
             },
             rx,
             op_rx,

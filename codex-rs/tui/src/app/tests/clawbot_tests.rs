@@ -1,4 +1,6 @@
 use super::*;
+use crate::app_event::AppEvent;
+use crate::app_event::ClawbotControlsDestination;
 use crate::app_event::ClawbotForwardingChannel;
 use codex_clawbot::ClawbotRuntime;
 use codex_clawbot::ClawbotStore;
@@ -83,6 +85,60 @@ async fn clawbot_inbound_message_resumes_bound_thread_and_starts_turn() -> Resul
         Some(1)
     );
     assert!(app.active_turn_id_for_thread(thread_id).await.is_some());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn clawbot_inbound_message_to_inactive_thread_shows_jump_hint() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let tempdir = tempdir()?;
+    app.config.cwd = tempdir.path().to_path_buf().abs();
+
+    let current_started = app_server
+        .start_thread(app.chat_widget.config_ref())
+        .await
+        .expect("current thread");
+    app.active_thread_id = Some(current_started.session.thread_id);
+    app.primary_thread_id = Some(current_started.session.thread_id);
+
+    let (bound_thread_id, session) =
+        bind_test_clawbot_session(&mut app, &mut app_server, "chat_inactive_hint").await?;
+    app.upsert_agent_picker_thread(
+        bound_thread_id,
+        Some("Inbox Agent".to_string()),
+        /*agent_role*/ None,
+        /*is_closed*/ false,
+    );
+    app.active_thread_id = Some(current_started.session.thread_id);
+
+    app.handle_clawbot_provider_event(
+        &mut app_server,
+        ClawbotProviderEvent::InboundMessage(codex_clawbot::ProviderInboundMessage {
+            session,
+            message_id: "msg_1".to_string(),
+            text: "hello from inactive".to_string(),
+            received_at: 1,
+        }),
+    )
+    .await
+    .expect("handle clawbot inbound message");
+
+    let cell = match app_event_rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+        other => panic!("expected InsertHistoryCell event, got {other:?}"),
+    };
+    let rendered = cell
+        .display_lines(/*width*/ 120)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("imported into agent thread Inbox Agent."));
+    assert!(rendered.contains("Open /clawbot to inspect bindings and jump."));
 
     Ok(())
 }
@@ -256,6 +312,13 @@ async fn clawbot_turn_completed_forwards_reply_and_drains_next_message() -> Resu
         }]
     );
     assert_eq!(
+        app.clawbot_removed_outbound_reactions,
+        vec![ProviderOutboundReaction {
+            target: ProviderMessageRef::new(ClawbotProviderKind::Feishu, "chat_reply", "msg_1"),
+            emoji_type: "TONGUE".to_string(),
+        }]
+    );
+    assert_eq!(
         app.clawbot_pending_turns
             .get(&thread_id)
             .map(std::collections::VecDeque::len),
@@ -292,12 +355,6 @@ async fn clawbot_restart_recovers_pending_turn_and_forwards_reply() -> Result<()
     .await
     .expect("handle clawbot inbound");
 
-    let original_turn_id = app
-        .clawbot_pending_turns
-        .get(&thread_id)
-        .and_then(|queue| queue.front())
-        .map(|pending| pending.turn_id.clone())
-        .expect("pending turn");
     let store = ClawbotStore::new(app.config.cwd.to_path_buf());
     assert_eq!(store.load_pending_turns().expect("pending turns").len(), 1);
 
@@ -312,13 +369,19 @@ async fn clawbot_restart_recovers_pending_turn_and_forwards_reply() -> Result<()
             .map(std::collections::VecDeque::len),
         Some(1)
     );
+    let restored_turn_id = restarted_app
+        .clawbot_pending_turns
+        .get(&thread_id)
+        .and_then(|queue| queue.front())
+        .map(|pending| pending.turn_id.clone())
+        .expect("restored pending turn");
 
     restarted_app
         .handle_clawbot_turn_completed(
             &mut app_server,
             thread_id,
             test_turn(
-                &original_turn_id,
+                &restored_turn_id,
                 TurnStatus::Completed,
                 vec![ThreadItem::AgentMessage {
                     id: "agent-1".to_string(),
@@ -338,6 +401,13 @@ async fn clawbot_restart_recovers_pending_turn_and_forwards_reply() -> Result<()
             text: "restart reply".to_string(),
         }]
     );
+    assert_eq!(
+        restarted_app.clawbot_removed_outbound_reactions,
+        vec![ProviderOutboundReaction {
+            target: ProviderMessageRef::new(ClawbotProviderKind::Feishu, "chat_restart", "msg_1"),
+            emoji_type: "TONGUE".to_string(),
+        }]
+    );
 
     let runtime = ClawbotRuntime::load(restarted_app.config.cwd.to_path_buf())
         .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
@@ -345,6 +415,54 @@ async fn clawbot_restart_recovers_pending_turn_and_forwards_reply() -> Result<()
     assert_eq!(
         store.load_pending_turns().expect("pending turns"),
         Vec::new()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn clawbot_bound_thread_completion_forwards_final_reply_without_pending_turn() -> Result<()> {
+    let mut app = make_test_app().await;
+    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let tempdir = tempdir()?;
+    app.config.cwd = tempdir.path().to_path_buf().abs();
+
+    let (thread_id, session) =
+        bind_test_clawbot_session(&mut app, &mut app_server, "chat_manual").await?;
+
+    app.handle_clawbot_turn_completed(
+        &mut app_server,
+        thread_id,
+        test_turn(
+            "turn-manual",
+            TurnStatus::Completed,
+            vec![
+                ThreadItem::AgentMessage {
+                    id: "agent-1".to_string(),
+                    text: "draft reply".to_string(),
+                    phase: None,
+                    memory_citation: None,
+                },
+                ThreadItem::AgentMessage {
+                    id: "agent-2".to_string(),
+                    text: "final reply".to_string(),
+                    phase: None,
+                    memory_citation: None,
+                },
+            ],
+        ),
+    )
+    .await
+    .expect("forward bound thread reply");
+
+    assert_eq!(
+        app.clawbot_outbound_messages,
+        vec![ProviderOutboundTextMessage {
+            session,
+            text: "final reply".to_string(),
+        }]
     );
 
     Ok(())
@@ -530,6 +648,7 @@ async fn clawbot_management_popup_snapshot() -> Result<()> {
     let (thread_id, _session) =
         bind_test_clawbot_session(&mut app, &mut app_server, "chat_snapshot").await?;
     app.active_thread_id = Some(thread_id);
+    app.primary_thread_id = Some(thread_id);
 
     let mut runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
         .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
@@ -564,11 +683,42 @@ async fn clawbot_management_popup_snapshot() -> Result<()> {
             },
         ))
         .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+    let second_started = app_server
+        .start_thread(app.chat_widget.config_ref())
+        .await
+        .expect("second thread");
+    app.upsert_agent_picker_thread(
+        second_started.session.thread_id,
+        Some("Inbox Agent".to_string()),
+        /*agent_role*/ None,
+        /*is_closed*/ false,
+    );
+    runtime
+        .persist_session(ProviderSession {
+            provider: ClawbotProviderKind::Feishu,
+            session_id: "chat_ops".to_string(),
+            display_name: Some("Ops".to_string()),
+            unread_count: 0,
+            last_message_at: None,
+            status: ClawbotSessionStatus::Discovered,
+            bound_thread_id: None,
+        })
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+    runtime
+        .connect_session_to_thread(
+            &ProviderSessionRef::new(ClawbotProviderKind::Feishu, "chat_ops"),
+            second_started.session.thread_id.to_string(),
+        )
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
 
     app.open_clawbot_management_popup();
 
     let popup = render_bottom_popup(&app.chat_widget, /*width*/ 100);
     assert_snapshot!("clawbot_management_popup", popup);
+
+    app.open_clawbot_management_view(ClawbotControlsDestination::Channels);
+    let channels_popup = render_bottom_popup(&app.chat_widget, /*width*/ 100);
+    assert_snapshot!("clawbot_channels_popup", channels_popup);
     Ok(())
 }
 
