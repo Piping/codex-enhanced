@@ -98,3 +98,5 @@ __pycache__/
 scorecard.png
 site/
 docs/assets/
+# CocoIndex Code (ccc)
+/.cocoindex_code/

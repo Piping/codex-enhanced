@@ -1,0 +1,17 @@
+---
+source: tui/src/app/tests/clawbot_tests.rs
+expression: channels_popup
+---
+  Clawbot
+  active bindings: 2
+  ws status: Unconfigured
+  turn mode: interactive
+
+› 1. Back                  Return to the clawbot overview.
+  2. Scan Feishu Sessions  Discover Feishu chats and bot groups using the persisted workspace
+                           credentials.
+  3. Bound Channels        2 active binding(s)
+  4. Unbound Sessions      1 discovered
+  5. Cleanup               1 cached unread message(s) can be dropped
+
+  Press enter to confirm or esc to go back
