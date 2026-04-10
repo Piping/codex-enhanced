@@ -133,7 +133,7 @@ impl App {
                         error = %err,
                         "failed to reconcile clawbot pending turn; clearing stale entry"
                     );
-                    let _ = self.remove_pending_clawbot_turn(thread_id, &pending_turn.turn_id)?;
+                    let _ = self.take_pending_clawbot_turn(thread_id, &pending_turn.turn_id)?;
                     continue;
                 }
             };
@@ -144,7 +144,7 @@ impl App {
                 .cloned()
             else {
                 if !matches!(thread.status, ThreadStatus::Active { .. }) {
-                    let _ = self.remove_pending_clawbot_turn(thread_id, &pending_turn.turn_id)?;
+                    let _ = self.take_pending_clawbot_turn(thread_id, &pending_turn.turn_id)?;
                 }
                 continue;
             };
@@ -250,71 +250,124 @@ impl App {
         let Some(workspace_root) = self.clawbot_workspace_root.clone() else {
             return Ok(());
         };
-        let next_session = if let Some(pending) =
-            self.take_pending_clawbot_turn(thread_id, &turn.id)?
-        {
-            let reply_text = if let Some(text) = clawbot_outbound_text_for_turn(&turn) {
-                Some(text)
-            } else if matches!(
-                turn.status,
-                codex_app_server_protocol::TurnStatus::Completed
-                    | codex_app_server_protocol::TurnStatus::Failed
-                    | codex_app_server_protocol::TurnStatus::Interrupted
-            ) {
-                match app_server
-                    .thread_read(thread_id, /*include_turns*/ true)
+        let next_session =
+            if let Some(pending) = self.take_pending_clawbot_turn(thread_id, &turn.id)? {
+                let reply_text = if let Some(text) = clawbot_outbound_text_for_turn(&turn) {
+                    Some(text)
+                } else if matches!(
+                    turn.status,
+                    codex_app_server_protocol::TurnStatus::Completed
+                        | codex_app_server_protocol::TurnStatus::Failed
+                        | codex_app_server_protocol::TurnStatus::Interrupted
+                ) {
+                    match app_server
+                        .thread_read(thread_id, /*include_turns*/ true)
+                        .await
+                    {
+                        Ok(thread) => thread
+                            .turns
+                            .iter()
+                            .find(|thread_turn| thread_turn.id == turn.id)
+                            .and_then(clawbot_outbound_text_for_turn),
+                        Err(err) => {
+                            tracing::warn!(
+                                thread_id = %thread_id,
+                                turn_id = turn.id,
+                                error = %err,
+                                "failed to load full turn for clawbot outbound reply"
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                let _ = append_diagnostic_event(
+                    workspace_root.as_path(),
+                    "bridge.turn_completed",
+                    serde_json::json!({
+                        "session_id": pending.session.session_id.clone(),
+                        "thread_id": thread_id,
+                        "turn_id": turn.id,
+                        "status": format!("{:?}", turn.status),
+                        "reply_text": reply_text.clone(),
+                    }),
+                );
+                let reply_result = if let Some(text) = reply_text {
+                    self.send_clawbot_thread_reply(workspace_root.as_path(), &pending.session, text)
+                        .await
+                } else {
+                    Ok(())
+                };
+                let reply_succeeded = reply_result.is_ok();
+                if let Err(err) = self
+                    .remove_clawbot_auto_ack_reaction(
+                        workspace_root.as_path(),
+                        ProviderMessageRef::new(
+                            pending.session.provider,
+                            pending.session.session_id.clone(),
+                            pending.message_id.clone(),
+                        ),
+                    )
                     .await
                 {
-                    Ok(thread) => thread
-                        .turns
-                        .iter()
-                        .find(|thread_turn| thread_turn.id == turn.id)
-                        .and_then(clawbot_outbound_text_for_turn),
-                    Err(err) => {
+                    tracing::warn!(
+                        thread_id = %thread_id,
+                        session = pending.session.session_id,
+                        message_id = pending.message_id,
+                        error = %err,
+                        "failed to clear clawbot auto-ack reaction"
+                    );
+                    let _ = append_diagnostic_event(
+                        workspace_root.as_path(),
+                        "bridge.auto_ack_clear_failed",
+                        serde_json::json!({
+                            "session_id": pending.session.session_id,
+                            "thread_id": thread_id,
+                            "message_id": pending.message_id,
+                            "emoji_type": FEISHU_AUTO_ACK_EMOJI_TYPE,
+                            "error": err.to_string(),
+                        }),
+                    );
+                }
+                reply_result?;
+                if reply_succeeded {
+                    let mut runtime = ClawbotRuntime::load(workspace_root.clone())?;
+                    let removed = runtime.take_next_unread_message(&pending.session)?;
+                    if removed.as_ref().map(|entry| entry.message_id.as_str())
+                        != Some(pending.message_id.as_str())
+                    {
                         tracing::warn!(
-                            thread_id = %thread_id,
-                            turn_id = turn.id,
-                            error = %err,
-                            "failed to load full turn for clawbot outbound reply"
+                            session = pending.session.session_id,
+                            expected = pending.message_id,
+                            actual = removed.as_ref().map(|entry| entry.message_id.as_str()),
+                            "clawbot unread FIFO state drifted while completing turn"
                         );
-                        None
                     }
                 }
+                Some(pending.session)
             } else {
-                None
+                let runtime = ClawbotRuntime::load(workspace_root.clone())?;
+                let bound_session = runtime.bound_session_for_thread(&thread_id.to_string())?;
+                if let Some(session) = bound_session.as_ref()
+                    && let Some(text) = clawbot_outbound_text_for_turn(&turn)
+                {
+                    let _ = append_diagnostic_event(
+                        workspace_root.as_path(),
+                        "bridge.bound_thread_turn_completed",
+                        serde_json::json!({
+                            "session_id": session.session_id,
+                            "thread_id": thread_id,
+                            "turn_id": turn.id,
+                            "status": format!("{:?}", turn.status),
+                            "reply_text": text.clone(),
+                        }),
+                    );
+                    self.send_clawbot_thread_reply(workspace_root.as_path(), session, text)
+                        .await?;
+                }
+                bound_session
             };
-            let _ = append_diagnostic_event(
-                workspace_root.as_path(),
-                "bridge.turn_completed",
-                serde_json::json!({
-                    "session_id": pending.session.session_id.clone(),
-                    "thread_id": thread_id,
-                    "turn_id": turn.id,
-                    "status": format!("{:?}", turn.status),
-                    "reply_text": reply_text.clone(),
-                }),
-            );
-            if let Some(text) = reply_text {
-                self.send_clawbot_thread_reply(workspace_root.as_path(), &pending.session, text)
-                    .await?;
-            }
-            let mut runtime = ClawbotRuntime::load(workspace_root.clone())?;
-            let removed = runtime.take_next_unread_message(&pending.session)?;
-            if removed.as_ref().map(|entry| entry.message_id.as_str())
-                != Some(pending.message_id.as_str())
-            {
-                tracing::warn!(
-                    session = pending.session.session_id,
-                    expected = pending.message_id,
-                    actual = removed.as_ref().map(|entry| entry.message_id.as_str()),
-                    "clawbot unread FIFO state drifted while completing turn"
-                );
-            }
-            Some(pending.session)
-        } else {
-            let runtime = ClawbotRuntime::load(workspace_root)?;
-            runtime.bound_session_for_thread(&thread_id.to_string())?
-        };
 
         if let Some(session) = next_session {
             self.dispatch_next_clawbot_message(app_server, &session)
@@ -401,6 +454,21 @@ impl App {
         let turn_mode = runtime.snapshot().config.turn_mode;
         self.attach_clawbot_bound_thread_if_needed(app_server, thread_id)
             .await?;
+        if self.active_thread_id.is_some() && self.active_thread_id != Some(thread_id) {
+            let session_title = runtime
+                .snapshot()
+                .sessions
+                .iter()
+                .find(|provider_session| provider_session.session_ref() == *session)
+                .map_or_else(|| session.session_id.clone(), session_title);
+            self.chat_widget.add_info_message(
+                format!(
+                    "New Feishu message from {session_title} was imported into agent thread {}.",
+                    self.thread_label(thread_id)
+                ),
+                Some("Open /clawbot to inspect bindings and jump.".to_string()),
+            );
+        }
         if let Err(err) = self
             .send_clawbot_outbound_reaction(ProviderOutboundReaction {
                 target: ProviderMessageRef::new(
@@ -417,6 +485,17 @@ impl App {
                 session = session.session_id,
                 error = %err,
                 "failed to auto-ack clawbot inbound message"
+            );
+            let _ = append_diagnostic_event(
+                workspace_root.as_path(),
+                "bridge.auto_ack_failed",
+                serde_json::json!({
+                    "session_id": session.session_id,
+                    "thread_id": thread_id,
+                    "message_id": message.message_id,
+                    "emoji_type": FEISHU_AUTO_ACK_EMOJI_TYPE,
+                    "error": err.to_string(),
+                }),
             );
         }
         let turn_id = self
@@ -663,6 +742,32 @@ impl App {
         }
     }
 
+    async fn remove_clawbot_auto_ack_reaction(
+        &mut self,
+        workspace_root: &Path,
+        target: ProviderMessageRef,
+    ) -> Result<()> {
+        let reaction = ProviderOutboundReaction {
+            target,
+            emoji_type: FEISHU_AUTO_ACK_EMOJI_TYPE.to_string(),
+        };
+        #[cfg(test)]
+        {
+            let _ = workspace_root;
+            self.clawbot_removed_outbound_reactions.push(reaction);
+            Ok(())
+        }
+
+        #[cfg(not(test))]
+        {
+            let runtime = ClawbotRuntime::load(workspace_root.to_path_buf())?;
+            let provider = runtime
+                .feishu_provider()
+                .context("missing Feishu config for clawbot reaction cleanup")?;
+            provider.remove_reaction(reaction).await
+        }
+    }
+
     fn register_pending_clawbot_turn(
         &mut self,
         thread_id: ThreadId,
@@ -824,13 +929,7 @@ fn clawbot_approval_policy(
 
 fn clawbot_outbound_text_for_turn(turn: &codex_app_server_protocol::Turn) -> Option<String> {
     match turn.status {
-        codex_app_server_protocol::TurnStatus::Completed => turn.items.iter().find_map(|item| {
-            let codex_app_server_protocol::ThreadItem::AgentMessage { text, .. } = item else {
-                return None;
-            };
-            let trimmed = text.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_string())
-        }),
+        codex_app_server_protocol::TurnStatus::Completed => last_agent_message_for_turn(turn),
         codex_app_server_protocol::TurnStatus::Failed => turn
             .error
             .as_ref()
@@ -869,6 +968,14 @@ fn next_unread_message_for_session(
         })
 }
 
+fn session_title(session: &codex_clawbot::ProviderSession) -> String {
+    session
+        .display_name
+        .clone()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| session.session_id.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use codex_app_server_protocol::ThreadItem;
@@ -877,6 +984,34 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::clawbot_outbound_text_for_turn;
+
+    #[test]
+    fn completed_turn_uses_last_agent_message_for_reply() {
+        let turn = Turn {
+            id: "turn-1".to_string(),
+            status: TurnStatus::Completed,
+            items: vec![
+                ThreadItem::AgentMessage {
+                    id: "agent-1".to_string(),
+                    text: "draft reply".to_string(),
+                    phase: None,
+                    memory_citation: None,
+                },
+                ThreadItem::AgentMessage {
+                    id: "agent-2".to_string(),
+                    text: "final reply".to_string(),
+                    phase: None,
+                    memory_citation: None,
+                },
+            ],
+            error: None,
+        };
+
+        assert_eq!(
+            clawbot_outbound_text_for_turn(&turn),
+            Some("final reply".to_string())
+        );
+    }
 
     #[test]
     fn interrupted_turn_uses_last_agent_message_for_reply() {

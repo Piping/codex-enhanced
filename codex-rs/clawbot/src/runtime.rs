@@ -87,6 +87,37 @@ impl ClawbotRuntime {
         self.reconcile_feishu_sessions(discovered_sessions)
     }
 
+    pub fn can_bind_feishu_session(&self, session: &ProviderSessionRef) -> Result<bool> {
+        if session.provider != ProviderKind::Feishu {
+            return Ok(false);
+        }
+
+        if self
+            .snapshot
+            .sessions
+            .iter()
+            .any(|existing| existing.session_ref() == *session)
+            || self.load_binding_for_session(session)?.is_some()
+            || self
+                .store
+                .load_unread_messages()?
+                .into_iter()
+                .any(|message| message.session_ref() == *session)
+            || self
+                .store
+                .load_inbound_receipts()?
+                .into_iter()
+                .any(|receipt| receipt.session_ref() == *session)
+        {
+            return Ok(true);
+        }
+
+        Ok(self.snapshot.config.feishu.as_ref().is_some_and(|config| {
+            config.bot_open_id.as_deref() == Some(session.session_id.as_str())
+                || config.bot_user_id.as_deref() == Some(session.session_id.as_str())
+        }))
+    }
+
     pub fn clear_unbound_feishu_sessions(&mut self) -> Result<&ClawbotSnapshot> {
         let bound_sessions = self
             .store
@@ -381,15 +412,20 @@ impl ClawbotRuntime {
             .iter()
             .map(ProviderSession::session_ref)
             .collect::<HashSet<_>>();
-        let bindings = self
+        let bound_refs = self
             .store
             .load_bindings()?
             .into_iter()
-            .filter(|binding| {
-                binding.provider != ProviderKind::Feishu
-                    || discovered_refs.contains(&binding.session_ref())
-            })
-            .collect::<Vec<_>>();
+            .filter(|binding| binding.provider == ProviderKind::Feishu)
+            .map(|binding| binding.session_ref())
+            .collect::<HashSet<_>>();
+        let unread_refs = self
+            .store
+            .load_unread_messages()?
+            .into_iter()
+            .filter(|message| message.provider == ProviderKind::Feishu)
+            .map(|message| message.session_ref())
+            .collect::<HashSet<_>>();
         let sessions = self
             .store
             .load_sessions()?
@@ -397,6 +433,8 @@ impl ClawbotRuntime {
             .filter(|session| {
                 session.provider != ProviderKind::Feishu
                     || discovered_refs.contains(&session.session_ref())
+                    || bound_refs.contains(&session.session_ref())
+                    || unread_refs.contains(&session.session_ref())
             })
             .collect::<Vec<_>>();
         let unread_messages = self
@@ -406,9 +444,9 @@ impl ClawbotRuntime {
             .filter(|message| {
                 message.provider != ProviderKind::Feishu
                     || discovered_refs.contains(&message.session_ref())
+                    || bound_refs.contains(&message.session_ref())
             })
             .collect::<Vec<_>>();
-        self.store.save_bindings(&bindings)?;
         self.store.save_sessions(&sessions)?;
         self.store.save_unread_messages(&unread_messages)?;
         for session in discovered_sessions {
@@ -744,7 +782,7 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_feishu_sessions_prunes_missing_bound_sessions_and_unread_cache() {
+    fn reconcile_feishu_sessions_preserves_missing_bound_sessions_and_unread_cache() {
         let tempdir = tempdir().expect("tempdir");
         let mut runtime = ClawbotRuntime::load(tempdir.path().to_path_buf()).expect("runtime");
         let stale_session = ProviderSessionRef::new(ProviderKind::Feishu, "chat_stale");
@@ -755,7 +793,7 @@ mod tests {
             .expect("bind stale session");
         runtime
             .apply_provider_event(ProviderEvent::InboundMessage(ProviderInboundMessage {
-                session: stale_session,
+                session: stale_session.clone(),
                 message_id: "msg_stale".to_string(),
                 text: "stale".to_string(),
                 received_at: 1,
@@ -773,25 +811,75 @@ mod tests {
             }])
             .expect("reconcile discovered sessions");
 
-        assert_eq!(runtime.snapshot().bindings, Vec::<SessionBinding>::new());
+        assert_eq!(
+            runtime.snapshot().bindings,
+            vec![SessionBinding {
+                provider: ProviderKind::Feishu,
+                session_id: stale_session.session_id.clone(),
+                thread_id: "thread_stale".to_string(),
+                inbound_forwarding_enabled: true,
+                outbound_forwarding_enabled: true,
+                created_at: runtime.snapshot().bindings[0].created_at,
+                updated_at: runtime.snapshot().bindings[0].updated_at,
+            }]
+        );
         assert_eq!(
             runtime.snapshot().sessions,
-            vec![ProviderSession {
-                provider: ProviderKind::Feishu,
-                session_id: live_session.session_id,
-                display_name: Some("Live".to_string()),
-                unread_count: 0,
-                last_message_at: None,
-                status: SessionStatus::Discovered,
-                bound_thread_id: None,
-            }]
+            vec![
+                ProviderSession {
+                    provider: ProviderKind::Feishu,
+                    session_id: live_session.session_id,
+                    display_name: Some("Live".to_string()),
+                    unread_count: 0,
+                    last_message_at: None,
+                    status: SessionStatus::Discovered,
+                    bound_thread_id: None,
+                },
+                ProviderSession {
+                    provider: ProviderKind::Feishu,
+                    session_id: "chat_stale".to_string(),
+                    display_name: None,
+                    unread_count: 1,
+                    last_message_at: Some(1),
+                    status: SessionStatus::Bound,
+                    bound_thread_id: Some("thread_stale".to_string()),
+                }
+            ]
         );
         assert_eq!(
             runtime
                 .store()
                 .load_unread_messages()
                 .expect("unread messages"),
-            Vec::<CachedUnreadMessage>::new()
+            vec![CachedUnreadMessage {
+                provider: ProviderKind::Feishu,
+                session_id: "chat_stale".to_string(),
+                message_id: "msg_stale".to_string(),
+                text: "stale".to_string(),
+                received_at: 1,
+            }]
+        );
+    }
+
+    #[test]
+    fn can_bind_feishu_session_accepts_configured_bot_identity() {
+        let tempdir = tempdir().expect("tempdir");
+        let mut runtime = ClawbotRuntime::load(tempdir.path().to_path_buf()).expect("runtime");
+        runtime
+            .update_feishu_config(Some(FeishuConfig {
+                bot_open_id: Some("oc_bot_private".to_string()),
+                ..FeishuConfig::default()
+            }))
+            .expect("update config");
+
+        assert_eq!(
+            runtime
+                .can_bind_feishu_session(&ProviderSessionRef::new(
+                    ProviderKind::Feishu,
+                    "oc_bot_private",
+                ))
+                .expect("can bind"),
+            true
         );
     }
 }

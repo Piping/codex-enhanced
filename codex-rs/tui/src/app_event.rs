@@ -90,6 +90,24 @@ pub(crate) enum ClawbotForwardingChannel {
     Outbound,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) enum ClawbotControlsDestination {
+    #[default]
+    Root,
+    Channels,
+    BoundChannels,
+    BoundChannel {
+        thread_id: String,
+    },
+    UnboundSessions,
+    UnboundSession {
+        session_id: String,
+    },
+    Cleanup,
+    Configuration,
+    Diagnostics,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) enum WindowsSandboxEnableMode {
@@ -484,6 +502,10 @@ pub(crate) enum AppEvent {
 
     OpenClawbotManagement,
 
+    OpenClawbotManagementView {
+        destination: ClawbotControlsDestination,
+    },
+
     OpenClawbotFeishuConfigPrompt {
         field: ClawbotFeishuConfigField,
     },
@@ -493,8 +515,6 @@ pub(crate) enum AppEvent {
         value: String,
     },
 
-    OpenClawbotManualBindPrompt,
-
     SaveClawbotManualBindSessionId {
         session_id: String,
     },
@@ -503,9 +523,8 @@ pub(crate) enum AppEvent {
         mode: ClawbotTurnMode,
     },
 
-    ClawbotDisconnectCurrentThread,
-
-    ClawbotSetCurrentThreadForwarding {
+    ClawbotSetThreadForwarding {
+        thread_id: ThreadId,
         channel: ClawbotForwardingChannel,
         enabled: bool,
     },
@@ -515,6 +534,15 @@ pub(crate) enum AppEvent {
     ClearClawbotFeishuSessions,
 
     RetryClawbotFeishuConnection,
+
+    ClawbotDisconnectThread {
+        thread_id: ThreadId,
+    },
+
+    EditClawbotStateFile {
+        label: &'static str,
+        path: PathBuf,
+    },
     /// Apply rollback semantics to local transcript cells.
     ///
     /// This is emitted when rollback was not initiated by the current

@@ -14,7 +14,11 @@ use open_lark::openlark_communication::endpoints::IM_V1_MESSAGES;
 use open_lark::openlark_communication::im::im::v1::message::create::CreateMessageBody;
 use open_lark::openlark_communication::im::im::v1::message::create::CreateMessageRequest;
 use open_lark::openlark_communication::im::im::v1::message::models::ReceiveIdType;
+use open_lark::openlark_communication::im::im::v1::message::models::UserIdType;
+use open_lark::openlark_communication::im::im::v1::message::reaction::delete::DeleteMessageReactionRequest;
+use open_lark::openlark_communication::im::im::v1::message::reaction::list::ListMessageReactionsRequest;
 use open_lark::openlark_communication::im::im::v1::message::reaction::models::CreateMessageReactionBody;
+use open_lark::openlark_communication::im::im::v1::message::reaction::models::MessageReaction;
 use open_lark::openlark_communication::im::im::v1::message::reaction::models::ReactionType;
 use open_lark::openlark_core::api::ApiRequest;
 use serde::Deserialize;
@@ -120,6 +124,9 @@ impl FeishuProviderRuntime {
             ));
         }
 
+        let session_id = reaction.target.session_id.clone();
+        let message_id = reaction.target.message_id.clone();
+        let emoji_type = reaction.emoji_type.clone();
         let request: ApiRequest<Value> = ApiRequest::post(format!(
             "{IM_V1_MESSAGES}/{}/reactions",
             reaction.target.message_id
@@ -140,13 +147,95 @@ impl FeishuProviderRuntime {
         .await
         .map_err(|error| anyhow!("failed to add Feishu message reaction: {error}"))?;
         if response.is_success() {
+            let _ = append_diagnostic_event(
+                self.workspace_root.as_path(),
+                "feishu.add_reaction_succeeded",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "message_id": message_id,
+                    "emoji_type": emoji_type,
+                }),
+            );
             Ok(())
         } else {
-            Err(anyhow!(
-                "failed to add Feishu message reaction: {}",
-                response.msg()
-            ))
+            let error = anyhow!("failed to add Feishu message reaction: {}", response.msg());
+            let _ = append_diagnostic_event(
+                self.workspace_root.as_path(),
+                "feishu.add_reaction_failed",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "message_id": message_id,
+                    "emoji_type": emoji_type,
+                    "error": error.to_string(),
+                }),
+            );
+            Err(error)
         }
+    }
+
+    pub async fn remove_reaction(&self, reaction: ProviderOutboundReaction) -> Result<()> {
+        if reaction.target.provider != ProviderKind::Feishu {
+            return Err(anyhow!(
+                "cannot send {} reaction via Feishu runtime",
+                reaction.target.provider.title()
+            ));
+        }
+
+        let config = self.messaging_config()?;
+        let matching_reactions = self
+            .list_message_reactions(
+                &config,
+                reaction.target.message_id.as_str(),
+                reaction.emoji_type.as_str(),
+            )
+            .await?;
+        let reaction_ids = self.select_reaction_ids_to_remove(&reaction, &matching_reactions);
+
+        if reaction_ids.is_empty() {
+            let _ = append_diagnostic_event(
+                self.workspace_root.as_path(),
+                "feishu.remove_reaction_skipped",
+                serde_json::json!({
+                    "session_id": reaction.target.session_id,
+                    "message_id": reaction.target.message_id,
+                    "emoji_type": reaction.emoji_type,
+                    "bot_open_id": self.config.bot_open_id,
+                    "bot_user_id": self.config.bot_user_id,
+                    "matching_reaction_count": matching_reactions.len(),
+                    "matching_reactions": matching_reactions
+                        .iter()
+                        .map(|item| serde_json::json!({
+                            "reaction_id": item.reaction_id,
+                            "operator_id": item.operator.operator_id,
+                            "operator_type": item.operator.operator_type,
+                            "emoji_type": item.reaction_type.emoji_type,
+                        }))
+                        .collect::<Vec<_>>(),
+                }),
+            );
+            return Ok(());
+        }
+
+        for reaction_id in &reaction_ids {
+            DeleteMessageReactionRequest::new(config.clone())
+                .message_id(reaction.target.message_id.clone())
+                .reaction_id(reaction_id.clone())
+                .execute()
+                .await
+                .map_err(|error| anyhow!("failed to remove Feishu message reaction: {error}"))?;
+        }
+
+        let _ = append_diagnostic_event(
+            self.workspace_root.as_path(),
+            "feishu.remove_reaction_succeeded",
+            serde_json::json!({
+                "session_id": reaction.target.session_id,
+                "message_id": reaction.target.message_id,
+                "emoji_type": reaction.emoji_type,
+                "removed_count": reaction_ids.len(),
+            }),
+        );
+        Ok(())
     }
 
     pub async fn scan_sessions(&self) -> Result<Vec<ProviderEvent>> {
@@ -201,6 +290,73 @@ impl FeishuProviderRuntime {
         Ok(self
             .websocket_config()?
             .build_core_config_with_token_provider())
+    }
+
+    async fn list_message_reactions(
+        &self,
+        config: &open_lark::openlark_core::config::Config,
+        message_id: &str,
+        emoji_type: &str,
+    ) -> Result<Vec<MessageReaction>> {
+        let mut page_token = None;
+        let mut reactions = Vec::new();
+
+        loop {
+            let mut request = ListMessageReactionsRequest::new(config.clone())
+                .message_id(message_id.to_string())
+                .reaction_type(emoji_type.to_string())
+                .page_size(50)
+                .user_id_type(UserIdType::OpenId);
+            if let Some(token) = page_token.clone() {
+                request = request.page_token(token);
+            }
+            let response = request
+                .execute()
+                .await
+                .map_err(|error| anyhow!("failed to list Feishu message reactions: {error}"))?;
+            reactions.extend(response.items.unwrap_or_default());
+            if !response.has_more {
+                break;
+            }
+            let Some(token) = response.page_token.filter(|token| !token.is_empty()) else {
+                break;
+            };
+            page_token = Some(token);
+        }
+
+        Ok(reactions)
+    }
+
+    fn select_reaction_ids_to_remove(
+        &self,
+        reaction: &ProviderOutboundReaction,
+        matching_reactions: &[MessageReaction],
+    ) -> Vec<String> {
+        let bot_open_id = self.config.bot_open_id.as_deref();
+        let bot_user_id = self.config.bot_user_id.as_deref();
+        let exact_matches = matching_reactions
+            .iter()
+            .filter(|item| {
+                item.reaction_type.emoji_type == reaction.emoji_type
+                    && (bot_open_id == Some(item.operator.operator_id.as_str())
+                        || bot_user_id == Some(item.operator.operator_id.as_str()))
+            })
+            .map(|item| item.reaction_id.clone())
+            .collect::<Vec<_>>();
+        if !exact_matches.is_empty() {
+            return exact_matches;
+        }
+
+        let fallback_matches = matching_reactions
+            .iter()
+            .filter(|item| item.reaction_type.emoji_type == reaction.emoji_type)
+            .map(|item| item.reaction_id.clone())
+            .collect::<Vec<_>>();
+        if fallback_matches.len() == 1 {
+            return fallback_matches;
+        }
+
+        Vec::new()
     }
 }
 
