@@ -53,13 +53,44 @@ impl App {
     ) -> Result<()> {
         let workspace_root = self.config.cwd.to_path_buf();
         let workspace_changed = self.clawbot_workspace_root.as_ref() != Some(&workspace_root);
+        let provider_task_missing_or_finished = self
+            .clawbot_provider_task
+            .as_ref()
+            .is_none_or(tokio::task::JoinHandle::is_finished);
         if workspace_changed {
             self.abort_clawbot_provider_runtime();
             self.clawbot_workspace_root = Some(workspace_root.clone());
             self.clawbot_pending_turns.clear();
+        }
+        self.clawbot_workspace_root = Some(workspace_root.clone());
+        let mut runtime = ClawbotRuntime::load(workspace_root.clone())?;
+        let should_refresh_provider_runtime = should_refresh_clawbot_provider_runtime(
+            workspace_changed,
+            runtime
+                .snapshot()
+                .config
+                .feishu
+                .as_ref()
+                .is_some_and(FeishuConfig::has_api_credentials),
+            provider_task_missing_or_finished,
+        );
+        if should_refresh_provider_runtime {
+            let reason = if workspace_changed {
+                "workspace_changed"
+            } else if self.clawbot_provider_task.is_none() {
+                "task_missing"
+            } else {
+                "task_finished"
+            };
+            let _ = append_diagnostic_event(
+                workspace_root.as_path(),
+                "bridge.provider_runtime_refresh_requested",
+                serde_json::json!({
+                    "reason": reason,
+                }),
+            );
             self.refresh_clawbot_provider_runtime()?;
-            if let Ok(mut runtime) = ClawbotRuntime::load(workspace_root.clone())
-                && runtime.snapshot().config.feishu.is_some()
+            if runtime.snapshot().config.feishu.is_some()
                 && let Err(err) = runtime.scan_feishu_sessions().await
             {
                 tracing::warn!(error = %err, "failed to refresh clawbot Feishu sessions");
@@ -989,6 +1020,14 @@ fn session_title(session: &codex_clawbot::ProviderSession) -> String {
         .unwrap_or_else(|| session.session_id.clone())
 }
 
+fn should_refresh_clawbot_provider_runtime(
+    workspace_changed: bool,
+    has_feishu_credentials: bool,
+    provider_task_missing_or_finished: bool,
+) -> bool {
+    workspace_changed || (has_feishu_credentials && provider_task_missing_or_finished)
+}
+
 #[cfg(test)]
 mod tests {
     use codex_app_server_protocol::ThreadItem;
@@ -997,6 +1036,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::clawbot_outbound_text_for_turn;
+    use super::should_refresh_clawbot_provider_runtime;
 
     #[test]
     fn completed_turn_uses_last_agent_message_for_reply() {
@@ -1058,5 +1098,29 @@ mod tests {
             clawbot_outbound_text_for_turn(&turn),
             Some("last reply".to_string())
         );
+    }
+
+    #[test]
+    fn provider_runtime_refreshes_on_workspace_change() {
+        assert!(should_refresh_clawbot_provider_runtime(
+            /*workspace_changed*/ true, /*has_feishu_credentials*/ false,
+            /*provider_task_missing_or_finished*/ false,
+        ));
+    }
+
+    #[test]
+    fn provider_runtime_refreshes_when_configured_task_is_missing() {
+        assert!(should_refresh_clawbot_provider_runtime(
+            /*workspace_changed*/ false, /*has_feishu_credentials*/ true,
+            /*provider_task_missing_or_finished*/ true,
+        ));
+    }
+
+    #[test]
+    fn provider_runtime_does_not_refresh_for_unconfigured_missing_task() {
+        assert!(!should_refresh_clawbot_provider_runtime(
+            /*workspace_changed*/ false, /*has_feishu_credentials*/ false,
+            /*provider_task_missing_or_finished*/ true,
+        ));
     }
 }
