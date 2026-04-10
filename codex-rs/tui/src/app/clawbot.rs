@@ -308,6 +308,7 @@ impl App {
                             pending.session.session_id.clone(),
                             pending.message_id.clone(),
                         ),
+                        pending.auto_ack_reaction_id.clone(),
                     )
                     .await
                 {
@@ -469,7 +470,7 @@ impl App {
                 Some("Open /clawbot to inspect bindings and jump.".to_string()),
             );
         }
-        if let Err(err) = self
+        let auto_ack_reaction_id = match self
             .send_clawbot_outbound_reaction(ProviderOutboundReaction {
                 target: ProviderMessageRef::new(
                     message.provider,
@@ -480,24 +481,28 @@ impl App {
             })
             .await
         {
-            tracing::warn!(
-                thread_id = %thread_id,
-                session = session.session_id,
-                error = %err,
-                "failed to auto-ack clawbot inbound message"
-            );
-            let _ = append_diagnostic_event(
-                workspace_root.as_path(),
-                "bridge.auto_ack_failed",
-                serde_json::json!({
-                    "session_id": session.session_id,
-                    "thread_id": thread_id,
-                    "message_id": message.message_id,
-                    "emoji_type": FEISHU_AUTO_ACK_EMOJI_TYPE,
-                    "error": err.to_string(),
-                }),
-            );
-        }
+            Ok(reaction_id) => reaction_id,
+            Err(err) => {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    session = session.session_id,
+                    error = %err,
+                    "failed to auto-ack clawbot inbound message"
+                );
+                let _ = append_diagnostic_event(
+                    workspace_root.as_path(),
+                    "bridge.auto_ack_failed",
+                    serde_json::json!({
+                        "session_id": session.session_id,
+                        "thread_id": thread_id,
+                        "message_id": message.message_id,
+                        "emoji_type": FEISHU_AUTO_ACK_EMOJI_TYPE,
+                        "error": err.to_string(),
+                    }),
+                );
+                None
+            }
+        };
         let turn_id = self
             .submit_clawbot_message_to_thread(
                 app_server,
@@ -522,6 +527,7 @@ impl App {
             session.clone(),
             turn_id,
             message.message_id.clone(),
+            auto_ack_reaction_id,
             turn_mode,
         );
         Ok(())
@@ -721,11 +727,11 @@ impl App {
     async fn send_clawbot_outbound_reaction(
         &mut self,
         reaction: ProviderOutboundReaction,
-    ) -> Result<()> {
+    ) -> Result<Option<String>> {
         #[cfg(test)]
         {
             self.clawbot_outbound_reactions.push(reaction);
-            Ok(())
+            Ok(None)
         }
 
         #[cfg(not(test))]
@@ -746,6 +752,7 @@ impl App {
         &mut self,
         workspace_root: &Path,
         target: ProviderMessageRef,
+        _reaction_id: Option<String>,
     ) -> Result<()> {
         let reaction = ProviderOutboundReaction {
             target,
@@ -764,7 +771,11 @@ impl App {
             let provider = runtime
                 .feishu_provider()
                 .context("missing Feishu config for clawbot reaction cleanup")?;
-            provider.remove_reaction(reaction).await
+            if let Some(reaction_id) = _reaction_id {
+                provider.remove_reaction_by_id(reaction, &reaction_id).await
+            } else {
+                provider.remove_reaction(reaction).await
+            }
         }
     }
 
@@ -774,6 +785,7 @@ impl App {
         session: ProviderSessionRef,
         turn_id: String,
         message_id: String,
+        auto_ack_reaction_id: Option<String>,
         turn_mode: ClawbotTurnMode,
     ) {
         let pending_turn = PendingClawbotTurn {
@@ -781,6 +793,7 @@ impl App {
             turn_id,
             session,
             message_id,
+            auto_ack_reaction_id,
             turn_mode,
         };
         self.clawbot_pending_turns

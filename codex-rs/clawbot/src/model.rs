@@ -182,6 +182,7 @@ pub struct PendingClawbotTurn {
     pub turn_id: String,
     pub session: ProviderSessionRef,
     pub message_id: String,
+    pub auto_ack_reaction_id: Option<String>,
     pub turn_mode: ClawbotTurnMode,
 }
 

@@ -154,6 +154,7 @@ async fn noninteractive_clawbot_request_user_input_builds_auto_response() {
             turn_id: "turn-1".to_string(),
             session: ProviderSessionRef::new(ClawbotProviderKind::Feishu, "chat_auto"),
             message_id: "msg-1".to_string(),
+            auto_ack_reaction_id: None,
             turn_mode: ClawbotTurnMode::NonInteractive,
         }]),
     );
@@ -196,6 +197,7 @@ async fn noninteractive_clawbot_permissions_request_builds_auto_response() {
             turn_id: "turn-1".to_string(),
             session: ProviderSessionRef::new(ClawbotProviderKind::Feishu, "chat_auto"),
             message_id: "msg-1".to_string(),
+            auto_ack_reaction_id: None,
             turn_mode: ClawbotTurnMode::NonInteractive,
         }]),
     );
@@ -420,6 +422,31 @@ async fn clawbot_restart_recovers_pending_turn_and_forwards_reply() -> Result<()
     Ok(())
 }
 
+#[test]
+fn clawbot_store_persists_auto_ack_reaction_id() -> Result<()> {
+    let tempdir = tempdir()?;
+    let store = ClawbotStore::new(tempdir.path().to_path_buf());
+    let pending_turn = PendingClawbotTurn {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        session: ProviderSessionRef::new(ClawbotProviderKind::Feishu, "chat_store"),
+        message_id: "msg-1".to_string(),
+        auto_ack_reaction_id: Some("reaction-1".to_string()),
+        turn_mode: ClawbotTurnMode::NonInteractive,
+    };
+
+    store
+        .upsert_pending_turn(pending_turn.clone())
+        .expect("persist pending turn");
+
+    assert_eq!(
+        store.load_pending_turns().expect("pending turns"),
+        vec![pending_turn]
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn clawbot_bound_thread_completion_forwards_final_reply_without_pending_turn() -> Result<()> {
     let mut app = make_test_app().await;
@@ -500,6 +527,7 @@ async fn clawbot_sync_clears_stale_pending_turn_and_redelivers_unread() -> Resul
             turn_id: "stale-turn".to_string(),
             session: session.clone(),
             message_id: "msg_1".to_string(),
+            auto_ack_reaction_id: None,
             turn_mode: ClawbotTurnMode::NonInteractive,
         })
         .expect("persist stale pending turn");
