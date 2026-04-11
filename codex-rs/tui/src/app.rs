@@ -12,7 +12,6 @@ use crate::app_event::FeedbackCategory;
 use crate::app_event::HistoryLookupResponse;
 use crate::app_event::RateLimitRefreshOrigin;
 use crate::app_event::RealtimeAudioDeviceKind;
-use crate::app_event::RuntimeProfileTarget;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -65,7 +64,6 @@ use crate::multi_agents::format_agent_picker_item_name;
 use crate::multi_agents::next_agent_shortcut_matches;
 use crate::multi_agents::previous_agent_shortcut_matches;
 use crate::pager_overlay::Overlay;
-use crate::profile_router::PROFILE_ROUTER_STATE_RELATIVE_PATH;
 use crate::read_session_model;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
@@ -203,9 +201,12 @@ pub(crate) mod app_server_requests;
 mod background_requests;
 mod btw;
 mod clawbot;
+mod clawbot_controller;
 mod clawbot_controls;
 mod config_persistence;
+mod editor_helpers;
 mod event_dispatch;
+mod feature_dispatch;
 mod history_ui;
 mod input;
 mod jump_navigation;
@@ -213,17 +214,21 @@ mod key_chord;
 mod loaded_threads;
 mod pending_interactive_replay;
 mod platform_actions;
+mod popup_helpers;
+mod profile_controller;
 mod profile_management;
 mod replay_filter;
 mod resize_reflow;
 mod session_lifecycle;
 mod side;
 mod startup_prompts;
+mod thread_controller;
 mod thread_events;
 mod thread_goal_actions;
 mod thread_menu;
 mod thread_routing;
 mod thread_session_state;
+mod workflow_controller;
 mod workflow_controls;
 mod workflow_definition;
 mod workflow_editor;
@@ -4853,6 +4858,10 @@ See the Codex keymap documentation for supported actions and examples."
         app_server: &mut AppServerSession,
         event: AppEvent,
     ) -> Result<AppRunControl> {
+        let Some(event) = self.dispatch_feature_event(tui, app_server, event).await else {
+            return Ok(AppRunControl::Continue);
+        };
+
         match event {
             AppEvent::NewSession => {
                 self.start_fresh_session_with_summary_hint(
@@ -4945,374 +4954,9 @@ See the Codex keymap documentation for supported actions and examples."
             AppEvent::OpenDisplayPreferencesPanel => {
                 self.open_display_preferences_panel();
             }
-            AppEvent::OpenProfileManagementPanel => {
-                self.open_profile_management_panel();
-            }
-            AppEvent::EditProfileFallbackConfig => {
-                self.edit_profile_fallback_config_from_ui(tui).await;
-            }
-            AppEvent::OpenThreadPanel => {
-                self.open_thread_panel();
-            }
-            AppEvent::OpenJumpToMessagePanel => {
-                self.open_jump_to_message_panel();
-            }
-            AppEvent::JumpToTranscriptCell { cell_index } => {
-                self.reset_backtrack_state();
-                self.backtrack.overlay_preview_active = false;
-                if !matches!(self.overlay, Some(Overlay::Transcript(_))) {
-                    self.open_transcript_overlay(tui);
-                }
-                if let Some(Overlay::Transcript(overlay)) = &mut self.overlay
-                    && cell_index < self.transcript_cells.len()
-                {
-                    overlay.set_highlight_cell(Some(cell_index));
-                    tui.frame_requester().schedule_frame();
-                }
-            }
-            AppEvent::ForkCurrentSession => {
-                self.session_telemetry.counter(
-                    "codex.thread.fork",
-                    /*inc*/ 1,
-                    &[("source", "slash_command")],
-                );
-                let summary = session_summary(
-                    self.chat_widget.token_usage(),
-                    self.chat_widget.thread_id(),
-                    self.chat_widget.thread_name(),
-                    self.chat_widget.rollout_path().as_deref(),
-                );
-                self.chat_widget
-                    .add_plain_history_lines(vec!["/fork".magenta().into()]);
-                if let Some(thread_id) = self.chat_widget.thread_id() {
-                    self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
-                        .await;
-                    match app_server.fork_thread(self.config.clone(), thread_id).await {
-                        Ok(forked) => {
-                            self.shutdown_current_thread(app_server).await;
-                            match self
-                                .replace_chat_widget_with_app_server_thread(tui, app_server, forked)
-                                .await
-                            {
-                                Ok(()) => {
-                                    if let Some(summary) = summary {
-                                        let mut lines: Vec<Line<'static>> = Vec::new();
-                                        if let Some(usage_line) = summary.usage_line {
-                                            lines.push(usage_line.into());
-                                        }
-                                        if let Some(command) = summary.resume_command {
-                                            let spans = vec![
-                                                "To continue this session, run ".into(),
-                                                command.cyan(),
-                                            ];
-                                            lines.push(spans.into());
-                                        }
-                                        self.chat_widget.add_plain_history_lines(lines);
-                                    }
-                                }
-                                Err(err) => {
-                                    self.chat_widget.add_error_message(format!(
-                                        "Failed to attach to forked app-server thread: {err}"
-                                    ));
-                                }
-                            }
-                        }
-                        Err(err) => {
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to fork current session through the app server: {err}"
-                            ));
-                        }
-                    }
-                } else {
-                    self.chat_widget.add_error_message(
-                        "A thread must contain at least one turn before it can be forked."
-                            .to_string(),
-                    );
-                }
-
-                tui.frame_requester().schedule_frame();
-            }
-            AppEvent::UndoLastUserMessage => {
-                self.undo_last_user_message();
-            }
-            AppEvent::SwitchRuntimeProfile { target } => {
-                let is_default_target = matches!(&target, RuntimeProfileTarget::Default);
-                let target_profile = match &target {
-                    RuntimeProfileTarget::Default => None,
-                    RuntimeProfileTarget::Named(profile_id) => Some(profile_id.as_str()),
-                };
-                let target_label = target_profile.unwrap_or("default");
-                if let Err(err) = self
-                    .switch_runtime_profile(tui, app_server, target_profile)
-                    .await
-                {
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to switch to profile `{target_label}`: {err}"
-                    ));
-                } else if let Err(err) = self.profile_router_store().update(|state| {
-                    state.set_runtime_active_profile(target_profile);
-                }) {
-                    self.chat_widget.add_error_message(format!(
-                        "Switched to profile `{target_label}`, but failed to persist {PROFILE_ROUTER_STATE_RELATIVE_PATH}: {err}"
-                    ));
-                } else if is_default_target {
-                    self.chat_widget.add_info_message(
-                        "Switched to the default config profile.".to_string(),
-                        /*hint*/ None,
-                    );
-                } else {
-                    self.chat_widget.add_info_message(
-                        format!("Switched to profile `{target_label}`."),
-                        /*hint*/ None,
-                    );
-                }
-            }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
                 self.insert_visible_history_cell(tui, cell);
-            }
-            AppEvent::ReplayWorkflowHistory { thread_id } => {
-                if self.active_thread_id == Some(thread_id) {
-                    let lines = self.replay_workflow_history_cells_for_thread(
-                        thread_id,
-                        tui.terminal.last_known_screen_size.width,
-                    );
-                    if self.overlay.is_some() {
-                        self.deferred_history_lines.extend(lines);
-                    } else if !lines.is_empty() {
-                        tui.insert_history_lines(lines);
-                    }
-                }
-            }
-            AppEvent::BackgroundWorkflowRunCompleted { run_id, result } => {
-                let cells = self
-                    .finish_background_workflow_run(app_server, run_id, *result)
-                    .await;
-                for cell in cells {
-                    self.insert_visible_history_cell(tui, cell);
-                }
-            }
-            AppEvent::StartBtwDiscussion { prompt } => {
-                self.start_btw_discussion(app_server, prompt).await;
-            }
-            AppEvent::BtwCompleted { thread_id, result } => {
-                let is_error = result.is_err();
-                self.finish_btw_discussion(thread_id, result);
-                if is_error {
-                    self.close_btw_session(app_server).await;
-                }
-            }
-            AppEvent::BtwInsertSummary => {
-                self.insert_btw_summary(app_server).await;
-            }
-            AppEvent::BtwInsertFull => {
-                self.insert_btw_full(app_server).await;
-            }
-            AppEvent::BtwDiscard => {
-                self.discard_btw_session(app_server).await;
-            }
-            AppEvent::RetryLastUserTurnWithProfileFallback {
-                action,
-                error_message,
-            } => {
-                self.retry_last_user_turn_with_profile_fallback(
-                    tui,
-                    app_server,
-                    action,
-                    error_message,
-                )
-                .await;
-            }
-            AppEvent::OpenWorkflowControls => {
-                self.open_workflow_controls_popup();
-            }
-            AppEvent::OpenWorkflowControlView { destination } => {
-                self.open_workflow_control_view(destination);
-            }
-            AppEvent::CreateDefaultWorkflowTemplate => {
-                self.create_default_workflow_template_from_ui(tui).await;
-            }
-            AppEvent::EditWorkflowFile {
-                workflow_path,
-                reopen,
-            } => {
-                self.edit_workflow_file_from_ui(tui, workflow_path, reopen)
-                    .await;
-            }
-            AppEvent::ToggleWorkflowTriggerEnabled {
-                workflow_path,
-                trigger_id,
-            } => {
-                self.toggle_workflow_trigger_enabled_from_ui(workflow_path, trigger_id);
-            }
-            AppEvent::ToggleWorkflowJobEnabled {
-                workflow_path,
-                job_name,
-            } => {
-                self.toggle_workflow_job_enabled_from_ui(workflow_path, job_name);
-            }
-            AppEvent::CycleWorkflowJobContext {
-                workflow_path,
-                job_name,
-            } => {
-                self.cycle_workflow_job_context_from_ui(workflow_path, job_name);
-            }
-            AppEvent::CycleWorkflowJobResponse {
-                workflow_path,
-                job_name,
-            } => {
-                self.cycle_workflow_job_response_from_ui(workflow_path, job_name);
-            }
-            AppEvent::EditWorkflowJobField {
-                workflow_path,
-                job_name,
-                field,
-            } => {
-                self.edit_workflow_job_field_from_ui(tui, workflow_path, job_name, field)
-                    .await;
-            }
-            AppEvent::SetWorkflowTriggerType {
-                workflow_path,
-                trigger_id,
-                trigger_type,
-            } => {
-                self.set_workflow_trigger_type_from_ui(workflow_path, trigger_id, trigger_type);
-            }
-            AppEvent::EditWorkflowTriggerField {
-                workflow_path,
-                trigger_id,
-                field,
-            } => {
-                self.edit_workflow_trigger_field_from_ui(tui, workflow_path, trigger_id, field)
-                    .await;
-            }
-            AppEvent::WorkflowWorkspaceFilesChanged { changed_paths } => {
-                let relevant_paths = changed_paths
-                    .into_iter()
-                    .filter(|path| {
-                        workflow_file_watch::is_relevant_workspace_change(
-                            self.config.cwd.as_path(),
-                            path.as_path(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                if !relevant_paths.is_empty() {
-                    let cells = self.handle_workspace_file_changes_for_workflows(
-                        app_server,
-                        relevant_paths.as_slice(),
-                    );
-                    for cell in cells {
-                        self.insert_visible_history_cell(tui, cell);
-                    }
-                }
-            }
-            AppEvent::StartManualWorkflowTrigger {
-                workflow_name,
-                trigger_id,
-            } => {
-                let cell = self.start_manual_workflow_trigger_from_ui(
-                    app_server,
-                    workflow_name,
-                    trigger_id,
-                );
-                self.insert_visible_history_cell(tui, cell);
-            }
-            AppEvent::StartManualWorkflowJob {
-                workflow_name,
-                job_name,
-            } => {
-                let cell =
-                    self.start_manual_workflow_job_from_ui(app_server, workflow_name, job_name);
-                self.insert_visible_history_cell(tui, cell);
-            }
-            AppEvent::ShowWorkflowBackgroundTasks => {
-                self.chat_widget.add_ps_output();
-            }
-            AppEvent::ClawbotProviderEvent { event } => {
-                if let Err(err) = self.handle_clawbot_provider_event(app_server, event).await {
-                    tracing::warn!(error = %err, "failed to handle clawbot provider event");
-                    self.chat_widget
-                        .add_error_message(format!("Clawbot provider event failed: {err}"));
-                }
-            }
-            AppEvent::ClawbotTurnCompleted { thread_id, turn } => {
-                if let Err(err) = self
-                    .handle_clawbot_turn_completed(app_server, thread_id, turn)
-                    .await
-                {
-                    tracing::warn!(error = %err, "failed to handle clawbot turn completion");
-                    self.chat_widget
-                        .add_error_message(format!("Clawbot turn forwarding failed: {err}"));
-                }
-            }
-            AppEvent::OpenClawbotManagement => {
-                self.open_clawbot_management_popup();
-            }
-            AppEvent::OpenClawbotManagementView { destination } => {
-                self.open_clawbot_management_view(destination);
-            }
-            AppEvent::OpenClawbotFeishuConfigPrompt { field } => {
-                self.open_clawbot_feishu_config_prompt(field);
-            }
-            AppEvent::SaveClawbotFeishuConfigValue { field, value } => {
-                if let Err(err) = self.save_clawbot_feishu_config_value(field, value) {
-                    self.chat_widget
-                        .add_error_message(format!("Failed to save Clawbot config: {err}"));
-                }
-            }
-            AppEvent::SaveClawbotManualBindSessionId { session_id } => {
-                if let Err(err) = self
-                    .bind_clawbot_session_to_current_thread(app_server, session_id)
-                    .await
-                {
-                    self.chat_widget
-                        .add_error_message(format!("Failed to bind Clawbot session: {err}"));
-                }
-            }
-            AppEvent::ClawbotSetTurnMode { mode } => {
-                if let Err(err) = self.save_clawbot_turn_mode(mode) {
-                    self.chat_widget
-                        .add_error_message(format!("Failed to save Clawbot turn mode: {err}"));
-                }
-            }
-            AppEvent::ClawbotSetThreadForwarding {
-                thread_id,
-                channel,
-                enabled,
-            } => {
-                if let Err(err) = self.clawbot_set_thread_forwarding(thread_id, channel, enabled) {
-                    self.chat_widget
-                        .add_error_message(format!("Failed to update Clawbot forwarding: {err}"));
-                }
-            }
-            AppEvent::ScanClawbotFeishuSessions => {
-                if let Err(err) = self.scan_clawbot_feishu_sessions().await {
-                    self.chat_widget
-                        .add_error_message(format!("Failed to scan Feishu sessions: {err}"));
-                }
-            }
-            AppEvent::ClearClawbotFeishuSessions => {
-                if let Err(err) = self.clear_clawbot_feishu_sessions() {
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to clear unbound Feishu sessions: {err}"
-                    ));
-                }
-            }
-            AppEvent::RetryClawbotFeishuConnection => {
-                if let Err(err) = self.retry_clawbot_feishu_connection() {
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to restart Clawbot Feishu runtime: {err}"
-                    ));
-                }
-            }
-            AppEvent::ClawbotDisconnectThread { thread_id } => {
-                if let Err(err) = self.clawbot_disconnect_thread(thread_id) {
-                    self.chat_widget
-                        .add_error_message(format!("Failed to disconnect Clawbot binding: {err}"));
-                }
-            }
-            AppEvent::EditClawbotStateFile { label, path } => {
-                self.edit_clawbot_state_file_from_ui(tui, label, path).await;
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
@@ -6674,6 +6318,9 @@ See the Codex keymap documentation for supported actions and examples."
                             .add_error_message(format!("Failed to save theme: {err}"));
                     }
                 }
+            }
+            _ => {
+                unreachable!("feature event should be routed before App::handle_event main match");
             }
         }
         Ok(AppRunControl::Continue)

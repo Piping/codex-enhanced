@@ -4,14 +4,13 @@ use toml::Value as TomlValue;
 
 use super::App;
 use super::PROFILE_SWITCH_THREAD_CLOSE_TIMEOUT;
+use super::editor_helpers::ExternalEditorErrorTarget;
 use crate::app_event::AppEvent;
 use crate::app_event::RuntimeProfileTarget;
 use crate::app_server_session::AppServerSession;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
-use crate::external_editor;
-use crate::history_cell;
 use crate::profile_router::DefaultProfileRouter;
 use crate::profile_router::PROFILE_ROUTER_STATE_RELATIVE_PATH;
 use crate::profile_router::ProfileFallbackAction;
@@ -59,25 +58,20 @@ impl App {
 
     pub(crate) fn open_profile_management_panel(&mut self) {
         let router_state = self.profile_router_store().load().unwrap_or_default();
-        let active_selected_idx = self
-            .chat_widget
-            .selected_index_for_active_view(PROFILE_MANAGEMENT_VIEW_ID);
         let profiles = self.routed_profile_summaries(&router_state);
-        let params = profile_management_root_params(
-            self.active_profile.as_deref(),
-            &self.default_profile_summary(),
-            &profiles,
-            &router_state,
-            self.chat_widget.is_task_running(),
-            active_selected_idx,
+        self.open_selection_popup_for_view(
+            PROFILE_MANAGEMENT_VIEW_ID,
+            |app, active_selected_idx| {
+                profile_management_root_params(
+                    app.active_profile.as_deref(),
+                    &app.default_profile_summary(),
+                    &profiles,
+                    &router_state,
+                    app.chat_widget.is_task_running(),
+                    active_selected_idx,
+                )
+            },
         );
-        if active_selected_idx.is_some() {
-            let _ = self
-                .chat_widget
-                .replace_selection_view_if_active(PROFILE_MANAGEMENT_VIEW_ID, params);
-        } else {
-            self.chat_widget.show_selection_view(params);
-        }
     }
 
     pub(crate) async fn edit_profile_fallback_config_from_ui(&mut self, tui: &mut tui::Tui) {
@@ -106,57 +100,43 @@ impl App {
         }
 
         let seed = fallback_route_editor_seed(&profiles, &router_state);
-        let Ok(editor_cmd) = self.resolve_editor_command_for_profiles() else {
+        let Ok(contents) = self
+            .edit_seed_with_external_editor(tui, ExternalEditorErrorTarget::History, &seed, ".txt")
+            .await
+        else {
             return;
         };
-        let edited = tui
-            .with_restored(tui::RestoreMode::KeepRaw, || async {
-                external_editor::run_editor_with_suffix(&seed, &editor_cmd, ".txt").await
-            })
-            .await;
-
-        match edited {
-            Ok(contents) => {
-                let current_profile_ids = profiles
-                    .iter()
-                    .map(|profile| profile.id.clone())
-                    .collect::<Vec<_>>();
-                match parse_fallback_route_editor_contents(&contents, &current_profile_ids) {
-                    Ok(ordered_profile_ids) => {
-                        let next_state = rewritten_router_state(&router_state, ordered_profile_ids);
-                        match self
-                            .profile_router_store()
-                            .update(|state| *state = next_state.clone())
-                        {
-                            Ok(_) => {
-                                self.chat_widget.add_info_message(
-                                    format!(
-                                        "Updated fallback route in {PROFILE_ROUTER_STATE_RELATIVE_PATH}."
-                                    ),
-                                    /*hint*/ None,
-                                );
-                                self.open_profile_management_panel();
-                            }
-                            Err(err) => {
-                                self.chat_widget.add_error_message(format!(
-                                    "Failed to update {PROFILE_ROUTER_STATE_RELATIVE_PATH}: {err}"
-                                ));
-                            }
-                        }
+        let current_profile_ids = profiles
+            .iter()
+            .map(|profile| profile.id.clone())
+            .collect::<Vec<_>>();
+        match parse_fallback_route_editor_contents(&contents, &current_profile_ids) {
+            Ok(ordered_profile_ids) => {
+                let next_state = rewritten_router_state(&router_state, ordered_profile_ids);
+                match self
+                    .profile_router_store()
+                    .update(|state| *state = next_state.clone())
+                {
+                    Ok(_) => {
+                        self.chat_widget.add_info_message(
+                            format!(
+                                "Updated fallback route in {PROFILE_ROUTER_STATE_RELATIVE_PATH}."
+                            ),
+                            /*hint*/ None,
+                        );
+                        self.open_profile_management_panel();
                     }
                     Err(err) => {
-                        self.chat_widget.add_error_message(err);
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to update {PROFILE_ROUTER_STATE_RELATIVE_PATH}: {err}"
+                        ));
                     }
                 }
             }
             Err(err) => {
-                self.chat_widget
-                    .add_to_history(history_cell::new_error_event(format!(
-                        "Failed to open editor: {err}",
-                    )));
+                self.chat_widget.add_error_message(err);
             }
         }
-        tui.frame_requester().schedule_frame();
     }
 
     fn default_profile_summary(&self) -> DefaultProfileSummary {
@@ -228,27 +208,6 @@ impl App {
                 }
             })
             .collect()
-    }
-
-    fn resolve_editor_command_for_profiles(&mut self) -> Result<Vec<Vec<String>>, ()> {
-        match external_editor::resolve_editor_commands() {
-            Ok(cmds) => Ok(cmds),
-            Err(external_editor::EditorError::MissingEditor) => {
-                self.chat_widget
-                    .add_to_history(history_cell::new_error_event(
-                    "Cannot open external editor: no usable editor found in $VISUAL, $EDITOR, or `vim`."
-                        .to_string(),
-                ));
-                Err(())
-            }
-            Err(err) => {
-                self.chat_widget
-                    .add_to_history(history_cell::new_error_event(format!(
-                        "Failed to open editor: {err}",
-                    )));
-                Err(())
-            }
-        }
     }
 
     fn provider_label_and_base_url(&self, provider_id: &str) -> (String, Option<String>) {

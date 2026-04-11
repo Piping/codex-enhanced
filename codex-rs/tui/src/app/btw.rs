@@ -336,17 +336,7 @@ impl App {
     where
         F: Fn() -> SelectionViewParams,
     {
-        if self
-            .chat_widget
-            .selected_index_for_active_view(BTW_DISCUSSION_VIEW_ID)
-            .is_some()
-        {
-            let _ = self
-                .chat_widget
-                .replace_selection_view_if_active(BTW_DISCUSSION_VIEW_ID, build());
-        } else {
-            self.chat_widget.show_selection_view(build());
-        }
+        self.open_selection_popup_for_view(BTW_DISCUSSION_VIEW_ID, |_app, _| build());
     }
 
     fn btw_thread_cwd(&self, app_server: &AppServerSession) -> Option<String> {
