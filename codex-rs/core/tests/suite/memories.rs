@@ -325,6 +325,26 @@ async fn web_search_pollution_moves_selected_thread_into_removed_phase2_inputs()
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_memories_pipeline_runs_even_when_memory_feature_is_disabled() -> Result<()> {
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+
+    let mut builder = test_codex().with_home(home).with_config(|config| {
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
+        let _ = config.features.disable(Feature::MemoryTool);
+    });
+    let test = builder.build(&server).await?;
+
+    assert_eq!(test.codex.run_memories_startup_pipeline_now().await, Ok(()));
+
+    shutdown_test_codex(&test).await?;
+    Ok(())
+}
+
 async fn build_test_codex(server: &wiremock::MockServer, home: Arc<TempDir>) -> Result<TestCodex> {
     #[allow(clippy::expect_used)]
     let mut builder = test_codex().with_home(home).with_config(|config| {

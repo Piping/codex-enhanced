@@ -204,3 +204,12 @@ These guidelines apply to app-server protocol work in `codex-rs`, especially:
 - 修改代码后总是执行 cargo build -p codex-cli; 然后执行交互式终端 (PTY) 验证要完成的特性是否实现;
 - 在跑 codex 命令之前, 总是用sudo codesign --sign - --force --preserve-metadata=entitlements,requirements,flags,runtime <bin>来给二进制签名
 - 当需求改变的时候, 要同步更新对应的文档
+
+<!-- codex:dream:start -->
+## Dream Guidance
+
+## `/dream` workflow
+- Treat `/dream` as `thread/dream/start`; do not route TUI `/dream` through `thread/memories/update`.
+- Reserve `thread/memories/update` for explicit memories-maintenance flows that should wait for the memories pipeline to finish.
+- When validating `/dream` end-to-end, prefer a PTY smoke test that confirms updated `AGENTS.md`, `.codex/memory/MEMORY.md`, `.codex/memory/next_session.md`, and a per-thread retrospective are written.
+<!-- codex:dream:end -->

@@ -199,6 +199,31 @@ impl CodexThread {
         self.codex.thread_config_snapshot().await
     }
 
+    pub async fn run_memories_startup_pipeline_now(&self) -> Result<(), String> {
+        let config = self.codex.session.get_config().await;
+        let session_source = self.codex.thread_config_snapshot().await.session_source;
+        crate::memories::run_memories_manual_pipeline(&self.codex.session, config, &session_source)
+            .await
+            .map_err(|err| err.to_string())
+    }
+
+    pub async fn run_dream_pipeline_now(&self) -> Result<crate::DreamPipelineResult, String> {
+        let rollout_path = self
+            .rollout_path()
+            .ok_or_else(|| "current thread has no materialized rollout yet".to_string())?;
+        let config = self.codex.session.get_config().await;
+        let model_name = self.codex.thread_config_snapshot().await.model;
+        crate::dream::run_dream_pipeline(
+            &self.codex.session,
+            config,
+            self.codex.session.conversation_id,
+            rollout_path.as_path(),
+            &model_name,
+        )
+        .await
+        .map_err(|err| err.to_string())
+    }
+
     pub fn enabled(&self, feature: Feature) -> bool {
         self.codex.enabled(feature)
     }

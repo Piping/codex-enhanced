@@ -8,3 +8,5 @@
 /target-arm64/
 
 .codex/
+install_local.sh
+.agents/

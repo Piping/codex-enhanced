@@ -122,6 +122,8 @@ pub(in crate::memories) async fn run(session: &Arc<Session>, config: &Config) {
     );
 }
 
+pub(crate) use job::serialize_filtered_rollout_response_items;
+
 /// Prune old un-used "dead" raw memories.
 pub(in crate::memories) async fn prune(session: &Arc<Session>, config: &Config) {
     if let Some(db) = session.services.state_db.as_deref() {
@@ -243,7 +245,7 @@ async fn run_jobs(
     claimed_candidates: Vec<codex_state::Stage1JobClaim>,
     stage_one_context: RequestContext,
 ) -> Vec<JobResult> {
-    futures::stream::iter(claimed_candidates.into_iter())
+    futures::stream::iter(claimed_candidates)
         .map(|claim| {
             let session = Arc::clone(session);
             let stage_one_context = stage_one_context.clone();
@@ -464,7 +466,7 @@ mod job {
     }
 
     /// Serializes filtered stage-1 memory items for prompt inclusion.
-    pub(super) fn serialize_filtered_rollout_response_items(
+    pub(crate) fn serialize_filtered_rollout_response_items(
         items: &[RolloutItem],
     ) -> codex_protocol::error::Result<String> {
         let filtered = items

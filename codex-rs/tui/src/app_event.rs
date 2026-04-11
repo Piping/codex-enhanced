@@ -200,6 +200,10 @@ pub(crate) enum AppEvent {
     /// Start a new session.
     NewSession,
 
+    /// Retrospect the active thread, update repo-local dream artifacts, then start a fresh
+    /// session.
+    DreamSession,
+
     /// Clear the terminal UI (screen + scrollback), start a fresh session, and keep the
     /// previous chat resumable.
     ClearUi,

@@ -145,6 +145,8 @@ Example with notification opt-out:
 - `thread/name/set` — set or update a thread’s user-facing name for either a loaded thread or a persisted rollout; returns `{}` on success and emits `thread/name/updated` to initialized, opted-in clients. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
+- `thread/dream/start` — run a current-thread retrospective, update repo-local dream artifacts, and return the generated paths plus the next-session hint.
+- `thread/memories/update` — run an on-demand memories retrospective for a loaded thread; the request waits for phase-1 extraction plus phase-2 consolidation to finish before returning `{}`. This remains available for explicit memories maintenance flows and is not the `/dream` entrypoint.
 - `thread/shellCommand` — run a user-initiated `!` shell command against a thread; this runs unsandboxed with full access rather than inheriting the thread sandbox policy. Returns `{}` immediately while progress streams through standard turn/item notifications and any active turn receives the formatted output in its message stream.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
@@ -427,6 +429,30 @@ While compaction is running, the thread is effectively in a turn so clients shou
 ```json
 { "method": "thread/compact/start", "id": 25, "params": { "threadId": "thr_b" } }
 { "id": 25, "result": {} }
+```
+
+### Example: Run a thread dream retrospective
+
+Use `thread/dream/start` when the client wants `/dream` semantics: summarize the current thread, update repo-local memory artifacts, update repo-local guidance files, and then start a fresh thread using those new files.
+
+```json
+{ "method": "thread/dream/start", "id": 26, "params": { "threadId": "thr_b" } }
+{ "id": 26, "result": {
+    "memoryRoot": "/repo/.codex/memory",
+    "retrospectivePath": "/repo/.codex/memory/threads/thr_b/retrospective.md",
+    "updatedAgentsPath": "/repo/AGENTS.md",
+    "updatedSkillPaths": [],
+    "nextSessionHint": "Start by reading AGENTS.md and the repo memory block."
+} }
+```
+
+### Example: Run a thread memories retrospective
+
+Use `thread/memories/update` when the client wants to force the existing memories pipeline for a loaded thread. Unlike `thread/compact/start`, this call waits for the retrospective pipeline to finish before it returns.
+
+```json
+{ "method": "thread/memories/update", "id": 27, "params": { "threadId": "thr_b" } }
+{ "id": 27, "result": {} }
 ```
 
 ### Example: Run a thread shell command

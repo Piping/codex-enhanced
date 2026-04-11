@@ -1,24 +1,43 @@
+use color_eyre::eyre::Result;
+
 use super::App;
+use super::AppRunControl;
 use super::clawbot_controller::ClawbotController;
+use super::integration_controller::IntegrationController;
 use super::profile_controller::ProfileController;
+use super::session_controller::SessionController;
+use super::settings_controller::SettingsController;
 use super::thread_controller::ThreadController;
 use super::workflow_controller::WorkflowController;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
 use crate::tui;
 
+pub(super) enum FeatureDispatchOutcome {
+    Unhandled(Box<AppEvent>),
+    Handled,
+    Return(AppRunControl),
+}
+
 #[derive(Clone, Copy)]
 enum FeatureRoute {
+    Session,
     Profile,
     Thread,
     Btw,
     Workflow,
     Clawbot,
+    Integration,
+    Settings,
 }
 
 impl FeatureRoute {
     fn for_event(event: &AppEvent) -> Option<Self> {
         match event {
+            AppEvent::NewSession
+            | AppEvent::DreamSession
+            | AppEvent::ClearUi
+            | AppEvent::OpenResumePicker => Some(Self::Session),
             AppEvent::OpenProfileManagementPanel
             | AppEvent::EditProfileFallbackConfig
             | AppEvent::SwitchRuntimeProfile { .. }
@@ -64,6 +83,86 @@ impl FeatureRoute {
             | AppEvent::RetryClawbotFeishuConnection
             | AppEvent::ClawbotDisconnectThread { .. }
             | AppEvent::EditClawbotStateFile { .. } => Some(Self::Clawbot),
+            AppEvent::OpenAppLink { .. }
+            | AppEvent::OpenUrlInBrowser { .. }
+            | AppEvent::RefreshConnectors { .. }
+            | AppEvent::PluginInstallAuthAdvance { .. }
+            | AppEvent::PluginInstallAuthAbandon
+            | AppEvent::FetchPluginsList { .. }
+            | AppEvent::OpenPluginDetailLoading { .. }
+            | AppEvent::OpenPluginInstallLoading { .. }
+            | AppEvent::OpenPluginUninstallLoading { .. }
+            | AppEvent::PluginsLoaded { .. }
+            | AppEvent::FetchPluginDetail { .. }
+            | AppEvent::PluginDetailLoaded { .. }
+            | AppEvent::FetchPluginInstall { .. }
+            | AppEvent::FetchPluginUninstall { .. }
+            | AppEvent::PluginInstallLoaded { .. }
+            | AppEvent::PluginUninstallLoaded { .. }
+            | AppEvent::FetchMcpInventory
+            | AppEvent::McpInventoryLoaded { .. }
+            | AppEvent::StartFileSearch(_)
+            | AppEvent::FileSearchResult { .. }
+            | AppEvent::RefreshRateLimits { .. }
+            | AppEvent::RateLimitsLoaded { .. }
+            | AppEvent::ConnectorsLoaded { .. }
+            | AppEvent::OpenSkillsList
+            | AppEvent::OpenManageSkillsPopup
+            | AppEvent::SetSkillEnabled { .. }
+            | AppEvent::SetAppEnabled { .. }
+            | AppEvent::ManageSkillsClosed => Some(Self::Integration),
+            AppEvent::OpenDisplayPreferencesPanel
+            | AppEvent::UpdateReasoningEffort(_)
+            | AppEvent::UpdateModel(_)
+            | AppEvent::UpdateCollaborationMode(_)
+            | AppEvent::UpdatePersonality(_)
+            | AppEvent::OpenRealtimeAudioDeviceSelection { .. }
+            | AppEvent::OpenReasoningPopup { .. }
+            | AppEvent::OpenPlanReasoningScopePrompt { .. }
+            | AppEvent::OpenAllModelsPopup { .. }
+            | AppEvent::OpenFullAccessConfirmation { .. }
+            | AppEvent::OpenWorldWritableWarningConfirmation { .. }
+            | AppEvent::OpenFeedbackNote { .. }
+            | AppEvent::OpenFeedbackConsent { .. }
+            | AppEvent::SubmitFeedback { .. }
+            | AppEvent::FeedbackSubmitted { .. }
+            | AppEvent::LaunchExternalEditor
+            | AppEvent::OpenWindowsSandboxEnablePrompt { .. }
+            | AppEvent::OpenWindowsSandboxFallbackPrompt { .. }
+            | AppEvent::BeginWindowsSandboxElevatedSetup { .. }
+            | AppEvent::BeginWindowsSandboxLegacySetup { .. }
+            | AppEvent::BeginWindowsSandboxGrantReadRoot { .. }
+            | AppEvent::WindowsSandboxGrantReadRootCompleted { .. }
+            | AppEvent::EnableWindowsSandboxForAgentMode { .. }
+            | AppEvent::PersistModelSelection { .. }
+            | AppEvent::PersistPersonalitySelection { .. }
+            | AppEvent::PersistServiceTierSelection { .. }
+            | AppEvent::PersistRealtimeAudioDeviceSelection { .. }
+            | AppEvent::RestartRealtimeAudioDevice { .. }
+            | AppEvent::UpdateAskForApprovalPolicy(_)
+            | AppEvent::UpdateSandboxPolicy(_)
+            | AppEvent::UpdateApprovalsReviewer(_)
+            | AppEvent::UpdateFeatureFlags { .. }
+            | AppEvent::ToggleDisplayPreference(_)
+            | AppEvent::SkipNextWorldWritableScan
+            | AppEvent::UpdateFullAccessWarningAcknowledged(_)
+            | AppEvent::UpdateWorldWritableWarningAcknowledged(_)
+            | AppEvent::UpdateRateLimitSwitchPromptHidden(_)
+            | AppEvent::UpdatePlanModeReasoningEffort(_)
+            | AppEvent::PersistFullAccessWarningAcknowledged
+            | AppEvent::PersistWorldWritableWarningAcknowledged
+            | AppEvent::PersistRateLimitSwitchPromptHidden
+            | AppEvent::PersistPlanModeReasoningEffort(_)
+            | AppEvent::PersistModelMigrationPromptAcknowledged { .. }
+            | AppEvent::OpenApprovalsPopup
+            | AppEvent::OpenPermissionsPopup
+            | AppEvent::StatusLineSetup { .. }
+            | AppEvent::StatusLineBranchUpdated { .. }
+            | AppEvent::StatusLineSetupCancelled
+            | AppEvent::TerminalTitleSetup { .. }
+            | AppEvent::TerminalTitleSetupPreview { .. }
+            | AppEvent::TerminalTitleSetupCancelled
+            | AppEvent::SyntaxThemeSelected { .. } => Some(Self::Settings),
             _ => None,
         }
     }
@@ -75,12 +174,19 @@ impl App {
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         event: AppEvent,
-    ) -> Option<AppEvent> {
+    ) -> Result<FeatureDispatchOutcome> {
         let Some(route) = FeatureRoute::for_event(&event) else {
-            return Some(event);
+            return Ok(FeatureDispatchOutcome::Unhandled(Box::new(event)));
         };
 
         match route {
+            FeatureRoute::Session => {
+                if let Some(control) =
+                    SessionController::handle(self, tui, app_server, event).await?
+                {
+                    return Ok(FeatureDispatchOutcome::Return(control));
+                }
+            }
             FeatureRoute::Profile => {
                 ProfileController::handle(self, tui, app_server, event).await;
             }
@@ -96,9 +202,15 @@ impl App {
             FeatureRoute::Clawbot => {
                 ClawbotController::handle(self, tui, app_server, event).await;
             }
+            FeatureRoute::Integration => {
+                IntegrationController::handle(self, app_server, event).await;
+            }
+            FeatureRoute::Settings => {
+                SettingsController::handle(self, tui, app_server, event).await;
+            }
         }
 
-        None
+        Ok(FeatureDispatchOutcome::Handled)
     }
 
     pub(super) async fn handle_btw_feature_event(

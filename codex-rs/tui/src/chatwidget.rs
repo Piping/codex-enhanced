@@ -5197,6 +5197,9 @@ impl ChatWidget {
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
             }
+            SlashCommand::Dream => {
+                self.app_event_tx.send(AppEvent::DreamSession);
+            }
             SlashCommand::Clear => {
                 self.app_event_tx.send(AppEvent::ClearUi);
             }

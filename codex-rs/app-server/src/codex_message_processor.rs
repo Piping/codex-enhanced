@@ -122,6 +122,8 @@ use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadDecrementElicitationParams;
 use codex_app_server_protocol::ThreadDecrementElicitationResponse;
+use codex_app_server_protocol::ThreadDreamStartParams;
+use codex_app_server_protocol::ThreadDreamStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadIncrementElicitationParams;
@@ -131,6 +133,8 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
+use codex_app_server_protocol::ThreadMemoriesUpdateParams;
+use codex_app_server_protocol::ThreadMemoriesUpdateResponse;
 use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateResponse;
@@ -752,6 +756,14 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadCompactStart { request_id, params } => {
                 self.thread_compact_start(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadDreamStart { request_id, params } => {
+                self.thread_dream_start(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadMemoriesUpdate { request_id, params } => {
+                self.thread_memories_update(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadBackgroundTerminalsClean { request_id, params } => {
@@ -3285,6 +3297,91 @@ impl CodexMessageProcessor {
             }
             Err(err) => {
                 self.send_internal_error(request_id, format!("failed to start compaction: {err}"))
+                    .await;
+            }
+        }
+    }
+
+    async fn thread_memories_update(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadMemoriesUpdateParams,
+    ) {
+        let ThreadMemoriesUpdateParams { thread_id } = params;
+
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match thread.run_memories_startup_pipeline_now().await {
+            Ok(()) => {
+                self.outgoing
+                    .send_response(request_id, ThreadMemoriesUpdateResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!("failed to update thread memories: {err}"),
+                            data: None,
+                        },
+                    )
+                    .await;
+            }
+        }
+    }
+
+    async fn thread_dream_start(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadDreamStartParams,
+    ) {
+        let ThreadDreamStartParams { thread_id } = params;
+
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match thread.run_dream_pipeline_now().await {
+            Ok(result) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        ThreadDreamStartResponse {
+                            memory_root: result.memory_root.display().to_string(),
+                            retrospective_path: result.retrospective_path.display().to_string(),
+                            updated_agents_path: result.updated_agents_path.display().to_string(),
+                            updated_skill_paths: result
+                                .updated_skill_paths
+                                .iter()
+                                .map(|path| path.display().to_string())
+                                .collect(),
+                            next_session_hint: result.next_session_hint,
+                        },
+                    )
+                    .await;
+            }
+            Err(err) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!("failed to complete dream retrospective: {err}"),
+                            data: None,
+                        },
+                    )
                     .await;
             }
         }

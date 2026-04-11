@@ -25,6 +25,7 @@ pub enum SlashCommand {
     Review,
     Rename,
     New,
+    Dream,
     Resume,
     Fork,
     Thread,
@@ -78,6 +79,9 @@ impl SlashCommand {
         match self {
             SlashCommand::Feedback => "send logs to maintainers",
             SlashCommand::New => "start a new chat during a conversation",
+            SlashCommand::Dream => {
+                "retrospect the current thread, update repo memory, and start a new chat"
+            }
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
@@ -153,6 +157,7 @@ impl SlashCommand {
     pub fn available_during_task(self) -> bool {
         match self {
             SlashCommand::New
+            | SlashCommand::Dream
             | SlashCommand::Resume
             | SlashCommand::Fork
             | SlashCommand::Init

@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "memoryRoot": {
+      "type": "string"
+    },
+    "nextSessionHint": {
+      "type": "string"
+    },
+    "retrospectivePath": {
+      "type": "string"
+    },
+    "updatedAgentsPath": {
+      "type": "string"
+    },
+    "updatedSkillPaths": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "memoryRoot",
+    "nextSessionHint",
+    "retrospectivePath",
+    "updatedAgentsPath",
+    "updatedSkillPaths"
+  ],
+  "title": "ThreadDreamStartResponse",
+  "type": "object"
+}

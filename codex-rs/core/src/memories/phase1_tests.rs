@@ -9,7 +9,7 @@ use codex_protocol::protocol::TokenUsage;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn serializes_memory_rollout_with_agents_removed_but_environment_kept() {
+fn serializes_memory_rollout_with_agents_skills_and_environment_kept() {
     let mixed_contextual_message = ResponseItem::Message {
         id: None,
         role: "user".to_string(),
@@ -60,8 +60,24 @@ fn serializes_memory_rollout_with_agents_removed_but_environment_kept() {
             ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
+                content: vec![
+                    ContentItem::InputText {
+                        text: "# AGENTS.md instructions for /tmp\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
+                            .to_string(),
+                    },
+                    ContentItem::InputText {
+                        text: "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>"
+                            .to_string(),
+                    },
+                ],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>"
+                    text: "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>"
                         .to_string(),
                 }],
                 end_turn: None,

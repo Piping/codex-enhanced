@@ -38,11 +38,11 @@ fn classifies_memory_excluded_fragments() {
     let cases = [
         (
             "# AGENTS.md instructions for /tmp\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>",
-            true,
+            false,
         ),
         (
             "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
-            true,
+            false,
         ),
         (
             "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>",

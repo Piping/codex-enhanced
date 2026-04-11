@@ -292,6 +292,14 @@ client_request_definitions! {
         params: v2::ThreadCompactStartParams,
         response: v2::ThreadCompactStartResponse,
     },
+    ThreadDreamStart => "thread/dream/start" {
+        params: v2::ThreadDreamStartParams,
+        response: v2::ThreadDreamStartResponse,
+    },
+    ThreadMemoriesUpdate => "thread/memories/update" {
+        params: v2::ThreadMemoriesUpdateParams,
+        response: v2::ThreadMemoriesUpdateResponse,
+    },
     ThreadShellCommand => "thread/shellCommand" {
         params: v2::ThreadShellCommandParams,
         response: v2::ThreadShellCommandResponse,
