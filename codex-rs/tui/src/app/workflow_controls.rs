@@ -12,12 +12,12 @@ use crate::app_server_session::AppServerSession;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
-use crate::external_editor;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
 use crate::tui;
 
 use super::App;
+use super::editor_helpers::ExternalEditorErrorTarget;
 use super::workflow_definition::LoadedWorkflowFile;
 use super::workflow_definition::LoadedWorkflowJob;
 use super::workflow_definition::LoadedWorkflowRegistry;
@@ -60,57 +60,50 @@ impl App {
     }
 
     pub(crate) fn open_workflow_control_view(&mut self, destination: WorkflowControlsDestination) {
-        let active_selected_idx = self
-            .chat_widget
-            .selected_index_for_active_view(WORKFLOW_CONTROLS_VIEW_ID);
-        let params = match destination {
-            WorkflowControlsDestination::Root => {
-                self.workflow_root_popup_params(active_selected_idx)
-            }
-            WorkflowControlsDestination::File { workflow_path } => {
-                self.workflow_file_popup_params(workflow_path.as_path(), Some(0))
-            }
-            WorkflowControlsDestination::Jobs { workflow_path } => {
-                self.workflow_jobs_popup_params(workflow_path.as_path(), Some(0))
-            }
-            WorkflowControlsDestination::Job {
-                workflow_path,
-                job_name,
-            } => self.workflow_job_popup_params(workflow_path.as_path(), &job_name, Some(0)),
-            WorkflowControlsDestination::ManualTriggers { workflow_path } => {
-                self.workflow_manual_triggers_popup_params(workflow_path.as_path(), Some(0))
-            }
-            WorkflowControlsDestination::ManualTrigger {
-                workflow_path,
-                trigger_id,
-            } => self.workflow_manual_trigger_popup_params(
-                workflow_path.as_path(),
-                &trigger_id,
-                Some(0),
-            ),
-            WorkflowControlsDestination::TriggerType {
-                workflow_path,
-                trigger_id,
-            } => self.workflow_trigger_type_popup_params(
-                workflow_path.as_path(),
-                &trigger_id,
-                Some(0),
-            ),
-        };
-        self.show_workflow_popup(params, active_selected_idx.is_some());
+        self.open_selection_popup_for_view(
+            WORKFLOW_CONTROLS_VIEW_ID,
+            |app, active_selected_idx| match destination {
+                WorkflowControlsDestination::Root => {
+                    app.workflow_root_popup_params(active_selected_idx)
+                }
+                WorkflowControlsDestination::File { ref workflow_path } => {
+                    app.workflow_file_popup_params(workflow_path.as_path(), Some(0))
+                }
+                WorkflowControlsDestination::Jobs { ref workflow_path } => {
+                    app.workflow_jobs_popup_params(workflow_path.as_path(), Some(0))
+                }
+                WorkflowControlsDestination::Job {
+                    ref workflow_path,
+                    ref job_name,
+                } => app.workflow_job_popup_params(workflow_path.as_path(), job_name, Some(0)),
+                WorkflowControlsDestination::ManualTriggers { ref workflow_path } => {
+                    app.workflow_manual_triggers_popup_params(workflow_path.as_path(), Some(0))
+                }
+                WorkflowControlsDestination::ManualTrigger {
+                    ref workflow_path,
+                    ref trigger_id,
+                } => app.workflow_manual_trigger_popup_params(
+                    workflow_path.as_path(),
+                    trigger_id,
+                    Some(0),
+                ),
+                WorkflowControlsDestination::TriggerType {
+                    ref workflow_path,
+                    ref trigger_id,
+                } => app.workflow_trigger_type_popup_params(
+                    workflow_path.as_path(),
+                    trigger_id,
+                    Some(0),
+                ),
+            },
+        );
     }
 
     pub(crate) fn refresh_workflow_controls_if_active(&mut self) {
-        let Some(initial_selected_idx) = self
-            .chat_widget
-            .selected_index_for_active_view(WORKFLOW_CONTROLS_VIEW_ID)
-        else {
-            return;
-        };
-        self.show_workflow_popup(
-            self.workflow_root_popup_params(Some(initial_selected_idx)),
-            /*replace_if_active*/ true,
-        );
+        let _ = self
+            .refresh_selection_popup_if_active(WORKFLOW_CONTROLS_VIEW_ID, |app, selected_idx| {
+                app.workflow_root_popup_params(Some(selected_idx))
+            });
     }
 
     pub(crate) fn start_manual_workflow_trigger_from_ui(
@@ -162,27 +155,17 @@ impl App {
         workflow_path: PathBuf,
         reopen: WorkflowControlsDestination,
     ) {
-        let Ok(editor_cmd) = self.resolve_editor_command_for_workflows() else {
-            return;
-        };
-
-        let edit_result = tui
-            .with_restored(tui::RestoreMode::KeepRaw, || async {
-                external_editor::edit_file(workflow_path.as_path(), &editor_cmd).await
-            })
-            .await;
-        match edit_result {
-            Ok(()) => {
-                self.open_workflow_control_view(reopen);
-            }
-            Err(err) => {
-                self.chat_widget
-                    .add_to_history(history_cell::new_error_event(format!(
-                        "Failed to open editor: {err}",
-                    )));
-            }
+        if self
+            .edit_file_with_external_editor(
+                tui,
+                ExternalEditorErrorTarget::History,
+                workflow_path.as_path(),
+            )
+            .await
+            .is_ok()
+        {
+            self.open_workflow_control_view(reopen);
         }
-        tui.frame_requester().schedule_frame();
     }
 
     pub(crate) async fn edit_workflow_job_field_from_ui(
@@ -201,51 +184,36 @@ impl App {
                 return;
             }
         };
-        let Ok(editor_cmd) = self.resolve_editor_command_for_workflows() else {
-            return;
-        };
         let suffix = match field {
             WorkflowJobEditableField::Needs => ".yaml",
             WorkflowJobEditableField::Steps => ".yaml",
         };
-        let edited = tui
-            .with_restored(tui::RestoreMode::KeepRaw, || async {
-                external_editor::run_editor_with_suffix(&seed, &editor_cmd, suffix).await
-            })
-            .await;
-        match edited {
-            Ok(updated) => match workflow_editor::write_job_field(
-                workflow_path.as_path(),
-                &job_name,
-                field,
-                &updated,
-            ) {
-                Ok(()) => {
-                    self.chat_widget.add_info_message(
-                        format!(
-                            "Updated `{}` for workflow job `{job_name}`.",
-                            workflow_job_field_label(field)
-                        ),
-                        /*hint*/ None,
-                    );
-                    self.open_workflow_control_view(WorkflowControlsDestination::Job {
-                        workflow_path,
-                        job_name,
-                    });
-                }
-                Err(err) => {
-                    self.chat_widget
-                        .add_to_history(history_cell::new_error_event(err));
-                }
-            },
+        let Ok(updated) = self
+            .edit_seed_with_external_editor(tui, ExternalEditorErrorTarget::History, &seed, suffix)
+            .await
+        else {
+            return;
+        };
+        match workflow_editor::write_job_field(workflow_path.as_path(), &job_name, field, &updated)
+        {
+            Ok(()) => {
+                self.chat_widget.add_info_message(
+                    format!(
+                        "Updated `{}` for workflow job `{job_name}`.",
+                        workflow_job_field_label(field)
+                    ),
+                    /*hint*/ None,
+                );
+                self.open_workflow_control_view(WorkflowControlsDestination::Job {
+                    workflow_path,
+                    job_name,
+                });
+            }
             Err(err) => {
                 self.chat_widget
-                    .add_to_history(history_cell::new_error_event(format!(
-                        "Failed to open editor: {err}",
-                    )));
+                    .add_to_history(history_cell::new_error_event(err));
             }
         }
-        tui.frame_requester().schedule_frame();
     }
 
     pub(crate) async fn edit_workflow_trigger_field_from_ui(
@@ -267,52 +235,41 @@ impl App {
                 return;
             }
         };
-        let Ok(editor_cmd) = self.resolve_editor_command_for_workflows() else {
-            return;
-        };
         let suffix = if matches!(field, WorkflowTriggerEditableField::Jobs) {
             ".yaml"
         } else {
             ".txt"
         };
-        let edited = tui
-            .with_restored(tui::RestoreMode::KeepRaw, || async {
-                external_editor::run_editor_with_suffix(&seed, &editor_cmd, suffix).await
-            })
-            .await;
-        match edited {
-            Ok(updated) => match workflow_editor::write_trigger_field(
-                workflow_path.as_path(),
-                &trigger_id,
-                field,
-                &updated,
-            ) {
-                Ok(next_trigger_id) => {
-                    self.chat_widget.add_info_message(
-                        format!(
-                            "Updated `{}` for workflow trigger `{next_trigger_id}`.",
-                            workflow_trigger_field_label(field)
-                        ),
-                        /*hint*/ None,
-                    );
-                    self.open_workflow_control_view(WorkflowControlsDestination::ManualTrigger {
-                        workflow_path,
-                        trigger_id: next_trigger_id,
-                    });
-                }
-                Err(err) => {
-                    self.chat_widget
-                        .add_to_history(history_cell::new_error_event(err));
-                }
-            },
+        let Ok(updated) = self
+            .edit_seed_with_external_editor(tui, ExternalEditorErrorTarget::History, &seed, suffix)
+            .await
+        else {
+            return;
+        };
+        match workflow_editor::write_trigger_field(
+            workflow_path.as_path(),
+            &trigger_id,
+            field,
+            &updated,
+        ) {
+            Ok(next_trigger_id) => {
+                self.chat_widget.add_info_message(
+                    format!(
+                        "Updated `{}` for workflow trigger `{next_trigger_id}`.",
+                        workflow_trigger_field_label(field)
+                    ),
+                    /*hint*/ None,
+                );
+                self.open_workflow_control_view(WorkflowControlsDestination::ManualTrigger {
+                    workflow_path,
+                    trigger_id: next_trigger_id,
+                });
+            }
             Err(err) => {
                 self.chat_widget
-                    .add_to_history(history_cell::new_error_event(format!(
-                        "Failed to open editor: {err}",
-                    )));
+                    .add_to_history(history_cell::new_error_event(err));
             }
         }
-        tui.frame_requester().schedule_frame();
     }
 
     pub(crate) fn toggle_workflow_job_enabled_from_ui(
@@ -445,37 +402,6 @@ impl App {
                     .add_to_history(history_cell::new_error_event(err));
             }
         }
-    }
-
-    fn resolve_editor_command_for_workflows(&mut self) -> Result<Vec<Vec<String>>, ()> {
-        match external_editor::resolve_editor_commands() {
-            Ok(cmds) => Ok(cmds),
-            Err(external_editor::EditorError::MissingEditor) => {
-                self.chat_widget
-                    .add_to_history(history_cell::new_error_event(
-                    "Cannot open external editor: no usable editor found in $VISUAL, $EDITOR, or `vim`."
-                        .to_string(),
-                ));
-                Err(())
-            }
-            Err(err) => {
-                self.chat_widget
-                    .add_to_history(history_cell::new_error_event(format!(
-                        "Failed to open editor: {err}",
-                    )));
-                Err(())
-            }
-        }
-    }
-
-    fn show_workflow_popup(&mut self, params: SelectionViewParams, replace_if_active: bool) {
-        if replace_if_active {
-            let _ = self
-                .chat_widget
-                .replace_selection_view_if_active(WORKFLOW_CONTROLS_VIEW_ID, params);
-            return;
-        }
-        self.chat_widget.show_selection_view(params);
     }
 
     fn workflow_root_popup_params(

@@ -21,6 +21,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 
 use super::App;
+use super::editor_helpers::ExternalEditorErrorTarget;
 use crate::app_event::AppEvent;
 use crate::app_event::ClawbotControlsDestination;
 use crate::app_event::ClawbotFeishuConfigField;
@@ -32,7 +33,6 @@ use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
-use crate::external_editor;
 use crate::render::renderable::ColumnRenderable;
 use crate::tui;
 
@@ -144,24 +144,20 @@ impl App {
     }
 
     pub(crate) fn open_clawbot_management_view(&mut self, destination: ClawbotControlsDestination) {
-        let active_selected_idx = self
-            .chat_widget
-            .selected_index_for_active_view(CLAWBOT_MANAGEMENT_VIEW_ID);
-        let initial_selected_idx =
-            if active_selected_idx.is_some() && self.clawbot_controls_destination == destination {
-                active_selected_idx
-            } else {
-                Some(0)
-            };
         self.clawbot_controls_destination = destination.clone();
-        let params = self.clawbot_management_popup_params(&destination, initial_selected_idx);
-        if active_selected_idx.is_some() {
-            let _ = self
-                .chat_widget
-                .replace_selection_view_if_active(CLAWBOT_MANAGEMENT_VIEW_ID, params);
-        } else {
-            self.chat_widget.show_selection_view(params);
-        }
+        self.open_selection_popup_for_view(
+            CLAWBOT_MANAGEMENT_VIEW_ID,
+            |app, active_selected_idx| {
+                let initial_selected_idx = if active_selected_idx.is_some()
+                    && app.clawbot_controls_destination == destination
+                {
+                    active_selected_idx
+                } else {
+                    Some(0)
+                };
+                app.clawbot_management_popup_params(&destination, initial_selected_idx)
+            },
+        );
     }
 
     fn refresh_clawbot_management_popup(&mut self) {
@@ -337,9 +333,6 @@ impl App {
         label: &'static str,
         path: PathBuf,
     ) {
-        let Ok(editor_cmd) = self.resolve_editor_command_for_clawbot() else {
-            return;
-        };
         if let Some(parent) = path.parent()
             && let Err(err) = fs::create_dir_all(parent)
         {
@@ -352,37 +345,16 @@ impl App {
                 .add_error_message(format!("Failed to prepare {label}: {err}"));
             return;
         }
-        let edit_result = tui
-            .with_restored(tui::RestoreMode::KeepRaw, || async {
-                external_editor::edit_file(path.as_path(), &editor_cmd).await
-            })
-            .await;
-        match edit_result {
-            Ok(()) => {
-                self.refresh_clawbot_management_popup();
-            }
-            Err(err) => {
-                self.chat_widget
-                    .add_error_message(format!("Failed to open {label}: {err}"));
-            }
-        }
-        tui.frame_requester().schedule_frame();
-    }
-
-    fn resolve_editor_command_for_clawbot(&mut self) -> std::result::Result<Vec<Vec<String>>, ()> {
-        match external_editor::resolve_editor_commands() {
-            Ok(cmds) => Ok(cmds),
-            Err(external_editor::EditorError::MissingEditor) => {
-                self.chat_widget.add_error_message(
-                    "Cannot open external editor: no usable editor found in $VISUAL, $EDITOR, or `vim`.".to_string(),
-                );
-                Err(())
-            }
-            Err(err) => {
-                self.chat_widget
-                    .add_error_message(format!("Failed to open editor: {err}"));
-                Err(())
-            }
+        if self
+            .edit_file_with_external_editor(
+                tui,
+                ExternalEditorErrorTarget::ErrorMessage,
+                path.as_path(),
+            )
+            .await
+            .is_ok()
+        {
+            self.refresh_clawbot_management_popup();
         }
     }
 
