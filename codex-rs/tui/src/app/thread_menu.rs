@@ -13,36 +13,15 @@ const JUMP_TO_MESSAGE_VIEW_ID: &str = "jump-to-message";
 
 impl App {
     pub(crate) fn open_thread_panel(&mut self) {
-        let initial_selected_idx = self
-            .chat_widget
-            .selected_index_for_active_view(THREAD_PANEL_VIEW_ID);
-        let params = thread_panel_params(self.chat_widget.is_task_running(), initial_selected_idx);
-        if !self
-            .chat_widget
-            .replace_selection_view_if_active(THREAD_PANEL_VIEW_ID, params)
-        {
-            self.chat_widget.show_selection_view(thread_panel_params(
-                self.chat_widget.is_task_running(),
-                initial_selected_idx,
-            ));
-        }
+        self.open_selection_popup_for_view(THREAD_PANEL_VIEW_ID, |app, initial_selected_idx| {
+            thread_panel_params(app.chat_widget.is_task_running(), initial_selected_idx)
+        });
     }
 
     pub(crate) fn open_jump_to_message_panel(&mut self) {
-        let initial_selected_idx = self
-            .chat_widget
-            .selected_index_for_active_view(JUMP_TO_MESSAGE_VIEW_ID);
-        let params = jump_to_message_panel_params(&self.transcript_cells, initial_selected_idx);
-        if !self
-            .chat_widget
-            .replace_selection_view_if_active(JUMP_TO_MESSAGE_VIEW_ID, params)
-        {
-            self.chat_widget
-                .show_selection_view(jump_to_message_panel_params(
-                    &self.transcript_cells,
-                    initial_selected_idx,
-                ));
-        }
+        self.open_selection_popup_for_view(JUMP_TO_MESSAGE_VIEW_ID, |app, initial_selected_idx| {
+            jump_to_message_panel_params(&app.transcript_cells, initial_selected_idx)
+        });
     }
 }
 
