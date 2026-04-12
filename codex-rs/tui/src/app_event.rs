@@ -16,6 +16,7 @@ use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
+use codex_app_server_protocol::ThreadDreamStartResponse;
 use codex_app_server_protocol::Turn as AppServerTurn;
 use codex_chatgpt::connectors::AppInfo;
 use codex_clawbot::ClawbotTurnMode;
@@ -157,6 +158,12 @@ pub(crate) enum AppEvent {
     /// Retrospect the active thread, update repo-local dream artifacts, then start a fresh
     /// session.
     DreamSession,
+
+    /// Final result for one background `/dream` retrospective request.
+    DreamSessionCompleted {
+        thread_id: ThreadId,
+        result: Box<Result<ThreadDreamStartResponse, String>>,
+    },
 
     /// Clear the terminal UI (screen + scrollback), start a fresh session, and keep the
     /// previous chat resumable.

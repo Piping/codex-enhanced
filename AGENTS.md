@@ -208,7 +208,8 @@ These guidelines apply to app-server protocol work in `codex-rs`, especially:
 <!-- codex:dream:start -->
 ## Dream Guidance
 
-## `/dream`
-- Treat `/dream` as `thread/dream/start`, not `thread/memories/update`.
-- Prefer an end-to-end PTY smoke test that verifies writeback to `AGENTS.md`, `.codex/memory/MEMORY.md`, `.codex/memory/next_session.md`, and the per-thread retrospective file.
+## Crate extraction guidance
+- Prefer dedicated workspace crates for reusable subsystems instead of adding more shared logic to `codex-core` or `codex-tui`.
+- If both `/dream` and memories need the same rollout filtering or retrospective-input construction, keep that shared code in `codex-rs/retrospective`, not in `core/src/memories`.
+- Keep rollout retrospective templates in `codex-rs/retrospective/templates/retrospective/`; `core/templates/memories/` is only for memories-specific prompts.
 <!-- codex:dream:end -->

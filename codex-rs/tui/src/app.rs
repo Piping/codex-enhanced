@@ -1094,6 +1094,7 @@ pub(crate) struct App {
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
     agent_navigation: AgentNavigationState,
     active_thread_id: Option<ThreadId>,
+    pending_dream_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<ThreadBufferedEvent>>,
     primary_thread_id: Option<ThreadId>,
     last_subagent_backfill_attempt: Option<ThreadId>,
@@ -4224,6 +4225,7 @@ impl App {
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
             active_thread_id: None,
+            pending_dream_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
             last_subagent_backfill_attempt: None,
@@ -8333,6 +8335,7 @@ guardian_approval = true
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
             active_thread_id: None,
+            pending_dream_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
             last_subagent_backfill_attempt: None,
@@ -8394,6 +8397,7 @@ guardian_approval = true
                 thread_event_listener_tasks: HashMap::new(),
                 agent_navigation: AgentNavigationState::default(),
                 active_thread_id: None,
+                pending_dream_thread_id: None,
                 active_thread_rx: None,
                 primary_thread_id: None,
                 last_subagent_backfill_attempt: None,
@@ -8891,6 +8895,53 @@ jobs:
     }
 
     #[tokio::test]
+    async fn dream_session_starts_in_background_and_emits_history_cell() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+            .await
+            .expect("embedded app server");
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
+
+        dream_controller::DreamController::begin(&mut app, &app_server);
+
+        assert_eq!(app.pending_dream_thread_id, Some(thread_id));
+        let cell = wait_for_history_cell_containing(
+            &mut app_event_rx,
+            "Running /dream retrospective in the background.",
+        )
+        .await;
+        let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+        assert!(rendered.contains(
+            "Stay on this thread to start a fresh session automatically when it completes."
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dream_session_rejects_duplicate_background_run() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+            .await
+            .expect("embedded app server");
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
+        app.pending_dream_thread_id = Some(thread_id);
+
+        dream_controller::DreamController::begin(&mut app, &app_server);
+
+        assert_eq!(app.pending_dream_thread_id, Some(thread_id));
+        let cell = wait_for_history_cell_containing(
+            &mut app_event_rx,
+            "A /dream retrospective is already running.",
+        )
+        .await;
+        let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+        assert!(rendered.contains("already running"));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn feedback_submission_for_inactive_thread_replays_into_origin_thread() {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let origin_thread_id = ThreadId::new();
@@ -8979,6 +9030,28 @@ jobs:
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    async fn wait_for_history_cell_containing(
+        app_event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+        needle: &str,
+    ) -> Box<dyn HistoryCell> {
+        loop {
+            let event = time::timeout(Duration::from_secs(1), app_event_rx.recv())
+                .await
+                .expect("timed out waiting for history cell")
+                .expect("app event");
+            match event {
+                AppEvent::InsertHistoryCell(cell) => {
+                    let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+                    if rendered.contains(needle) {
+                        return cell;
+                    }
+                }
+                AppEvent::DreamSessionCompleted { .. } => {}
+                other => panic!("expected history cell containing `{needle}`, got {other:?}"),
+            }
+        }
     }
 
     fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {

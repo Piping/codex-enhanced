@@ -28,8 +28,6 @@ use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
-use codex_app_server_protocol::ThreadDreamStartParams;
-use codex_app_server_protocol::ThreadDreamStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadListParams;
@@ -540,22 +538,6 @@ impl AppServerSession {
             .await
             .wrap_err("thread/compact/start failed in TUI")?;
         Ok(())
-    }
-
-    pub(crate) async fn thread_dream_start(
-        &mut self,
-        thread_id: ThreadId,
-    ) -> Result<ThreadDreamStartResponse> {
-        let request_id = self.next_request_id();
-        self.client
-            .request_typed(ClientRequest::ThreadDreamStart {
-                request_id,
-                params: ThreadDreamStartParams {
-                    thread_id: thread_id.to_string(),
-                },
-            })
-            .await
-            .wrap_err("thread/dream/start failed in TUI")
     }
 
     pub(crate) async fn thread_shell_command(
