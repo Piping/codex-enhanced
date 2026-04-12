@@ -1,21 +1,23 @@
-use super::types::DreamContext;
-use super::types::DreamIndex;
-use super::types::DreamIndexDocument;
-use super::types::DreamModelOutput;
-use super::types::DreamPipelineResult;
-use super::types::DreamSearchResult;
-use bm25::Document;
-use bm25::Language;
-use bm25::SearchEngineBuilder;
-use chrono::Utc;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 
+use bm25::Document;
+use bm25::Language;
+use bm25::SearchEngineBuilder;
+use chrono::Utc;
+
+use crate::types::DreamContext;
+use crate::types::DreamIndex;
+use crate::types::DreamIndexDocument;
+use crate::types::DreamModelOutput;
+use crate::types::DreamPipelineResult;
+use crate::types::DreamSearchResult;
+
 const DREAM_START_MARKER: &str = "<!-- codex:dream:start -->";
 const DREAM_END_MARKER: &str = "<!-- codex:dream:end -->";
 
-pub(super) async fn write_dream_artifacts(
+pub(crate) async fn write_dream_artifacts(
     context: &DreamContext,
     output: &DreamModelOutput,
 ) -> anyhow::Result<DreamPipelineResult> {
@@ -300,13 +302,14 @@ fn managed_block_contents(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
+    use pretty_assertions::assert_eq;
+
     use super::managed_block_contents;
     use super::search_index;
     use super::upsert_managed_block;
-    use crate::dream::types::DreamIndex;
-    use crate::dream::types::DreamIndexDocument;
-    use chrono::Utc;
-    use pretty_assertions::assert_eq;
+    use crate::types::DreamIndex;
+    use crate::types::DreamIndexDocument;
 
     #[test]
     fn upsert_managed_block_appends_when_markers_are_missing() {
@@ -361,8 +364,8 @@ after";
             ],
         };
 
-        let results = search_index(&index, "feishu runtime", 2);
+        let results = search_index(&index, "feishu runtime", 5);
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].document.id, "memory:1");
+        assert_eq!(results[0].document.id, "memory:1".to_string());
     }
 }

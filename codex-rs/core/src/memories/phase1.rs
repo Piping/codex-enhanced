@@ -3,26 +3,23 @@ use crate::RolloutRecorder;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
-use crate::contextual_user_message::is_memory_excluded_contextual_user_fragment;
 use crate::memories::metrics;
 use crate::memories::phase_one;
 use crate::memories::phase_one::PRUNE_BATCH_SIZE;
 use crate::memories::prompts::build_stage_one_input_message;
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
-use crate::rollout::policy::should_persist_response_item_for_memories;
 use codex_api::ResponseEvent;
 use codex_config::types::MemoriesConfig;
 use codex_otel::SessionTelemetry;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::ServiceTier;
-use codex_protocol::error::CodexErr;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TokenUsage;
+use codex_retrospective::serialize_filtered_rollout_response_items;
 use codex_secrets::redact_secrets;
 use futures::StreamExt;
 use serde::Deserialize;
@@ -121,8 +118,6 @@ pub(in crate::memories) async fn run(session: &Arc<Session>, config: &Config) {
         counts.failed
     );
 }
-
-pub(crate) use job::serialize_filtered_rollout_response_items;
 
 /// Prune old un-used "dead" raw memories.
 pub(in crate::memories) async fn prune(session: &Arc<Session>, config: &Config) {
@@ -463,63 +458,6 @@ mod job {
                 JobOutcome::Failed
             }
         }
-    }
-
-    /// Serializes filtered stage-1 memory items for prompt inclusion.
-    pub(crate) fn serialize_filtered_rollout_response_items(
-        items: &[RolloutItem],
-    ) -> codex_protocol::error::Result<String> {
-        let filtered = items
-            .iter()
-            .filter_map(|item| {
-                if let RolloutItem::ResponseItem(item) = item {
-                    sanitize_response_item_for_memories(item)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        serde_json::to_string(&filtered).map_err(|err| {
-            CodexErr::InvalidRequest(format!("failed to serialize rollout memory: {err}"))
-        })
-    }
-
-    fn sanitize_response_item_for_memories(item: &ResponseItem) -> Option<ResponseItem> {
-        let ResponseItem::Message {
-            id,
-            role,
-            content,
-            end_turn,
-            phase,
-        } = item
-        else {
-            return should_persist_response_item_for_memories(item).then(|| item.clone());
-        };
-
-        if role == "developer" {
-            return None;
-        }
-
-        if role != "user" {
-            return Some(item.clone());
-        }
-
-        let content = content
-            .iter()
-            .filter(|content_item| !is_memory_excluded_contextual_user_fragment(content_item))
-            .cloned()
-            .collect::<Vec<_>>();
-        if content.is_empty() {
-            return None;
-        }
-
-        Some(ResponseItem::Message {
-            id: id.clone(),
-            role: role.clone(),
-            content,
-            end_turn: *end_turn,
-            phase: phase.clone(),
-        })
     }
 }
 

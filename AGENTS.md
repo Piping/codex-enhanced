@@ -208,8 +208,7 @@ These guidelines apply to app-server protocol work in `codex-rs`, especially:
 <!-- codex:dream:start -->
 ## Dream Guidance
 
-## `/dream` workflow
-- Treat `/dream` as `thread/dream/start`; do not route TUI `/dream` through `thread/memories/update`.
-- Reserve `thread/memories/update` for explicit memories-maintenance flows that should wait for the memories pipeline to finish.
-- When validating `/dream` end-to-end, prefer a PTY smoke test that confirms updated `AGENTS.md`, `.codex/memory/MEMORY.md`, `.codex/memory/next_session.md`, and a per-thread retrospective are written.
+## `/dream`
+- Treat `/dream` as `thread/dream/start`, not `thread/memories/update`.
+- Prefer an end-to-end PTY smoke test that verifies writeback to `AGENTS.md`, `.codex/memory/MEMORY.md`, `.codex/memory/next_session.md`, and the per-thread retrospective file.
 <!-- codex:dream:end -->

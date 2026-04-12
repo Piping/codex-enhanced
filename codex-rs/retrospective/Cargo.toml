@@ -1,0 +1,24 @@
+[package]
+name = "codex-retrospective"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_retrospective"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+codex-protocol = { workspace = true }
+codex-rollout = { workspace = true }
+codex-utils-output-truncation = { workspace = true }
+codex-utils-template = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+codex-models-manager = { workspace = true }
+pretty_assertions = { workspace = true }

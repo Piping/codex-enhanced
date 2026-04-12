@@ -52,17 +52,18 @@ impl App {
         app_server: &mut AppServerSession,
     ) -> Result<()> {
         let workspace_root = self.config.cwd.to_path_buf();
-        let workspace_changed = self.clawbot_workspace_root.as_ref() != Some(&workspace_root);
+        let workspace_changed = self.clawbot.workspace_root.as_ref() != Some(&workspace_root);
         let provider_task_missing_or_finished = self
-            .clawbot_provider_task
+            .clawbot
+            .provider_task
             .as_ref()
             .is_none_or(tokio::task::JoinHandle::is_finished);
         if workspace_changed {
             self.abort_clawbot_provider_runtime();
-            self.clawbot_workspace_root = Some(workspace_root.clone());
-            self.clawbot_pending_turns.clear();
+            self.clawbot.workspace_root = Some(workspace_root.clone());
+            self.clawbot.pending_turns.clear();
         }
-        self.clawbot_workspace_root = Some(workspace_root.clone());
+        self.clawbot.workspace_root = Some(workspace_root.clone());
         let mut runtime = ClawbotRuntime::load(workspace_root.clone())?;
         let should_refresh_provider_runtime = should_refresh_clawbot_provider_runtime(
             workspace_changed,
@@ -77,7 +78,7 @@ impl App {
         if should_refresh_provider_runtime {
             let reason = if workspace_changed {
                 "workspace_changed"
-            } else if self.clawbot_provider_task.is_none() {
+            } else if self.clawbot.provider_task.is_none() {
                 "task_missing"
             } else {
                 "task_finished"
@@ -117,7 +118,8 @@ impl App {
 
     fn clawbot_store(&self) -> Result<ClawbotStore> {
         let workspace_root = self
-            .clawbot_workspace_root
+            .clawbot
+            .workspace_root
             .clone()
             .or_else(|| Some(self.config.cwd.to_path_buf()))
             .context("missing clawbot workspace root")?;
@@ -126,12 +128,13 @@ impl App {
 
     fn restore_clawbot_pending_turns(&mut self) -> Result<()> {
         let pending_turns = self.clawbot_store()?.load_pending_turns()?;
-        self.clawbot_pending_turns.clear();
+        self.clawbot.pending_turns.clear();
         for pending_turn in pending_turns {
             let thread_id = ThreadId::from_string(&pending_turn.thread_id).with_context(|| {
                 format!("invalid clawbot thread id `{}`", pending_turn.thread_id)
             })?;
-            self.clawbot_pending_turns
+            self.clawbot
+                .pending_turns
                 .entry(thread_id)
                 .or_default()
                 .push_back(pending_turn);
@@ -144,7 +147,8 @@ impl App {
         app_server: &mut AppServerSession,
     ) -> Result<()> {
         let pending_turns = self
-            .clawbot_pending_turns
+            .clawbot
+            .pending_turns
             .values()
             .flat_map(|queue| queue.iter().cloned())
             .collect::<Vec<_>>();
@@ -202,7 +206,7 @@ impl App {
         let app_event_tx = self.app_event_tx.clone();
         let workspace = workspace_root.display().to_string();
         let workspace_root = workspace_root.to_path_buf();
-        self.clawbot_provider_task = Some(tokio::spawn(async move {
+        self.clawbot.provider_task = Some(tokio::spawn(async move {
             let (provider_event_tx, mut provider_event_rx) = mpsc::unbounded_channel();
             let forward_task = tokio::spawn(async move {
                 while let Some(event) = provider_event_rx.recv().await {
@@ -221,14 +225,14 @@ impl App {
     }
 
     pub(super) fn abort_clawbot_provider_runtime(&mut self) {
-        if let Some(handle) = self.clawbot_provider_task.take() {
+        if let Some(handle) = self.clawbot.provider_task.take() {
             handle.abort();
         }
     }
 
     pub(super) fn refresh_clawbot_provider_runtime(&mut self) -> Result<()> {
         let workspace_root = self.config.cwd.to_path_buf();
-        self.clawbot_workspace_root = Some(workspace_root.clone());
+        self.clawbot.workspace_root = Some(workspace_root.clone());
         let runtime = ClawbotRuntime::load(workspace_root.clone())?;
         if let Some(feishu) = runtime.snapshot().config.feishu.clone()
             && feishu.has_api_credentials()
@@ -245,7 +249,7 @@ impl App {
         app_server: &mut AppServerSession,
         event: ProviderEvent,
     ) -> Result<()> {
-        let Some(workspace_root) = self.clawbot_workspace_root.clone() else {
+        let Some(workspace_root) = self.clawbot.workspace_root.clone() else {
             return Ok(());
         };
         let session_to_drain = match &event {
@@ -278,7 +282,7 @@ impl App {
         thread_id: ThreadId,
         turn: codex_app_server_protocol::Turn,
     ) -> Result<()> {
-        let Some(workspace_root) = self.clawbot_workspace_root.clone() else {
+        let Some(workspace_root) = self.clawbot.workspace_root.clone() else {
             return Ok(());
         };
         let next_session =
@@ -413,7 +417,7 @@ impl App {
         app_server: &mut AppServerSession,
         session: &ProviderSessionRef,
     ) -> Result<()> {
-        let Some(workspace_root) = self.clawbot_workspace_root.clone() else {
+        let Some(workspace_root) = self.clawbot.workspace_root.clone() else {
             return Ok(());
         };
         let runtime = ClawbotRuntime::load(workspace_root.clone())?;
@@ -455,7 +459,8 @@ impl App {
             return Ok(());
         }
         if self
-            .clawbot_pending_turns
+            .clawbot
+            .pending_turns
             .get(&thread_id)
             .is_some_and(|queue| queue.iter().any(|pending| pending.session == *session))
         {
@@ -724,7 +729,7 @@ impl App {
         #[cfg(test)]
         {
             let _ = workspace_root;
-            self.clawbot_outbound_messages.push(message);
+            self.clawbot.outbound_messages.push(message);
             Ok(())
         }
 
@@ -761,14 +766,15 @@ impl App {
     ) -> Result<Option<String>> {
         #[cfg(test)]
         {
-            self.clawbot_outbound_reactions.push(reaction);
+            self.clawbot.outbound_reactions.push(reaction);
             Ok(None)
         }
 
         #[cfg(not(test))]
         {
             let workspace_root = self
-                .clawbot_workspace_root
+                .clawbot
+                .workspace_root
                 .clone()
                 .context("missing clawbot workspace root for outbound reaction")?;
             let runtime = ClawbotRuntime::load(workspace_root)?;
@@ -792,7 +798,7 @@ impl App {
         #[cfg(test)]
         {
             let _ = workspace_root;
-            self.clawbot_removed_outbound_reactions.push(reaction);
+            self.clawbot.removed_outbound_reactions.push(reaction);
             Ok(())
         }
 
@@ -827,7 +833,8 @@ impl App {
             auto_ack_reaction_id,
             turn_mode,
         };
-        self.clawbot_pending_turns
+        self.clawbot
+            .pending_turns
             .entry(thread_id)
             .or_default()
             .push_back(pending_turn.clone());
@@ -848,7 +855,7 @@ impl App {
         thread_id: ThreadId,
         turn_id: &str,
     ) -> Result<Option<PendingClawbotTurn>> {
-        let Some(queue) = self.clawbot_pending_turns.get_mut(&thread_id) else {
+        let Some(queue) = self.clawbot.pending_turns.get_mut(&thread_id) else {
             return Ok(None);
         };
         let pending = queue
@@ -856,7 +863,7 @@ impl App {
             .position(|pending| pending.turn_id == turn_id)
             .and_then(|index| queue.remove(index));
         if queue.is_empty() {
-            self.clawbot_pending_turns.remove(&thread_id);
+            self.clawbot.pending_turns.remove(&thread_id);
         }
         if pending.is_some() {
             let _ = self.remove_pending_clawbot_turn(thread_id, turn_id)?;
@@ -878,7 +885,8 @@ impl App {
         thread_id: ThreadId,
         turn_id: &str,
     ) -> Option<ClawbotTurnMode> {
-        self.clawbot_pending_turns
+        self.clawbot
+            .pending_turns
             .get(&thread_id)?
             .iter()
             .find(|pending| pending.turn_id == turn_id)

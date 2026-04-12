@@ -2,6 +2,8 @@ use crate::memories::memory_root;
 use crate::memories::phase_one;
 use crate::memories::storage::rollout_summary_file_stem_from_parts;
 use codex_protocol::openai_models::ModelInfo;
+use codex_retrospective::RetrospectiveInputBudget;
+use codex_retrospective::build_rollout_retrospective_input_message;
 use codex_state::Phase2InputSelection;
 use codex_state::Stage1Output;
 use codex_state::Stage1OutputRef;
@@ -17,12 +19,6 @@ static CONSOLIDATION_PROMPT_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     parse_embedded_template(
         include_str!("../../templates/memories/consolidation.md"),
         "memories/consolidation.md",
-    )
-});
-static STAGE_ONE_INPUT_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
-    parse_embedded_template(
-        include_str!("../../templates/memories/stage_one_input.md"),
-        "memories/stage_one_input.md",
     )
 });
 static MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
@@ -136,25 +132,16 @@ pub(super) fn build_stage_one_input_message(
     rollout_cwd: &Path,
     rollout_contents: &str,
 ) -> anyhow::Result<String> {
-    let rollout_token_limit = model_info
-        .context_window
-        .and_then(|limit| (limit > 0).then_some(limit))
-        .map(|limit| limit.saturating_mul(model_info.effective_context_window_percent) / 100)
-        .map(|limit| (limit.saturating_mul(phase_one::CONTEXT_WINDOW_PERCENT) / 100).max(1))
-        .and_then(|limit| usize::try_from(limit).ok())
-        .unwrap_or(phase_one::DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT);
-    let truncated_rollout_contents = truncate_text(
+    build_rollout_retrospective_input_message(
+        model_info,
+        RetrospectiveInputBudget {
+            fallback_rollout_token_limit: phase_one::DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT,
+            context_window_percent: phase_one::CONTEXT_WINDOW_PERCENT,
+        },
+        rollout_path,
+        rollout_cwd,
         rollout_contents,
-        TruncationPolicy::Tokens(rollout_token_limit),
-    );
-
-    let rollout_path = rollout_path.display().to_string();
-    let rollout_cwd = rollout_cwd.display().to_string();
-    Ok(STAGE_ONE_INPUT_TEMPLATE.render([
-        ("rollout_path", rollout_path.as_str()),
-        ("rollout_cwd", rollout_cwd.as_str()),
-        ("rollout_contents", truncated_rollout_contents.as_str()),
-    ])?)
+    )
 }
 
 /// Build prompt used for read path. This prompt must be added to the developer instructions. In

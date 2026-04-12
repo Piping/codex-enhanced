@@ -216,9 +216,10 @@ fn serialize_inline_value(value: &YamlValue) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::serialize_yaml_value;
     use pretty_assertions::assert_eq;
     use serde_yaml::Value as YamlValue;
+
+    use super::serialize_yaml_value;
 
     #[test]
     fn serializes_multiline_strings_as_block_scalars() {

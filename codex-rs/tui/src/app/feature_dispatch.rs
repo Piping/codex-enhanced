@@ -1,14 +1,18 @@
+use std::future::Future;
+use std::pin::Pin;
+
 use color_eyre::eyre::Result;
 
 use super::App;
 use super::AppRunControl;
-use super::clawbot_controller::ClawbotController;
+use super::clawbot_controller;
+use super::dream_controller;
 use super::integration_controller::IntegrationController;
 use super::profile_controller::ProfileController;
 use super::session_controller::SessionController;
 use super::settings_controller::SettingsController;
 use super::thread_controller::ThreadController;
-use super::workflow_controller::WorkflowController;
+use super::workflow_controller;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
 use crate::tui;
@@ -19,25 +23,52 @@ pub(super) enum FeatureDispatchOutcome {
     Return(AppRunControl),
 }
 
+pub(super) type FeatureDispatchFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<FeatureDispatchOutcome>> + 'a>>;
+
+type FeatureDispatchFn = for<'a> fn(
+    &'a mut App,
+    &'a mut tui::Tui,
+    &'a mut AppServerSession,
+    AppEvent,
+) -> FeatureDispatchFuture<'a>;
+
+struct RecentFeatureDispatcher {
+    matches: fn(&AppEvent) -> bool,
+    dispatch: FeatureDispatchFn,
+}
+
+const RECENT_FEATURE_DISPATCHERS: &[RecentFeatureDispatcher] = &[
+    RecentFeatureDispatcher {
+        matches: dream_controller::matches_event,
+        dispatch: dream_controller::dispatch,
+    },
+    RecentFeatureDispatcher {
+        matches: workflow_controller::matches_event,
+        dispatch: workflow_controller::dispatch,
+    },
+    RecentFeatureDispatcher {
+        matches: clawbot_controller::matches_event,
+        dispatch: clawbot_controller::dispatch,
+    },
+];
+
 #[derive(Clone, Copy)]
-enum FeatureRoute {
+enum LegacyFeatureRoute {
     Session,
     Profile,
     Thread,
     Btw,
-    Workflow,
-    Clawbot,
     Integration,
     Settings,
 }
 
-impl FeatureRoute {
+impl LegacyFeatureRoute {
     fn for_event(event: &AppEvent) -> Option<Self> {
         match event {
-            AppEvent::NewSession
-            | AppEvent::DreamSession
-            | AppEvent::ClearUi
-            | AppEvent::OpenResumePicker => Some(Self::Session),
+            AppEvent::NewSession | AppEvent::ClearUi | AppEvent::OpenResumePicker => {
+                Some(Self::Session)
+            }
             AppEvent::OpenProfileManagementPanel
             | AppEvent::EditProfileFallbackConfig
             | AppEvent::SwitchRuntimeProfile { .. }
@@ -52,37 +83,6 @@ impl FeatureRoute {
             | AppEvent::BtwInsertSummary
             | AppEvent::BtwInsertFull
             | AppEvent::BtwDiscard => Some(Self::Btw),
-            AppEvent::OpenWorkflowControls
-            | AppEvent::OpenWorkflowControlView { .. }
-            | AppEvent::CreateDefaultWorkflowTemplate
-            | AppEvent::EditWorkflowFile { .. }
-            | AppEvent::ToggleWorkflowTriggerEnabled { .. }
-            | AppEvent::ToggleWorkflowJobEnabled { .. }
-            | AppEvent::CycleWorkflowJobContext { .. }
-            | AppEvent::CycleWorkflowJobResponse { .. }
-            | AppEvent::EditWorkflowJobField { .. }
-            | AppEvent::SetWorkflowTriggerType { .. }
-            | AppEvent::EditWorkflowTriggerField { .. }
-            | AppEvent::WorkflowWorkspaceFilesChanged { .. }
-            | AppEvent::StartManualWorkflowTrigger { .. }
-            | AppEvent::StartManualWorkflowJob { .. }
-            | AppEvent::ShowWorkflowBackgroundTasks
-            | AppEvent::ReplayWorkflowHistory { .. }
-            | AppEvent::BackgroundWorkflowRunCompleted { .. } => Some(Self::Workflow),
-            AppEvent::ClawbotProviderEvent { .. }
-            | AppEvent::ClawbotTurnCompleted { .. }
-            | AppEvent::OpenClawbotManagement
-            | AppEvent::OpenClawbotManagementView { .. }
-            | AppEvent::OpenClawbotFeishuConfigPrompt { .. }
-            | AppEvent::SaveClawbotFeishuConfigValue { .. }
-            | AppEvent::SaveClawbotManualBindSessionId { .. }
-            | AppEvent::ClawbotSetTurnMode { .. }
-            | AppEvent::ClawbotSetThreadForwarding { .. }
-            | AppEvent::ScanClawbotFeishuSessions
-            | AppEvent::ClearClawbotFeishuSessions
-            | AppEvent::RetryClawbotFeishuConnection
-            | AppEvent::ClawbotDisconnectThread { .. }
-            | AppEvent::EditClawbotStateFile { .. } => Some(Self::Clawbot),
             AppEvent::OpenAppLink { .. }
             | AppEvent::OpenUrlInBrowser { .. }
             | AppEvent::RefreshConnectors { .. }
@@ -175,42 +175,59 @@ impl App {
         app_server: &mut AppServerSession,
         event: AppEvent,
     ) -> Result<FeatureDispatchOutcome> {
-        let Some(route) = FeatureRoute::for_event(&event) else {
+        let event = match self
+            .dispatch_recent_feature_event(tui, app_server, event)
+            .await?
+        {
+            FeatureDispatchOutcome::Unhandled(event) => *event,
+            handled => return Ok(handled),
+        };
+
+        let Some(route) = LegacyFeatureRoute::for_event(&event) else {
             return Ok(FeatureDispatchOutcome::Unhandled(Box::new(event)));
         };
 
         match route {
-            FeatureRoute::Session => {
+            LegacyFeatureRoute::Session => {
                 if let Some(control) =
                     SessionController::handle(self, tui, app_server, event).await?
                 {
                     return Ok(FeatureDispatchOutcome::Return(control));
                 }
             }
-            FeatureRoute::Profile => {
+            LegacyFeatureRoute::Profile => {
                 ProfileController::handle(self, tui, app_server, event).await;
             }
-            FeatureRoute::Thread => {
+            LegacyFeatureRoute::Thread => {
                 ThreadController::handle(self, tui, app_server, event).await;
             }
-            FeatureRoute::Btw => {
+            LegacyFeatureRoute::Btw => {
                 self.handle_btw_feature_event(app_server, event).await;
             }
-            FeatureRoute::Workflow => {
-                WorkflowController::handle(self, tui, app_server, event).await;
-            }
-            FeatureRoute::Clawbot => {
-                ClawbotController::handle(self, tui, app_server, event).await;
-            }
-            FeatureRoute::Integration => {
+            LegacyFeatureRoute::Integration => {
                 IntegrationController::handle(self, app_server, event).await;
             }
-            FeatureRoute::Settings => {
+            LegacyFeatureRoute::Settings => {
                 SettingsController::handle(self, tui, app_server, event).await;
             }
         }
 
         Ok(FeatureDispatchOutcome::Handled)
+    }
+
+    async fn dispatch_recent_feature_event(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        event: AppEvent,
+    ) -> Result<FeatureDispatchOutcome> {
+        for dispatcher in RECENT_FEATURE_DISPATCHERS {
+            if (dispatcher.matches)(&event) {
+                return (dispatcher.dispatch)(self, tui, app_server, event).await;
+            }
+        }
+
+        Ok(FeatureDispatchOutcome::Unhandled(Box::new(event)))
     }
 
     pub(super) async fn handle_btw_feature_event(

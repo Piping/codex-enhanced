@@ -1,38 +1,25 @@
-use super::types::DreamContext;
-use super::types::DreamModelOutput;
-use crate::Prompt;
-use crate::ResponseEvent;
-use crate::codex::Session;
-use crate::config::Config;
-use crate::content_items_to_text;
-use codex_otel::SessionTelemetry;
-use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::config_types::ServiceTier;
-use codex_protocol::models::BaseInstructions;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::protocol::TokenUsage;
+use std::sync::LazyLock;
+
 use codex_secrets::redact_secrets;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 use codex_utils_template::Template;
-use futures::StreamExt;
 use serde_json::Value;
 use serde_json::json;
-use std::sync::LazyLock;
-use tracing::warn;
+
+use crate::types::DreamContext;
+use crate::types::DreamModelOutput;
+use crate::types::DreamPromptRequest;
 
 static DREAM_SYSTEM_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     parse_embedded_template(
-        include_str!("../../templates/dream/system.md"),
+        include_str!("../templates/dream/system.md"),
         "dream/system.md",
     )
 });
 static DREAM_INPUT_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     parse_embedded_template(
-        include_str!("../../templates/dream/input.md"),
+        include_str!("../templates/dream/input.md"),
         "dream/input.md",
     )
 });
@@ -43,103 +30,18 @@ const EXISTING_AGENTS_TOKEN_LIMIT: usize = 6_000;
 const VISIBLE_FRAGMENT_TOKEN_LIMIT: usize = 4_000;
 const SKILL_CONTENT_TOKEN_LIMIT: usize = 4_000;
 
-#[derive(Clone)]
-pub(super) struct DreamRequestContext {
-    pub(super) model_info: ModelInfo,
-    pub(super) session_telemetry: SessionTelemetry,
-    pub(super) reasoning_effort: Option<ReasoningEffort>,
-    pub(super) reasoning_summary: ReasoningSummaryConfig,
-    pub(super) service_tier: Option<ServiceTier>,
-    pub(super) turn_metadata_header: Option<String>,
-}
-
-pub(super) async fn build_request_context(
-    session: &Session,
-    config: &Config,
-    model_name: &str,
-) -> DreamRequestContext {
-    let model_info = session
-        .services
-        .models_manager
-        .get_model_info(model_name, &config.to_models_manager_config())
-        .await;
-    let turn_context = session.new_default_turn().await;
-    DreamRequestContext {
-        model_info,
-        session_telemetry: turn_context.session_telemetry.clone(),
-        reasoning_effort: Some(ReasoningEffort::Medium),
-        reasoning_summary: turn_context.reasoning_summary,
-        service_tier: turn_context.config.service_tier,
-        turn_metadata_header: turn_context.turn_metadata_state.current_header_value(),
-    }
-}
-
-pub(super) async fn sample(
-    session: &Session,
+pub(crate) fn build_dream_prompt_request(
     context: &DreamContext,
-    request_context: &DreamRequestContext,
-) -> anyhow::Result<(DreamModelOutput, Option<TokenUsage>)> {
-    let prompt = Prompt {
-        input: vec![ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: build_dream_input_message(context)?,
-            }],
-            end_turn: None,
-            phase: None,
-        }],
-        tools: Vec::new(),
-        parallel_tool_calls: false,
-        base_instructions: BaseInstructions {
-            text: DREAM_SYSTEM_TEMPLATE
-                .render(std::iter::empty::<(&str, &str)>())
-                .unwrap_or_else(|err| {
-                    warn!("failed to render dream system prompt template: {err}");
-                    "Produce a current-thread retrospective as structured JSON.".to_string()
-                }),
-        },
-        personality: None,
-        output_schema: Some(output_schema()),
-    };
+) -> anyhow::Result<DreamPromptRequest> {
+    Ok(DreamPromptRequest {
+        system_prompt: DREAM_SYSTEM_TEMPLATE.render(std::iter::empty::<(&str, &str)>())?,
+        input_message: build_dream_input_message(context)?,
+        output_schema: output_schema(),
+    })
+}
 
-    let mut client_session = session.services.model_client.new_session();
-    let mut stream = client_session
-        .stream(
-            &prompt,
-            &request_context.model_info,
-            &request_context.session_telemetry,
-            request_context.reasoning_effort,
-            request_context.reasoning_summary,
-            request_context.service_tier,
-            request_context.turn_metadata_header.as_deref(),
-        )
-        .await?;
-
-    let mut result = String::new();
-    let mut token_usage = None;
-    while let Some(message) = stream.next().await.transpose()? {
-        match message {
-            ResponseEvent::OutputTextDelta(delta) => result.push_str(&delta),
-            ResponseEvent::OutputItemDone(item) => {
-                if result.is_empty()
-                    && let ResponseItem::Message { content, .. } = item
-                    && let Some(text) = content_items_to_text(&content)
-                {
-                    result.push_str(&text);
-                }
-            }
-            ResponseEvent::Completed {
-                token_usage: usage, ..
-            } => {
-                token_usage = usage;
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    let mut output: DreamModelOutput = serde_json::from_str(&result)?;
+pub(crate) fn parse_dream_model_output(result: &str) -> anyhow::Result<DreamModelOutput> {
+    let mut output: DreamModelOutput = serde_json::from_str(result)?;
     output.thread_title = redact_secrets(output.thread_title);
     output.thread_summary_md = redact_secrets(output.thread_summary_md);
     output.memory_block_md = redact_secrets(output.memory_block_md);
@@ -153,8 +55,7 @@ pub(super) async fn sample(
             skill
         })
         .collect();
-
-    Ok((output, token_usage))
+    Ok(output)
 }
 
 fn build_dream_input_message(context: &DreamContext) -> anyhow::Result<String> {
@@ -270,8 +171,9 @@ fn parse_embedded_template(source: &'static str, template_name: &str) -> Templat
 
 #[cfg(test)]
 mod tests {
-    use super::output_schema;
     use pretty_assertions::assert_eq;
+
+    use super::output_schema;
 
     #[test]
     fn dream_output_schema_requires_expected_fields() {

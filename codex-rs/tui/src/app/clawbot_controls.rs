@@ -144,12 +144,12 @@ impl App {
     }
 
     pub(crate) fn open_clawbot_management_view(&mut self, destination: ClawbotControlsDestination) {
-        self.clawbot_controls_destination = destination.clone();
+        self.clawbot.controls_destination = destination.clone();
         self.open_selection_popup_for_view(
             CLAWBOT_MANAGEMENT_VIEW_ID,
             |app, active_selected_idx| {
                 let initial_selected_idx = if active_selected_idx.is_some()
-                    && app.clawbot_controls_destination == destination
+                    && app.clawbot.controls_destination == destination
                 {
                     active_selected_idx
                 } else {
@@ -161,7 +161,7 @@ impl App {
     }
 
     fn refresh_clawbot_management_popup(&mut self) {
-        self.open_clawbot_management_view(self.clawbot_controls_destination.clone());
+        self.open_clawbot_management_view(self.clawbot.controls_destination.clone());
     }
 
     pub(crate) fn open_clawbot_feishu_config_prompt(&mut self, field: ClawbotFeishuConfigField) {

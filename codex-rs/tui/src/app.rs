@@ -2,7 +2,6 @@ use crate::app_backtrack::BacktrackState;
 use crate::app_command::AppCommand;
 use crate::app_command::AppCommandView;
 use crate::app_event::AppEvent;
-use crate::app_event::ClawbotControlsDestination;
 use crate::app_event::ExitMode;
 use crate::app_event::FeedbackCategory;
 use crate::app_event_sender::AppEventSender;
@@ -82,11 +81,6 @@ use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
-use codex_clawbot::PendingClawbotTurn;
-#[cfg(test)]
-use codex_clawbot::ProviderOutboundReaction;
-#[cfg(test)]
-use codex_clawbot::ProviderOutboundTextMessage;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_core::config::Config;
@@ -163,6 +157,7 @@ mod btw;
 mod clawbot;
 mod clawbot_controller;
 mod clawbot_controls;
+mod dream_controller;
 mod editor_helpers;
 mod feature_dispatch;
 mod integration_controller;
@@ -180,25 +175,23 @@ mod thread_menu;
 mod workflow_controller;
 mod workflow_controls;
 mod workflow_definition;
-mod workflow_editor;
 mod workflow_file_watch;
 mod workflow_history;
 pub(crate) mod workflow_runtime;
 mod workflow_scheduler;
-mod workflow_yaml;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
 use self::btw::BtwSessionState;
+use self::clawbot_controller::ClawbotFeatureState;
 use self::key_chord::KeyChordAction;
 use self::key_chord::KeyChordResolution;
 use self::key_chord::KeyChordState;
 use self::loaded_threads::find_loaded_subagent_threads_for_primary;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
+use self::workflow_controller::WorkflowFeatureState;
 use self::workflow_file_watch::WorkflowFileWatchState;
-use self::workflow_history::WorkflowHistoryState;
-use self::workflow_scheduler::WorkflowSchedulerState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
@@ -1107,22 +1100,10 @@ pub(crate) struct App {
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
-    workflow_thread_notification_channels: workflow_runtime::WorkflowThreadNotificationChannels,
-    workflow_file_watch: Option<WorkflowFileWatchState>,
-    workflow_scheduler: WorkflowSchedulerState,
-    workflow_history: WorkflowHistoryState,
+    workflow: WorkflowFeatureState,
     btw_session: Option<BtwSessionState>,
     btw_closing_thread_ids: HashSet<ThreadId>,
-    clawbot_controls_destination: ClawbotControlsDestination,
-    clawbot_workspace_root: Option<PathBuf>,
-    clawbot_provider_task: Option<JoinHandle<()>>,
-    clawbot_pending_turns: HashMap<ThreadId, VecDeque<PendingClawbotTurn>>,
-    #[cfg(test)]
-    clawbot_outbound_messages: Vec<ProviderOutboundTextMessage>,
-    #[cfg(test)]
-    clawbot_outbound_reactions: Vec<ProviderOutboundReaction>,
-    #[cfg(test)]
-    clawbot_removed_outbound_reactions: Vec<ProviderOutboundReaction>,
+    clawbot: ClawbotFeatureState,
 }
 
 #[derive(Default)]
@@ -1764,7 +1745,7 @@ impl App {
             }
             self.abort_thread_event_listener(thread_id);
             if shutting_down_primary {
-                let stopped_count = self.workflow_scheduler.stop_active_workflow_runs().await;
+                let stopped_count = self.workflow.scheduler.stop_active_workflow_runs().await;
                 if stopped_count > 0 {
                     self.sync_background_workflow_status();
                 }
@@ -1773,11 +1754,11 @@ impl App {
     }
 
     fn background_workflow_labels(&self) -> Vec<String> {
-        self.workflow_scheduler.background_workflow_labels()
+        self.workflow.scheduler.background_workflow_labels()
     }
 
     fn queued_trigger_labels(&self) -> Vec<String> {
-        self.workflow_scheduler.queued_trigger_labels()
+        self.workflow.scheduler.queued_trigger_labels()
     }
 
     fn sync_background_workflow_status(&mut self) {
@@ -1820,7 +1801,8 @@ impl App {
         is_trigger: bool,
     ) -> String {
         let run_id = self
-            .workflow_scheduler
+            .workflow
+            .scheduler
             .next_background_run_id(&workflow_name, &target_name);
         let handle = tokio::spawn(async {
             std::future::pending::<()>().await;
@@ -1838,7 +1820,7 @@ impl App {
                 job_name: target_name,
             }
         };
-        self.workflow_scheduler.register_background_workflow_run(
+        self.workflow.scheduler.register_background_workflow_run(
             run_id.clone(),
             target,
             CancellationToken::new(),
@@ -1854,8 +1836,8 @@ impl App {
         workflow_name: String,
         trigger_id: String,
     ) -> Option<String> {
-        if self.workflow_scheduler.has_running_trigger_run() {
-            self.workflow_scheduler.enqueue_trigger_run(
+        if self.workflow.scheduler.has_running_trigger_run() {
+            self.workflow.scheduler.enqueue_trigger_run(
                 workflow_name,
                 trigger_id,
                 workflow_runtime::OwnedWorkflowPhaseContext::default(),
@@ -1874,7 +1856,8 @@ impl App {
     #[cfg(test)]
     async fn finish_test_background_workflow_run(&mut self, run_id: String) {
         let Some(run) = self
-            .workflow_scheduler
+            .workflow
+            .scheduler
             .take_background_workflow_run(&run_id)
         else {
             return;
@@ -1882,7 +1865,7 @@ impl App {
         run.handle.abort();
         let _ = run.handle.await;
         if run.is_trigger
-            && let Some(next) = self.workflow_scheduler.dequeue_trigger_run()
+            && let Some(next) = self.workflow.scheduler.dequeue_trigger_run()
         {
             self.start_test_background_workflow_run(
                 next.workflow_name,
@@ -2724,7 +2707,7 @@ impl App {
                     .thread_background_terminals_clean(thread_id)
                     .await?;
                 let stopped_workflow_runs =
-                    self.workflow_scheduler.stop_active_workflow_runs().await;
+                    self.workflow.scheduler.stop_active_workflow_runs().await;
                 if stopped_workflow_runs > 0 {
                     self.sync_background_workflow_status();
                 }
@@ -4247,28 +4230,14 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
-            workflow_thread_notification_channels: Arc::new(
-                tokio::sync::Mutex::new(HashMap::new()),
-            ),
-            workflow_file_watch: None,
-            workflow_scheduler: WorkflowSchedulerState::default(),
-            workflow_history: WorkflowHistoryState::default(),
+            workflow: WorkflowFeatureState::default(),
             btw_session: None,
             btw_closing_thread_ids: HashSet::new(),
-            clawbot_controls_destination: ClawbotControlsDestination::Root,
-            clawbot_workspace_root: None,
-            clawbot_provider_task: None,
-            clawbot_pending_turns: HashMap::new(),
-            #[cfg(test)]
-            clawbot_outbound_messages: Vec::new(),
-            #[cfg(test)]
-            clawbot_outbound_reactions: Vec::new(),
-            #[cfg(test)]
-            clawbot_removed_outbound_reactions: Vec::new(),
+            clawbot: ClawbotFeatureState::default(),
         };
         match WorkflowFileWatchState::new(app.config.cwd.as_path(), app.app_event_tx.clone()) {
             Ok(state) => {
-                app.workflow_file_watch = Some(state);
+                app.workflow.file_watch = Some(state);
             }
             Err(err) => {
                 tracing::warn!("failed to start workflow file watcher: {err}");
@@ -8370,24 +8339,10 @@ guardian_approval = true
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
-            workflow_thread_notification_channels: Arc::new(
-                tokio::sync::Mutex::new(HashMap::new()),
-            ),
-            workflow_file_watch: None,
-            workflow_scheduler: WorkflowSchedulerState::default(),
-            workflow_history: WorkflowHistoryState::default(),
+            workflow: WorkflowFeatureState::default(),
             btw_session: None,
             btw_closing_thread_ids: HashSet::new(),
-            clawbot_controls_destination: ClawbotControlsDestination::Root,
-            clawbot_workspace_root: None,
-            clawbot_provider_task: None,
-            clawbot_pending_turns: HashMap::new(),
-            #[cfg(test)]
-            clawbot_outbound_messages: Vec::new(),
-            #[cfg(test)]
-            clawbot_outbound_reactions: Vec::new(),
-            #[cfg(test)]
-            clawbot_removed_outbound_reactions: Vec::new(),
+            clawbot: ClawbotFeatureState::default(),
         }
     }
 
@@ -8445,24 +8400,10 @@ guardian_approval = true
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),
-                workflow_thread_notification_channels: Arc::new(tokio::sync::Mutex::new(
-                    HashMap::new(),
-                )),
-                workflow_file_watch: None,
-                workflow_scheduler: WorkflowSchedulerState::default(),
-                workflow_history: WorkflowHistoryState::default(),
+                workflow: WorkflowFeatureState::default(),
                 btw_session: None,
                 btw_closing_thread_ids: HashSet::new(),
-                clawbot_controls_destination: ClawbotControlsDestination::Root,
-                clawbot_workspace_root: None,
-                clawbot_provider_task: None,
-                clawbot_pending_turns: HashMap::new(),
-                #[cfg(test)]
-                clawbot_outbound_messages: Vec::new(),
-                #[cfg(test)]
-                clawbot_outbound_reactions: Vec::new(),
-                #[cfg(test)]
-                clawbot_removed_outbound_reactions: Vec::new(),
+                clawbot: ClawbotFeatureState::default(),
             },
             rx,
             op_rx,
@@ -10905,7 +10846,7 @@ model = "gpt-5.2"
             vec!["director · review_backlog".to_string()]
         );
 
-        let stopped = app.workflow_scheduler.stop_active_workflow_runs().await;
+        let stopped = app.workflow.scheduler.stop_active_workflow_runs().await;
         assert_eq!(stopped, 1);
         app.sync_background_workflow_status();
         Ok(())
@@ -10925,11 +10866,12 @@ model = "gpt-5.2"
         app.active_thread_id = Some(thread_id);
 
         let run_id = app
-            .workflow_scheduler
+            .workflow
+            .scheduler
             .next_background_run_id("director", "review_backlog");
         let cancellation = CancellationToken::new();
         let cancellation_for_task = cancellation.clone();
-        app.workflow_scheduler.register_background_workflow_run(
+        app.workflow.scheduler.register_background_workflow_run(
             run_id,
             workflow_runtime::BackgroundWorkflowRunTarget::Job {
                 workflow_name: "director".to_string(),
@@ -10940,7 +10882,7 @@ model = "gpt-5.2"
                 cancellation_for_task.cancelled().await;
             }),
         );
-        app.workflow_scheduler.enqueue_trigger_run(
+        app.workflow.scheduler.enqueue_trigger_run(
             "director".to_string(),
             "triage".to_string(),
             workflow_runtime::OwnedWorkflowPhaseContext::default(),
@@ -11058,13 +11000,14 @@ model = "gpt-5.2"
         app.active_thread_id = Some(thread_id);
 
         let run_id = app
-            .workflow_scheduler
+            .workflow
+            .scheduler
             .next_background_run_id("director", "review_backlog");
         let target = workflow_runtime::BackgroundWorkflowRunTarget::Job {
             workflow_name: "director".to_string(),
             job_name: "review_backlog".to_string(),
         };
-        app.workflow_scheduler.register_background_workflow_run(
+        app.workflow.scheduler.register_background_workflow_run(
             run_id.clone(),
             target.clone(),
             CancellationToken::new(),
@@ -11175,7 +11118,8 @@ model = "gpt-5.2"
             .expect("embedded app server");
         let thread_id = ThreadId::new();
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        app.workflow_thread_notification_channels
+        app.workflow
+            .thread_notification_channels
             .lock()
             .await
             .insert(thread_id, sender);

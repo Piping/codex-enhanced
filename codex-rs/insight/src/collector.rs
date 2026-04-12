@@ -6,7 +6,6 @@ use std::time::Duration;
 use anyhow::Context;
 use chrono::DateTime;
 use chrono::Utc;
-use codex_core::config::Config;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::DynamicToolCallResponseEvent;
 use codex_protocol::protocol::EventMsg;
@@ -25,16 +24,25 @@ use super::types::AggregateMetrics;
 use super::types::CollectedThread;
 use super::types::CollectionResult;
 
-pub(crate) async fn collect_sessions(config: &Config) -> anyhow::Result<CollectionResult> {
+type SourceFields = (
+    Option<ThreadId>,
+    Option<i32>,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+pub(crate) async fn collect_sessions(codex_home: &Path) -> anyhow::Result<CollectionResult> {
     let mut rollout_paths = Vec::new();
     collect_rollout_paths(
-        config.codex_home.join(SESSIONS_SUBDIR),
+        codex_home.join(SESSIONS_SUBDIR),
         /*archived*/ false,
         &mut rollout_paths,
     )
     .await?;
     collect_rollout_paths(
-        config.codex_home.join(ARCHIVED_SESSIONS_SUBDIR),
+        codex_home.join(ARCHIVED_SESSIONS_SUBDIR),
         /*archived*/ true,
         &mut rollout_paths,
     )
@@ -258,16 +266,7 @@ async fn analyze_rollout(path: PathBuf, archived: bool) -> anyhow::Result<Option
     }))
 }
 
-fn source_fields(
-    source: &SessionSource,
-) -> (
-    Option<ThreadId>,
-    Option<i32>,
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-) {
+fn source_fields(source: &SessionSource) -> SourceFields {
     match source {
         SessionSource::Cli => (None, None, "cli".to_string(), None, None, None),
         SessionSource::VSCode => (None, None, "vscode".to_string(), None, None, None),

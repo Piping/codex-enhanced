@@ -1871,6 +1871,7 @@ dependencies = [
  "codex-config",
  "codex-connectors",
  "codex-core-skills",
+ "codex-dream",
  "codex-exec-server",
  "codex-execpolicy",
  "codex-features",
@@ -1887,6 +1888,7 @@ dependencies = [
  "codex-plugin",
  "codex-protocol",
  "codex-response-debug-context",
+ "codex-retrospective",
  "codex-rmcp-client",
  "codex-rollout",
  "codex-sandboxing",
@@ -2006,6 +2008,27 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "codex-dream"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "bm25",
+ "chrono",
+ "codex-git-utils",
+ "codex-instructions",
+ "codex-protocol",
+ "codex-retrospective",
+ "codex-secrets",
+ "codex-utils-output-truncation",
+ "codex-utils-template",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -2201,6 +2224,23 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "codex-insight"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "codex-protocol",
+ "codex-rollout",
+ "insta",
+ "pathdiff",
+ "pretty_assertions",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2575,6 +2615,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-retrospective"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-models-manager",
+ "codex-protocol",
+ "codex-rollout",
+ "codex-utils-output-truncation",
+ "codex-utils-template",
+ "pretty_assertions",
+ "serde_json",
+]
+
+[[package]]
 name = "codex-rmcp-client"
 version = "0.0.0"
 dependencies = [
@@ -2804,6 +2858,7 @@ dependencies = [
  "codex-feedback",
  "codex-file-search",
  "codex-git-utils",
+ "codex-insight",
  "codex-login",
  "codex-mcp",
  "codex-model-provider-info",
@@ -2827,6 +2882,7 @@ dependencies = [
  "codex-utils-sleep-inhibitor",
  "codex-utils-string",
  "codex-windows-sandbox",
+ "codex-workflow",
  "color-eyre",
  "cpal",
  "crossterm",
@@ -3116,6 +3172,20 @@ dependencies = [
  "windows 0.58.0",
  "windows-sys 0.52.0",
  "winres",
+]
+
+[[package]]
+name = "codex-workflow"
+version = "0.0.0"
+dependencies = [
+ "humantime",
+ "indexmap 2.13.0",
+ "pretty_assertions",
+ "serde",
+ "serde_yaml",
+ "tempfile",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

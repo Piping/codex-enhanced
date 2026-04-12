@@ -303,9 +303,9 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::aggregate;
-    use crate::insight::types::AggregateMetrics;
-    use crate::insight::types::CollectedThread;
-    use crate::insight::types::CollectionResult;
+    use crate::types::AggregateMetrics;
+    use crate::types::CollectedThread;
+    use crate::types::CollectionResult;
     use codex_protocol::ThreadId;
 
     fn thread_id(value: &str) -> ThreadId {

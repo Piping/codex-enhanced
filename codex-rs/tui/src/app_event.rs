@@ -28,6 +28,10 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
+pub(crate) use codex_workflow::controls::WorkflowControlsDestination;
+use codex_workflow::editor::WorkflowJobEditableField;
+use codex_workflow::editor::WorkflowTriggerEditableField;
+use codex_workflow::editor::WorkflowTriggerType;
 
 use crate::app::workflow_runtime::BackgroundWorkflowRunResult;
 use crate::bottom_pane::ApprovalRequest;
@@ -113,56 +117,6 @@ pub(crate) enum ClawbotControlsDestination {
 pub(crate) enum WindowsSandboxEnableMode {
     Elevated,
     Legacy,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum WorkflowControlsDestination {
-    Root,
-    File {
-        workflow_path: PathBuf,
-    },
-    Jobs {
-        workflow_path: PathBuf,
-    },
-    Job {
-        workflow_path: PathBuf,
-        job_name: String,
-    },
-    ManualTriggers {
-        workflow_path: PathBuf,
-    },
-    ManualTrigger {
-        workflow_path: PathBuf,
-        trigger_id: String,
-    },
-    TriggerType {
-        workflow_path: PathBuf,
-        trigger_id: String,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WorkflowJobEditableField {
-    Needs,
-    Steps,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WorkflowTriggerEditableField {
-    Id,
-    Jobs,
-    Parameter,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WorkflowTriggerType {
-    Manual,
-    BeforeTurn,
-    AfterTurn,
-    FileWatch,
-    Idle,
-    Interval,
-    Cron,
 }
 
 #[derive(Debug, Clone)]

@@ -576,13 +576,13 @@ fn normalize_message_receive_event(
         workspace_root,
         "feishu.message_normalized",
         serde_json::json!({
-            "chat_id": chat_id.clone(),
-            "chat_type": chat_type.clone(),
+            "chat_id": chat_id,
+            "chat_type": chat_type,
             "message_id": message.message_id.clone(),
-            "sender_open_id": sender.open_id.clone(),
-            "sender_user_id": sender.user_id.clone(),
-            "sender_app_id": sender.app_id.clone(),
-            "text": normalized_text.clone(),
+            "sender_open_id": sender.open_id,
+            "sender_user_id": sender.user_id,
+            "sender_app_id": sender.app_id,
+            "text": normalized_text,
         }),
     );
 

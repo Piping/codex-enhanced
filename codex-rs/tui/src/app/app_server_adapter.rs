@@ -225,7 +225,8 @@ impl App {
                         .await;
                 }
                 let workflow_sender = self
-                    .workflow_thread_notification_channels
+                    .workflow
+                    .thread_notification_channels
                     .lock()
                     .await
                     .get(&thread_id)
@@ -233,7 +234,8 @@ impl App {
                 if let Some(sender) = workflow_sender
                     && sender.send(notification.clone()).is_err()
                 {
-                    self.workflow_thread_notification_channels
+                    self.workflow
+                        .thread_notification_channels
                         .lock()
                         .await
                         .remove(&thread_id);

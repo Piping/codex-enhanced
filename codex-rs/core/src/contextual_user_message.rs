@@ -47,18 +47,6 @@ fn is_standard_contextual_user_text(text: &str) -> bool {
         .any(|definition| definition.matches_text(text))
 }
 
-/// Returns whether a contextual user fragment should be omitted from memory
-/// stage-1 inputs.
-///
-/// Keep `AGENTS.md` instructions and skill payloads visible to the memory
-/// extractor so post-run retrospectives can capture durable repo guidance and
-/// reusable workflows that shaped the conversation. Environment context and
-/// subagent notifications remain visible for the same reason.
-pub(crate) fn is_memory_excluded_contextual_user_fragment(content_item: &ContentItem) -> bool {
-    let _ = content_item;
-    false
-}
-
 pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
     let ContentItem::InputText { text } = content_item else {
         return false;

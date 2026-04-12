@@ -25,48 +25,6 @@ impl SessionController {
                 app.start_fresh_session_with_summary_hint(tui, app_server)
                     .await;
             }
-            AppEvent::DreamSession => {
-                let Some(thread_id) = app.active_thread_id else {
-                    app.chat_widget
-                        .add_error_message("No active thread is available for /dream.".to_string());
-                    return Ok(None);
-                };
-                let dream = match app_server.thread_dream_start(thread_id).await {
-                    Ok(dream) => dream,
-                    Err(err) => {
-                        app.chat_widget
-                            .add_error_message(format!("Failed to complete /dream: {err:#}"));
-                        return Ok(None);
-                    }
-                };
-                app.start_fresh_session_with_summary_hint(tui, app_server)
-                    .await;
-                let mut lines: Vec<Line<'static>> = vec![
-                    "Dream retrospective updated repo memory.".green().into(),
-                    format!("Memory root: {}", dream.memory_root).into(),
-                    format!("Retrospective: {}", dream.retrospective_path).into(),
-                    format!("AGENTS.md: {}", dream.updated_agents_path).into(),
-                ];
-                if dream.updated_skill_paths.is_empty() {
-                    lines.push("Skills: none updated".dim().into());
-                } else {
-                    lines.push("Updated skills:".into());
-                    lines.extend(
-                        dream
-                            .updated_skill_paths
-                            .into_iter()
-                            .map(|path| format!("  - {path}").into()),
-                    );
-                }
-                lines.push("Next session hint:".into());
-                lines.extend(
-                    dream
-                        .next_session_hint
-                        .lines()
-                        .map(|line| line.to_string().into()),
-                );
-                app.chat_widget.add_plain_history_lines(lines);
-            }
             AppEvent::ClearUi => {
                 app.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 app.reset_app_ui_state_after_clear();

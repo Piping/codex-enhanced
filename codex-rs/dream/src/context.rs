@@ -1,31 +1,26 @@
-use super::types::DreamContext;
-use super::types::DreamSkillCandidate;
-use crate::RolloutRecorder;
-use crate::config::Config;
+use crate::types::DreamContext;
+use crate::types::DreamPipelineRequest;
+use crate::types::DreamSkillCandidate;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_instructions::AGENTS_MD_FRAGMENT;
 use codex_instructions::SKILL_FRAGMENT;
-use codex_protocol::ThreadId;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 
-pub(super) async fn load_dream_context(
-    config: &Config,
-    thread_id: ThreadId,
-    rollout_path: &Path,
+pub(crate) async fn load_dream_context(
+    request: &DreamPipelineRequest<'_>,
 ) -> anyhow::Result<DreamContext> {
-    let repo_root = resolve_root_git_project_for_trust(config.cwd.as_path())
-        .unwrap_or_else(|| config.cwd.to_path_buf());
+    let repo_root = resolve_root_git_project_for_trust(request.cwd)
+        .unwrap_or_else(|| request.cwd.to_path_buf());
     let memory_root = repo_root.join(".codex").join("memory");
     let agents_path = repo_root.join("AGENTS.md");
-
-    let (rollout_items, _, _) = RolloutRecorder::load_rollout_items(rollout_path).await?;
-    let rollout_items_json =
-        crate::memories::serialize_filtered_rollout_response_items(&rollout_items)?;
-    let visible_agents_fragments = visible_agents_fragments(&rollout_items);
-    let skill_candidates = repo_local_skill_candidates(&rollout_items, repo_root.as_path()).await?;
+    let visible_agents_fragments = visible_agents_fragments(request.rollout_items);
+    let skill_candidates =
+        repo_local_skill_candidates(request.rollout_items, repo_root.as_path()).await?;
     let visible_skill_fragments = skill_candidates
         .iter()
         .map(|skill| {
@@ -39,8 +34,8 @@ pub(super) async fn load_dream_context(
         .collect::<Vec<_>>();
 
     Ok(DreamContext {
-        thread_id,
-        rollout_path: rollout_path.to_path_buf(),
+        thread_id: request.thread_id,
+        rollout_path: request.rollout_path.to_path_buf(),
         repo_root: repo_root.clone(),
         memory_root: memory_root.clone(),
         existing_memory: read_text_if_exists(&memory_root.join("MEMORY.md")).await?,
@@ -49,7 +44,7 @@ pub(super) async fn load_dream_context(
         skill_candidates,
         visible_agents_fragments,
         visible_skill_fragments,
-        rollout_items_json,
+        rollout_items_json: request.rollout_items_json.clone(),
     })
 }
 
@@ -104,18 +99,13 @@ async fn repo_local_skill_candidates(
 }
 
 fn user_text_from_rollout_item(item: &RolloutItem) -> Option<&str> {
-    let RolloutItem::ResponseItem(codex_protocol::models::ResponseItem::Message {
-        role,
-        content,
-        ..
-    }) = item
-    else {
+    let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = item else {
         return None;
     };
     if role != "user" {
         return None;
     }
-    let [codex_protocol::models::ContentItem::InputText { text }] = content.as_slice() else {
+    let [ContentItem::InputText { text }] = content.as_slice() else {
         return None;
     };
     Some(text.as_str())
@@ -147,13 +137,14 @@ async fn canonicalize_best_effort(path: &Path) -> anyhow::Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_tag;
-    use super::repo_local_skill_candidates;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::protocol::RolloutItem;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
+
+    use super::extract_tag;
+    use super::repo_local_skill_candidates;
 
     #[test]
     fn extract_tag_returns_trimmed_value() {

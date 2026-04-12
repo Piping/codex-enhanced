@@ -1,7 +1,51 @@
+use std::collections::HashMap;
+use std::collections::VecDeque;
+use std::path::PathBuf;
+
 use super::App;
+use super::feature_dispatch::FeatureDispatchFuture;
+use super::feature_dispatch::FeatureDispatchOutcome;
 use crate::app_event::AppEvent;
+use crate::app_event::ClawbotControlsDestination;
 use crate::app_server_session::AppServerSession;
 use crate::tui;
+use codex_clawbot::PendingClawbotTurn;
+#[cfg(test)]
+use codex_clawbot::ProviderOutboundReaction;
+#[cfg(test)]
+use codex_clawbot::ProviderOutboundTextMessage;
+use codex_protocol::ThreadId;
+use tokio::task::JoinHandle;
+
+pub(super) struct ClawbotFeatureState {
+    pub(super) controls_destination: ClawbotControlsDestination,
+    pub(super) workspace_root: Option<PathBuf>,
+    pub(super) provider_task: Option<JoinHandle<()>>,
+    pub(super) pending_turns: HashMap<ThreadId, VecDeque<PendingClawbotTurn>>,
+    #[cfg(test)]
+    pub(super) outbound_messages: Vec<ProviderOutboundTextMessage>,
+    #[cfg(test)]
+    pub(super) outbound_reactions: Vec<ProviderOutboundReaction>,
+    #[cfg(test)]
+    pub(super) removed_outbound_reactions: Vec<ProviderOutboundReaction>,
+}
+
+impl Default for ClawbotFeatureState {
+    fn default() -> Self {
+        Self {
+            controls_destination: ClawbotControlsDestination::Root,
+            workspace_root: None,
+            provider_task: None,
+            pending_turns: HashMap::new(),
+            #[cfg(test)]
+            outbound_messages: Vec::new(),
+            #[cfg(test)]
+            outbound_reactions: Vec::new(),
+            #[cfg(test)]
+            removed_outbound_reactions: Vec::new(),
+        }
+    }
+}
 
 pub(super) struct ClawbotController;
 
@@ -102,4 +146,36 @@ impl ClawbotController {
             _ => unreachable!("non-clawbot event passed to clawbot controller"),
         }
     }
+}
+
+pub(super) fn matches_event(event: &AppEvent) -> bool {
+    matches!(
+        event,
+        AppEvent::ClawbotProviderEvent { .. }
+            | AppEvent::ClawbotTurnCompleted { .. }
+            | AppEvent::OpenClawbotManagement
+            | AppEvent::OpenClawbotManagementView { .. }
+            | AppEvent::OpenClawbotFeishuConfigPrompt { .. }
+            | AppEvent::SaveClawbotFeishuConfigValue { .. }
+            | AppEvent::SaveClawbotManualBindSessionId { .. }
+            | AppEvent::ClawbotSetTurnMode { .. }
+            | AppEvent::ClawbotSetThreadForwarding { .. }
+            | AppEvent::ScanClawbotFeishuSessions
+            | AppEvent::ClearClawbotFeishuSessions
+            | AppEvent::RetryClawbotFeishuConnection
+            | AppEvent::ClawbotDisconnectThread { .. }
+            | AppEvent::EditClawbotStateFile { .. }
+    )
+}
+
+pub(super) fn dispatch<'a>(
+    app: &'a mut App,
+    tui: &'a mut tui::Tui,
+    app_server: &'a mut AppServerSession,
+    event: AppEvent,
+) -> FeatureDispatchFuture<'a> {
+    Box::pin(async move {
+        ClawbotController::handle(app, tui, app_server, event).await;
+        Ok(FeatureDispatchOutcome::Handled)
+    })
 }

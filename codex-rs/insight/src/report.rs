@@ -481,11 +481,11 @@ mod tests {
     use insta::assert_snapshot;
 
     use super::render_html;
-    use crate::insight::types::AggregateMetrics;
-    use crate::insight::types::InsightOverview;
-    use crate::insight::types::InsightReportData;
-    use crate::insight::types::NarrativeMode;
-    use crate::insight::types::RootSessionSummary;
+    use crate::types::AggregateMetrics;
+    use crate::types::InsightOverview;
+    use crate::types::InsightReportData;
+    use crate::types::NarrativeMode;
+    use crate::types::RootSessionSummary;
     use codex_protocol::ThreadId;
 
     fn thread_id(value: &str) -> ThreadId {

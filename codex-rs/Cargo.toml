@@ -88,6 +88,10 @@ members = [
     "terminal-detection",
     "codex-experimental-api-macros",
     "plugin",
+    "insight",
+    "workflow",
+    "dream",
+    "retrospective",
 ]
 resolver = "2"
 
@@ -127,6 +131,7 @@ codex-config = { path = "config" }
 codex-connectors = { path = "connectors" }
 codex-core = { path = "core" }
 codex-core-skills = { path = "core-skills" }
+codex-dream = { path = "dream" }
 codex-exec = { path = "exec" }
 codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
@@ -136,6 +141,7 @@ codex-feedback = { path = "feedback" }
 codex-file-search = { path = "file-search" }
 codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
+codex-insight = { path = "insight" }
 codex-instructions = { path = "instructions" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
@@ -151,6 +157,7 @@ codex-otel = { path = "otel" }
 codex-plugin = { path = "plugin" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
+codex-retrospective = { path = "retrospective" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-response-debug-context = { path = "response-debug-context" }
 codex-rmcp-client = { path = "rmcp-client" }
@@ -187,6 +194,7 @@ codex-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
 codex-utils-stream-parser = { path = "utils/stream-parser" }
 codex-utils-string = { path = "utils/string" }
 codex-utils-template = { path = "utils/template" }
+codex-workflow = { path = "workflow" }
 codex-v8-poc = { path = "v8-poc" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }

@@ -1,11 +1,11 @@
 use super::JobOutcome;
 use super::JobResult;
 use super::aggregate_stats;
-use super::job::serialize_filtered_rollout_response_items;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TokenUsage;
+use codex_retrospective::serialize_filtered_rollout_response_items;
 use pretty_assertions::assert_eq;
 
 #[test]

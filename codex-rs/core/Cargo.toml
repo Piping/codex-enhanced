@@ -34,6 +34,7 @@ codex-code-mode = { workspace = true }
 codex-connectors = { workspace = true }
 codex-config = { workspace = true }
 codex-core-skills = { workspace = true }
+codex-dream = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
 codex-feedback = { workspace = true }
@@ -50,6 +51,7 @@ codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
+codex-retrospective = { workspace = true }
 codex-response-debug-context = { workspace = true }
 codex-rollout = { workspace = true }
 codex-rmcp-client = { workspace = true }

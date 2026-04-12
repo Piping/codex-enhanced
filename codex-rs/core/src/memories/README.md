@@ -4,13 +4,15 @@ This module runs a startup memory pipeline for eligible sessions.
 
 ## Prompt Templates
 
-Memory prompt templates live under `codex-rs/core/templates/memories/`.
+Memory prompt templates live under `codex-rs/core/templates/memories/` for the
+startup memories pipeline, with the shared rollout retrospective input template
+living in `codex-rs/retrospective/templates/retrospective/`.
 
 - The undated template files are the canonical latest versions used at runtime:
-  - `stage_one_system.md`
-  - `stage_one_input.md`
-  - `consolidation.md`
-  - `read_path.md`
+  - `core/templates/memories/stage_one_system.md`
+  - `core/templates/memories/consolidation.md`
+  - `core/templates/memories/read_path.md`
+  - `retrospective/templates/retrospective/rollout_input.md`
 - In `codex`, edit those undated template files in place.
 - The dated snapshot-copy workflow is used in the separate `openai/project/agent_memory/write` harness repo, not here.
 

@@ -1,8 +1,8 @@
 use super::App;
 use super::workflow_runtime::WorkflowOutputDelivery;
 use super::workflow_runtime::WorkflowPhaseContext;
-use crate::app::workflow_definition::WorkflowTriggerKind;
-use crate::app::workflow_definition::load_workflow_registry;
+use crate::app::workflow_definition::WorkflowTriggerKindDiscriminant;
+use crate::app::workflow_definition::load_workflow_registry_for_ui;
 use crate::app_command::AppCommand;
 use crate::app_command::AppCommandView;
 use crate::app_event::AppEvent;
@@ -15,6 +15,8 @@ use crate::markdown::append_markdown;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use codex_workflow::history::WorkflowReplySource;
+use codex_workflow::history::workflow_job_source;
 use ratatui::text::Line;
 use std::collections::HashMap;
 use std::path::Path;
@@ -23,33 +25,6 @@ use std::sync::Arc;
 #[derive(Default)]
 pub(crate) struct WorkflowHistoryState {
     pub(super) thread_history_cells: HashMap<ThreadId, Vec<Arc<dyn HistoryCell>>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct WorkflowReplySource {
-    workflow_id: String,
-    action: Option<String>,
-}
-
-impl WorkflowReplySource {
-    pub(crate) fn new(workflow_id: String, action: Option<String>) -> Self {
-        Self {
-            workflow_id,
-            action,
-        }
-    }
-
-    pub(crate) fn hint(&self) -> String {
-        match self
-            .action
-            .as_deref()
-            .map(str::trim)
-            .filter(|action| !action.is_empty())
-        {
-            Some(action) => format!("{} · {}", self.workflow_id, workflow_prompt_prefix(action)),
-            None => self.workflow_id.clone(),
-        }
-    }
 }
 
 impl App {
@@ -118,7 +93,7 @@ impl App {
             Ok(results) => {
                 for result in results {
                     let source = WorkflowReplySource::new(
-                        workflow_job_source_hint(&result),
+                        workflow_job_source(&result),
                         /*action*/ None,
                     );
                     cells.push(Arc::new(history_cell::new_info_event(
@@ -173,7 +148,8 @@ impl App {
 
     pub(crate) fn queue_workflow_history_replay_for_thread(&self, thread_id: ThreadId) {
         if self
-            .workflow_history
+            .workflow
+            .history
             .thread_history_cells
             .contains_key(&thread_id)
         {
@@ -187,7 +163,7 @@ impl App {
         thread_id: ThreadId,
         width: u16,
     ) -> Vec<Line<'static>> {
-        let Some(cells) = self.workflow_history.thread_history_cells.get(&thread_id) else {
+        let Some(cells) = self.workflow.history.thread_history_cells.get(&thread_id) else {
             return Vec::new();
         };
 
@@ -215,7 +191,8 @@ impl App {
         thread_id: ThreadId,
         cell: Arc<dyn HistoryCell>,
     ) -> Option<Arc<dyn HistoryCell>> {
-        self.workflow_history
+        self.workflow
+            .history
             .thread_history_cells
             .entry(thread_id)
             .or_default()
@@ -308,7 +285,7 @@ impl App {
             return Vec::new();
         };
 
-        let registry = match load_workflow_registry(self.config.cwd.as_path()) {
+        let registry = match load_workflow_registry_for_ui(self.config.cwd.as_path()) {
             Ok(registry) => registry,
             Err(error) => {
                 self.chat_widget.add_error_message(format!(
@@ -323,21 +300,21 @@ impl App {
             current_user_turn: None,
             last_assistant_message: last_agent_message.as_deref(),
         };
-        for workflow in &registry.files {
-            for trigger in &workflow.triggers {
-                if !trigger.enabled || !matches!(trigger.kind, WorkflowTriggerKind::AfterTurn) {
-                    continue;
-                }
+        for (workflow, trigger) in
+            registry.iter_matching_triggers(WorkflowTriggerKindDiscriminant::AfterTurn)
+        {
+            if !trigger.enabled {
+                continue;
+            }
 
-                let cell = self.start_scheduled_workflow_trigger_run(
-                    app_server,
-                    workflow.name.clone(),
-                    trigger.id.clone(),
-                    phase_context,
-                );
-                if let Some(cell) = self.record_workflow_history_cell(primary_thread_id, cell) {
-                    visible_cells.push(cell);
-                }
+            let cell = self.start_scheduled_workflow_trigger_run(
+                app_server,
+                workflow.name.clone(),
+                trigger.id.clone(),
+                phase_context,
+            );
+            if let Some(cell) = self.record_workflow_history_cell(primary_thread_id, cell) {
+                visible_cells.push(cell);
             }
         }
         visible_cells
@@ -352,22 +329,6 @@ pub(crate) fn workflow_result_cell(message: &str, cwd: &Path) -> AgentMessageCel
 
 fn workflow_info_cell(source: &WorkflowReplySource) -> PlainHistoryCell {
     history_cell::new_info_event("Workflow reply".to_string(), Some(source.hint()))
-}
-
-fn workflow_prompt_prefix(prompt: &str) -> String {
-    let prefix = prompt.chars().take(48).collect::<String>();
-    if prompt.chars().count() > 48 {
-        format!("{prefix}...")
-    } else {
-        prefix
-    }
-}
-
-fn workflow_job_source_hint(result: &super::workflow_runtime::WorkflowJobRunResult) -> String {
-    format!(
-        "{}/{}:{}",
-        result.workflow_name, result.trigger_id, result.job_name
-    )
 }
 
 fn user_text_from_inputs(items: &[UserInput]) -> String {

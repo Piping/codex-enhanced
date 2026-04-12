@@ -1,7 +1,35 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use super::App;
+use super::feature_dispatch::FeatureDispatchFuture;
+use super::feature_dispatch::FeatureDispatchOutcome;
+use super::workflow_file_watch::WorkflowFileWatchState;
+use super::workflow_history::WorkflowHistoryState;
+use super::workflow_runtime::WorkflowThreadNotificationChannels;
+use super::workflow_scheduler::WorkflowSchedulerState;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
 use crate::tui;
+use tokio::sync::Mutex;
+
+pub(super) struct WorkflowFeatureState {
+    pub(super) thread_notification_channels: WorkflowThreadNotificationChannels,
+    pub(super) file_watch: Option<WorkflowFileWatchState>,
+    pub(super) scheduler: WorkflowSchedulerState,
+    pub(super) history: WorkflowHistoryState,
+}
+
+impl Default for WorkflowFeatureState {
+    fn default() -> Self {
+        Self {
+            thread_notification_channels: Arc::new(Mutex::new(HashMap::new())),
+            file_watch: None,
+            scheduler: WorkflowSchedulerState::default(),
+            history: WorkflowHistoryState::default(),
+        }
+    }
+}
 
 pub(super) struct WorkflowController;
 
@@ -142,4 +170,39 @@ impl WorkflowController {
             _ => unreachable!("non-workflow event passed to workflow controller"),
         }
     }
+}
+
+pub(super) fn matches_event(event: &AppEvent) -> bool {
+    matches!(
+        event,
+        AppEvent::OpenWorkflowControls
+            | AppEvent::OpenWorkflowControlView { .. }
+            | AppEvent::CreateDefaultWorkflowTemplate
+            | AppEvent::EditWorkflowFile { .. }
+            | AppEvent::ToggleWorkflowTriggerEnabled { .. }
+            | AppEvent::ToggleWorkflowJobEnabled { .. }
+            | AppEvent::CycleWorkflowJobContext { .. }
+            | AppEvent::CycleWorkflowJobResponse { .. }
+            | AppEvent::EditWorkflowJobField { .. }
+            | AppEvent::SetWorkflowTriggerType { .. }
+            | AppEvent::EditWorkflowTriggerField { .. }
+            | AppEvent::WorkflowWorkspaceFilesChanged { .. }
+            | AppEvent::StartManualWorkflowTrigger { .. }
+            | AppEvent::StartManualWorkflowJob { .. }
+            | AppEvent::ShowWorkflowBackgroundTasks
+            | AppEvent::ReplayWorkflowHistory { .. }
+            | AppEvent::BackgroundWorkflowRunCompleted { .. }
+    )
+}
+
+pub(super) fn dispatch<'a>(
+    app: &'a mut App,
+    tui: &'a mut tui::Tui,
+    app_server: &'a mut AppServerSession,
+    event: AppEvent,
+) -> FeatureDispatchFuture<'a> {
+    Box::pin(async move {
+        WorkflowController::handle(app, tui, app_server, event).await;
+        Ok(FeatureDispatchOutcome::Handled)
+    })
 }

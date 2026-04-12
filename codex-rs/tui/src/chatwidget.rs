@@ -5430,8 +5430,10 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Insight => {
-                self.add_info_message(insight::start_message(), /*hint*/ None);
-                insight::spawn_report_generation(self.config.clone(), self.app_event_tx.clone());
+                self.add_info_message(
+                    insight::request_report(self.config.clone(), self.app_event_tx.clone()),
+                    /*hint*/ None,
+                );
             }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();

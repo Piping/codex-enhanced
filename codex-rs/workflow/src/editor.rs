@@ -5,17 +5,15 @@ use std::path::PathBuf;
 use serde_yaml::Mapping;
 use serde_yaml::Value as YamlValue;
 
-use super::workflow_definition::WorkflowContextMode;
-use super::workflow_definition::WorkflowResponseMode;
-use super::workflow_definition::WorkflowStep;
-use super::workflow_yaml::serialize_yaml_value;
-use crate::app_event::WorkflowJobEditableField;
-use crate::app_event::WorkflowTriggerEditableField;
-use crate::app_event::WorkflowTriggerType;
+use crate::definition::WorkflowContextMode;
+use crate::definition::WorkflowResponseMode;
+use crate::definition::WorkflowStep;
+use crate::definition::workflow_dir;
+use crate::definition::workflow_file_paths as load_workflow_file_paths;
+use crate::yaml::serialize_yaml_value;
 
-pub(crate) const DEFAULT_WORKFLOW_TEMPLATE_FILENAME: &str = "workflow.yaml";
+pub const DEFAULT_WORKFLOW_TEMPLATE_FILENAME: &str = "workflow.yaml";
 
-const WORKFLOW_DIR_NAME: &str = "workflows";
 const DEFAULT_WORKFLOW_TEMPLATE: &str = r#"name: sample-workflow
 
 triggers:
@@ -32,30 +30,35 @@ jobs:
           Describe the work this workflow should do.
 "#;
 
-pub(crate) fn workflow_file_paths(cwd: &Path) -> Result<Vec<PathBuf>, String> {
-    let workflow_dir = workflow_dir(cwd);
-    if !workflow_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut files = fs::read_dir(&workflow_dir)
-        .map_err(|err| {
-            format!(
-                "failed to read workflow directory `{}`: {err}",
-                workflow_dir.display()
-            )
-        })?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "yaml")
-        })
-        .collect::<Vec<_>>();
-    files.sort();
-    Ok(files)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowJobEditableField {
+    Needs,
+    Steps,
 }
 
-pub(crate) fn create_default_workflow_template(cwd: &Path) -> Result<PathBuf, String> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowTriggerEditableField {
+    Id,
+    Jobs,
+    Parameter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowTriggerType {
+    Manual,
+    BeforeTurn,
+    AfterTurn,
+    FileWatch,
+    Idle,
+    Interval,
+    Cron,
+}
+
+pub fn workflow_file_paths(cwd: &Path) -> Result<Vec<PathBuf>, String> {
+    load_workflow_file_paths(cwd).map_err(|err| err.to_string())
+}
+
+pub fn create_default_workflow_template(cwd: &Path) -> Result<PathBuf, String> {
     let workflow_dir = workflow_dir(cwd);
     fs::create_dir_all(&workflow_dir).map_err(|err| {
         format!(
@@ -86,7 +89,7 @@ pub(crate) fn create_default_workflow_template(cwd: &Path) -> Result<PathBuf, St
     Ok(candidate)
 }
 
-pub(crate) fn toggle_job_enabled(workflow_path: &Path, job_name: &str) -> Result<bool, String> {
+pub fn toggle_job_enabled(workflow_path: &Path, job_name: &str) -> Result<bool, String> {
     mutate_job(workflow_path, job_name, |job| {
         let enabled = job
             .get(string_key("enabled"))
@@ -98,10 +101,7 @@ pub(crate) fn toggle_job_enabled(workflow_path: &Path, job_name: &str) -> Result
     })
 }
 
-pub(crate) fn toggle_trigger_enabled(
-    workflow_path: &Path,
-    trigger_id: &str,
-) -> Result<bool, String> {
+pub fn toggle_trigger_enabled(workflow_path: &Path, trigger_id: &str) -> Result<bool, String> {
     mutate_trigger(workflow_path, trigger_id, |trigger| {
         let enabled = trigger
             .get(string_key("enabled"))
@@ -113,7 +113,7 @@ pub(crate) fn toggle_trigger_enabled(
     })
 }
 
-pub(crate) fn set_trigger_type(
+pub fn set_trigger_type(
     workflow_path: &Path,
     trigger_id: &str,
     trigger_type: WorkflowTriggerType,
@@ -136,7 +136,7 @@ pub(crate) fn set_trigger_type(
     })
 }
 
-pub(crate) fn cycle_job_context(
+pub fn cycle_job_context(
     workflow_path: &Path,
     job_name: &str,
 ) -> Result<WorkflowContextMode, String> {
@@ -157,7 +157,7 @@ pub(crate) fn cycle_job_context(
     })
 }
 
-pub(crate) fn cycle_job_response(
+pub fn cycle_job_response(
     workflow_path: &Path,
     job_name: &str,
 ) -> Result<WorkflowResponseMode, String> {
@@ -178,7 +178,7 @@ pub(crate) fn cycle_job_response(
     })
 }
 
-pub(crate) fn job_field_seed(
+pub fn job_field_seed(
     workflow_path: &Path,
     job_name: &str,
     field: WorkflowJobEditableField,
@@ -207,7 +207,7 @@ pub(crate) fn job_field_seed(
     }
 }
 
-pub(crate) fn write_job_field(
+pub fn write_job_field(
     workflow_path: &Path,
     job_name: &str,
     field: WorkflowJobEditableField,
@@ -244,7 +244,7 @@ pub(crate) fn write_job_field(
     }
 }
 
-pub(crate) fn trigger_field_seed(
+pub fn trigger_field_seed(
     workflow_path: &Path,
     trigger_id: &str,
     field: WorkflowTriggerEditableField,
@@ -271,7 +271,7 @@ pub(crate) fn trigger_field_seed(
     }
 }
 
-pub(crate) fn write_trigger_field(
+pub fn write_trigger_field(
     workflow_path: &Path,
     trigger_id: &str,
     field: WorkflowTriggerEditableField,
@@ -323,10 +323,6 @@ pub(crate) fn write_trigger_field(
             })
         }
     }
-}
-
-fn workflow_dir(cwd: &Path) -> PathBuf {
-    cwd.join(".codex").join(WORKFLOW_DIR_NAME)
 }
 
 fn load_yaml_document(workflow_path: &Path) -> Result<YamlValue, String> {
@@ -533,9 +529,10 @@ fn string_key(value: &str) -> YamlValue {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
+
+    use super::*;
 
     fn write_workflow(path: &Path) {
         fs::create_dir_all(path.parent().expect("parent")).unwrap();

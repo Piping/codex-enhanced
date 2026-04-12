@@ -5,6 +5,7 @@ use crate::app_event::ClawbotForwardingChannel;
 use codex_clawbot::ClawbotRuntime;
 use codex_clawbot::ClawbotStore;
 use codex_clawbot::ClawbotTurnMode;
+use codex_clawbot::PendingClawbotTurn;
 use codex_clawbot::ProviderEvent as ClawbotProviderEvent;
 use codex_clawbot::ProviderKind as ClawbotProviderKind;
 use codex_clawbot::ProviderMessageRef;
@@ -72,14 +73,15 @@ async fn clawbot_inbound_message_resumes_bound_thread_and_starts_turn() -> Resul
 
     assert!(app.thread_event_channels.contains_key(&thread_id));
     assert_eq!(
-        app.clawbot_outbound_reactions,
+        app.clawbot.outbound_reactions,
         vec![ProviderOutboundReaction {
             target: ProviderMessageRef::new(ClawbotProviderKind::Feishu, "chat_resume", "msg_1"),
             emoji_type: "TONGUE".to_string(),
         }]
     );
     assert_eq!(
-        app.clawbot_pending_turns
+        app.clawbot
+            .pending_turns
             .get(&thread_id)
             .map(std::collections::VecDeque::len),
         Some(1)
@@ -147,7 +149,7 @@ async fn clawbot_inbound_message_to_inactive_thread_shows_jump_hint() -> Result<
 async fn noninteractive_clawbot_request_user_input_builds_auto_response() {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();
-    app.clawbot_pending_turns.insert(
+    app.clawbot.pending_turns.insert(
         thread_id,
         VecDeque::from([PendingClawbotTurn {
             thread_id: thread_id.to_string(),
@@ -190,7 +192,7 @@ async fn noninteractive_clawbot_request_user_input_builds_auto_response() {
 async fn noninteractive_clawbot_permissions_request_builds_auto_response() {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();
-    app.clawbot_pending_turns.insert(
+    app.clawbot.pending_turns.insert(
         thread_id,
         VecDeque::from([PendingClawbotTurn {
             thread_id: thread_id.to_string(),
@@ -270,7 +272,8 @@ async fn clawbot_turn_completed_forwards_reply_and_drains_next_message() -> Resu
     .expect("handle second clawbot inbound");
 
     let first_turn_id = app
-        .clawbot_pending_turns
+        .clawbot
+        .pending_turns
         .get(&thread_id)
         .and_then(|queue| queue.front())
         .map(|pending| pending.turn_id.clone())
@@ -307,21 +310,22 @@ async fn clawbot_turn_completed_forwards_reply_and_drains_next_message() -> Resu
     .expect("handle clawbot turn completion");
 
     assert_eq!(
-        app.clawbot_outbound_messages,
+        app.clawbot.outbound_messages,
         vec![ProviderOutboundTextMessage {
             session: session.clone(),
             text: "forwarded reply".to_string(),
         }]
     );
     assert_eq!(
-        app.clawbot_removed_outbound_reactions,
+        app.clawbot.removed_outbound_reactions,
         vec![ProviderOutboundReaction {
             target: ProviderMessageRef::new(ClawbotProviderKind::Feishu, "chat_reply", "msg_1"),
             emoji_type: "TONGUE".to_string(),
         }]
     );
     assert_eq!(
-        app.clawbot_pending_turns
+        app.clawbot
+            .pending_turns
             .get(&thread_id)
             .map(std::collections::VecDeque::len),
         Some(1)
@@ -366,13 +370,15 @@ async fn clawbot_restart_recovers_pending_turn_and_forwards_reply() -> Result<()
 
     assert_eq!(
         restarted_app
-            .clawbot_pending_turns
+            .clawbot
+            .pending_turns
             .get(&thread_id)
             .map(std::collections::VecDeque::len),
         Some(1)
     );
     let restored_turn_id = restarted_app
-        .clawbot_pending_turns
+        .clawbot
+        .pending_turns
         .get(&thread_id)
         .and_then(|queue| queue.front())
         .map(|pending| pending.turn_id.clone())
@@ -397,14 +403,14 @@ async fn clawbot_restart_recovers_pending_turn_and_forwards_reply() -> Result<()
         .expect("complete restored clawbot turn");
 
     assert_eq!(
-        restarted_app.clawbot_outbound_messages,
+        restarted_app.clawbot.outbound_messages,
         vec![ProviderOutboundTextMessage {
             session,
             text: "restart reply".to_string(),
         }]
     );
     assert_eq!(
-        restarted_app.clawbot_removed_outbound_reactions,
+        restarted_app.clawbot.removed_outbound_reactions,
         vec![ProviderOutboundReaction {
             target: ProviderMessageRef::new(ClawbotProviderKind::Feishu, "chat_restart", "msg_1"),
             emoji_type: "TONGUE".to_string(),
@@ -485,7 +491,7 @@ async fn clawbot_bound_thread_completion_forwards_final_reply_without_pending_tu
     .expect("forward bound thread reply");
 
     assert_eq!(
-        app.clawbot_outbound_messages,
+        app.clawbot.outbound_messages,
         vec![ProviderOutboundTextMessage {
             session,
             text: "final reply".to_string(),
@@ -531,17 +537,18 @@ async fn clawbot_sync_clears_stale_pending_turn_and_redelivers_unread() -> Resul
             turn_mode: ClawbotTurnMode::NonInteractive,
         })
         .expect("persist stale pending turn");
-    app.clawbot_pending_turns.clear();
+    app.clawbot.pending_turns.clear();
 
     app.sync_clawbot_workspace(&mut app_server).await;
 
     assert_eq!(
-        app.clawbot_pending_turns
+        app.clawbot
+            .pending_turns
             .get(&thread_id)
             .map(std::collections::VecDeque::len),
         Some(1)
     );
-    assert_eq!(app.clawbot_outbound_reactions.len(), 1);
+    assert_eq!(app.clawbot.outbound_reactions.len(), 1);
     assert_eq!(
         store
             .load_pending_turns()
@@ -549,7 +556,8 @@ async fn clawbot_sync_clears_stale_pending_turn_and_redelivers_unread() -> Resul
             .into_iter()
             .map(|pending| pending.turn_id)
             .collect::<Vec<_>>(),
-        app.clawbot_pending_turns
+        app.clawbot
+            .pending_turns
             .get(&thread_id)
             .expect("pending queue")
             .iter()
@@ -557,7 +565,8 @@ async fn clawbot_sync_clears_stale_pending_turn_and_redelivers_unread() -> Resul
             .collect::<Vec<_>>()
     );
     assert_ne!(
-        app.clawbot_pending_turns
+        app.clawbot
+            .pending_turns
             .get(&thread_id)
             .and_then(|queue| queue.front())
             .map(|pending| pending.turn_id.as_str()),
@@ -610,7 +619,8 @@ async fn clawbot_manual_bind_replays_cached_unread_messages() -> Result<()> {
         Some(session)
     );
     assert_eq!(
-        app.clawbot_pending_turns
+        app.clawbot
+            .pending_turns
             .get(&thread_id)
             .map(std::collections::VecDeque::len),
         Some(1)
