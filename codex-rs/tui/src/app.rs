@@ -153,31 +153,55 @@ use uuid::Uuid;
 mod agent_navigation;
 mod app_server_adapter;
 mod app_server_requests;
+#[path = "app/enhanced/btw.rs"]
 mod btw;
+#[path = "app/enhanced/clawbot.rs"]
 mod clawbot;
+#[path = "app/enhanced/clawbot_controller.rs"]
 mod clawbot_controller;
+#[path = "app/enhanced/clawbot_controls.rs"]
 mod clawbot_controls;
+#[path = "app/enhanced/dream_controller.rs"]
 mod dream_controller;
+#[path = "app/enhanced/editor_helpers.rs"]
 mod editor_helpers;
+#[path = "app/enhanced/feature_dispatch.rs"]
 mod feature_dispatch;
+#[path = "app/enhanced/integration_controller.rs"]
 mod integration_controller;
+#[path = "app/enhanced/jump_navigation.rs"]
 mod jump_navigation;
+#[path = "app/enhanced/key_chord.rs"]
 mod key_chord;
 mod loaded_threads;
 mod pending_interactive_replay;
+#[path = "app/enhanced/popup_helpers.rs"]
 mod popup_helpers;
+#[path = "app/enhanced/profile_controller.rs"]
 mod profile_controller;
+#[path = "app/enhanced/profile_management.rs"]
 mod profile_management;
+#[path = "app/enhanced/session_controller.rs"]
 mod session_controller;
+#[path = "app/enhanced/settings_controller.rs"]
 mod settings_controller;
+#[path = "app/enhanced/thread_controller.rs"]
 mod thread_controller;
+#[path = "app/enhanced/thread_menu.rs"]
 mod thread_menu;
+#[path = "app/enhanced/workflow_controller.rs"]
 mod workflow_controller;
+#[path = "app/enhanced/workflow_controls.rs"]
 mod workflow_controls;
+#[path = "app/enhanced/workflow_definition.rs"]
 mod workflow_definition;
+#[path = "app/enhanced/workflow_file_watch.rs"]
 mod workflow_file_watch;
+#[path = "app/enhanced/workflow_history.rs"]
 mod workflow_history;
+#[path = "app/enhanced/workflow_runtime.rs"]
 pub(crate) mod workflow_runtime;
+#[path = "app/enhanced/workflow_scheduler.rs"]
 mod workflow_scheduler;
 
 use self::agent_navigation::AgentNavigationDirection;

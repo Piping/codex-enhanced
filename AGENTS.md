@@ -207,8 +207,10 @@ These guidelines apply to app-server protocol work in `codex-rs`, especially:
 <!-- codex:dream:start -->
 ## Dream Guidance
 
-## Crate extraction guidance
-- Prefer dedicated workspace crates for reusable subsystems instead of adding more shared logic to `codex-core` or `codex-tui`.
-- If both `/dream` and memories need the same rollout filtering or retrospective-input construction, keep that shared code in `codex-rs/retrospective`, not in `core/src/memories`.
-- Keep rollout retrospective templates in `codex-rs/retrospective/templates/retrospective/`; `core/templates/memories/` is only for memories-specific prompts.
+## Dream Guidance
+
+## TUI delayed-action pattern
+- For delayed TUI follow-up actions, prefer scheduling a new `AppEvent` and handling it through the existing feature router/controller path instead of keeping work inline in the origin handler.
+- Guard delayed retries with a monotonic generation/token from UI state so stale scheduled work is ignored after a new user submission or restored thread state.
+- When persisting routed profile selection after a runtime switch, use `ProfileRouterState::set_runtime_active_profile(...)` so state only records profiles that still exist in the current route set.
 <!-- codex:dream:end -->
