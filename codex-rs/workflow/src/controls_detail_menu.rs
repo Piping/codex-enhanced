@@ -270,6 +270,25 @@ pub fn workflow_manual_trigger_controls_menu(
         }),
     });
 
+    items.push(WorkflowControlsItem {
+        name: "Edit Bound Thread".to_string(),
+        description: Some(match trigger.bind_thread.as_deref() {
+            Some(bind_thread) => format!("Current `bind_thread`: `{bind_thread}`."),
+            None => "Current `bind_thread`: any thread.".to_string(),
+        }),
+        selected_description: Some(
+            "Open this trigger's `bind_thread` value in your external editor. Leave it empty to allow any thread event to trigger it."
+                .to_string(),
+        ),
+        search_value: None,
+        is_disabled: false,
+        action: Some(WorkflowControlsAction::EditWorkflowTriggerField {
+            workflow_path: workflow_path.to_path_buf(),
+            trigger_id: trigger.id.clone(),
+            field: WorkflowTriggerEditableField::BindThread,
+        }),
+    });
+
     items.push(workflow_trigger_parameter_item(workflow_path, &trigger));
 
     Ok(WorkflowControlsMenu {

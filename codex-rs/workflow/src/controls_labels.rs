@@ -43,6 +43,7 @@ pub fn workflow_trigger_field_label(field: WorkflowTriggerEditableField) -> &'st
         WorkflowTriggerEditableField::Id => "id",
         WorkflowTriggerEditableField::Jobs => "jobs",
         WorkflowTriggerEditableField::Parameter => "parameter",
+        WorkflowTriggerEditableField::BindThread => "bind_thread",
     }
 }
 

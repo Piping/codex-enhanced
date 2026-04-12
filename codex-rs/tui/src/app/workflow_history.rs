@@ -80,12 +80,14 @@ impl App {
         }
 
         let mut cells: Vec<Arc<dyn HistoryCell>> = Vec::new();
+        let trigger_thread_id = thread_id.to_string();
         match self
             .run_before_turn_workflows(
                 app_server,
                 WorkflowPhaseContext {
                     current_user_turn: Some(current_user_turn.as_str()),
                     last_assistant_message: None,
+                    trigger_thread_id: Some(trigger_thread_id.as_str()),
                 },
             )
             .await
@@ -284,6 +286,7 @@ impl App {
         let Some(primary_thread_id) = self.primary_thread_id else {
             return Vec::new();
         };
+        let trigger_thread_id = primary_thread_id.to_string();
 
         let registry = match load_workflow_registry_for_ui(self.config.cwd.as_path()) {
             Ok(registry) => registry,
@@ -299,11 +302,13 @@ impl App {
         let phase_context = WorkflowPhaseContext {
             current_user_turn: None,
             last_assistant_message: last_agent_message.as_deref(),
+            trigger_thread_id: Some(trigger_thread_id.as_str()),
         };
         for (workflow, trigger) in
             registry.iter_matching_triggers(WorkflowTriggerKindDiscriminant::AfterTurn)
         {
-            if !trigger.enabled {
+            if !trigger.enabled || !trigger.matches_trigger_thread(Some(trigger_thread_id.as_str()))
+            {
                 continue;
             }
 

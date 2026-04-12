@@ -30,6 +30,7 @@ pub struct WorkflowFileSummary {
 pub struct WorkflowTriggerSummary {
     pub id: String,
     pub enabled: bool,
+    pub bind_thread: Option<String>,
     pub kind: WorkflowTriggerKind,
 }
 
@@ -108,6 +109,7 @@ pub fn workflow_menu_state(cwd: &Path) -> Result<WorkflowMenuState, String> {
                         .map(|trigger| WorkflowTriggerSummary {
                             id: trigger.id.clone(),
                             enabled: trigger.enabled,
+                            bind_thread: trigger.bind_thread.clone(),
                             kind: trigger.kind.clone(),
                         })
                         .collect::<Vec<_>>();
@@ -209,6 +211,7 @@ pub fn workflow_loaded_trigger_state(
         .map(|trigger| WorkflowTriggerSummary {
             id: trigger.id.clone(),
             enabled: trigger.enabled,
+            bind_thread: trigger.bind_thread.clone(),
             kind: trigger.kind.clone(),
         })
         .ok_or_else(|| format!("workflow trigger `{trigger_id}` does not exist"))?;

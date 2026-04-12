@@ -120,6 +120,8 @@ struct WorkflowTriggerConfig {
     id: Option<String>,
     #[serde(default = "default_true")]
     enabled: bool,
+    #[serde(default)]
+    bind_thread: Option<String>,
     jobs: Vec<String>,
     #[serde(flatten)]
     kind: WorkflowTriggerKind,
@@ -211,8 +213,20 @@ pub struct LoadedWorkflowFile {
 pub struct LoadedWorkflowTrigger {
     pub id: String,
     pub enabled: bool,
+    pub bind_thread: Option<String>,
     pub jobs: Vec<String>,
     pub kind: WorkflowTriggerKind,
+}
+
+impl LoadedWorkflowTrigger {
+    pub fn matches_trigger_thread(&self, trigger_thread_id: Option<&str>) -> bool {
+        self.bind_thread.as_deref().is_none_or(|bind_thread| {
+            Some(bind_thread)
+                == trigger_thread_id
+                    .map(str::trim)
+                    .filter(|thread_id| !thread_id.is_empty())
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -375,6 +389,12 @@ pub fn load_workflow_registry(
             triggers.push(LoadedWorkflowTrigger {
                 id: trigger_id,
                 enabled: trigger.enabled,
+                bind_thread: trigger
+                    .bind_thread
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|bind_thread| !bind_thread.is_empty())
+                    .map(str::to_owned),
                 jobs: trigger.jobs.clone(),
                 kind: trigger.kind.clone(),
             });
@@ -537,5 +557,77 @@ jobs:
             message.contains("invalid step timeout `not-a-duration`"),
             "unexpected error message: {message}"
         );
+    }
+
+    #[test]
+    fn load_workflow_registry_normalizes_empty_trigger_bind_thread() {
+        let dir = tempdir().unwrap();
+        let workflows_dir = dir.path().join(".codex/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        fs::write(
+            workflows_dir.join("workflow.yaml"),
+            r#"name: director
+
+triggers:
+  - id: scoped
+    type: before_turn
+    bind_thread: "  "
+    jobs: [notify]
+  - id: bound
+    type: after_turn
+    bind_thread: thread-1
+    jobs: [notify]
+
+jobs:
+  notify:
+    steps:
+      - prompt: summarize
+"#,
+        )
+        .unwrap();
+
+        let registry = load_workflow_registry(dir.path()).unwrap();
+        let workflow = registry.workflow("director").unwrap();
+        assert_eq!(
+            workflow.triggers,
+            vec![
+                LoadedWorkflowTrigger {
+                    id: "scoped".to_string(),
+                    enabled: true,
+                    bind_thread: None,
+                    jobs: vec!["notify".to_string()],
+                    kind: WorkflowTriggerKind::BeforeTurn,
+                },
+                LoadedWorkflowTrigger {
+                    id: "bound".to_string(),
+                    enabled: true,
+                    bind_thread: Some("thread-1".to_string()),
+                    jobs: vec!["notify".to_string()],
+                    kind: WorkflowTriggerKind::AfterTurn,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn loaded_workflow_trigger_matches_bind_thread() {
+        let trigger = LoadedWorkflowTrigger {
+            id: "scoped".to_string(),
+            enabled: true,
+            bind_thread: Some("thread-1".to_string()),
+            jobs: vec!["notify".to_string()],
+            kind: WorkflowTriggerKind::BeforeTurn,
+        };
+
+        assert!(trigger.matches_trigger_thread(Some("thread-1")));
+        assert!(!trigger.matches_trigger_thread(Some("thread-2")));
+        assert!(!trigger.matches_trigger_thread(None));
+
+        let trigger = LoadedWorkflowTrigger {
+            bind_thread: None,
+            ..trigger
+        };
+        assert!(trigger.matches_trigger_thread(Some("thread-2")));
+        assert!(trigger.matches_trigger_thread(None));
     }
 }

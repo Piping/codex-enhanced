@@ -10868,6 +10868,48 @@ model = "gpt-5.2"
     }
 
     #[tokio::test]
+    async fn after_turn_workflow_skips_mismatched_bind_thread() -> Result<()> {
+        let mut app = make_test_app().await;
+        let app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+        let workflows_dir = app.config.cwd.as_path().join(".codex/workflows");
+        std::fs::create_dir_all(&workflows_dir)?;
+        std::fs::write(
+            workflows_dir.join("after_turn.yaml"),
+            r#"name: director
+
+triggers:
+  - type: after_turn
+    id: followup
+    bind_thread: thread-other
+    jobs: [followup]
+
+jobs:
+  followup:
+    context: embed
+    steps:
+      - prompt: |
+          follow up from workflow
+"#,
+        )?;
+
+        app.primary_thread_id = Some(ThreadId::new());
+
+        let visible_cells = app
+            .handle_primary_thread_turn_complete_for_workflows(
+                &app_server,
+                Some("final reply".to_string()),
+            )
+            .await;
+
+        assert!(visible_cells.is_empty());
+        assert!(app.background_workflow_labels().is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn workflow_ui_popup_snapshot() -> Result<()> {
         let mut app = make_test_app().await;
         let tempdir = tempdir()?;
@@ -11053,6 +11095,47 @@ model = "gpt-5.2"
             app.queued_trigger_labels(),
             vec!["watcher · refresh".to_string()]
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn file_watch_trigger_skips_mismatched_bind_thread() -> Result<()> {
+        let mut app = make_test_app().await;
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+        let workflows_dir = app.config.cwd.as_path().join(".codex/workflows");
+        std::fs::create_dir_all(&workflows_dir)?;
+        std::fs::write(
+            workflows_dir.join("file_watch.yaml"),
+            r#"name: watcher
+
+triggers:
+  - type: file_watch
+    id: refresh
+    bind_thread: thread-other
+    jobs: [summarize]
+
+jobs:
+  summarize:
+    context: embed
+    steps:
+      - prompt: |
+          summarize the latest file changes
+"#,
+        )?;
+
+        let app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        app.primary_thread_id = Some(ThreadId::new());
+
+        let cells = app.handle_workspace_file_changes_for_workflows(
+            &app_server,
+            &[app.config.cwd.as_path().join("src/lib.rs")],
+        );
+
+        assert!(cells.is_empty());
+        assert!(app.background_workflow_labels().is_empty());
+        assert!(app.queued_trigger_labels().is_empty());
         Ok(())
     }
 

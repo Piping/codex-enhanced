@@ -41,6 +41,7 @@ pub enum WorkflowTriggerEditableField {
     Id,
     Jobs,
     Parameter,
+    BindThread,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -268,6 +269,12 @@ pub fn trigger_field_seed(
         }
         WorkflowTriggerEditableField::Parameter => trigger_parameter_seed_from_mapping(trigger)
             .ok_or_else(|| format!("workflow trigger `{trigger_id}` has no editable parameter")),
+        WorkflowTriggerEditableField::BindThread => Ok(trigger
+            .get(string_key("bind_thread"))
+            .and_then(YamlValue::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string()),
     }
 }
 
@@ -319,6 +326,20 @@ pub fn write_trigger_field(
                     string_key(parameter_key),
                     YamlValue::String(next_value.to_string()),
                 );
+                Ok(trigger_id.to_string())
+            })
+        }
+        WorkflowTriggerEditableField::BindThread => {
+            mutate_trigger(workflow_path, trigger_id, |trigger| {
+                let next_value = text.trim();
+                if next_value.is_empty() {
+                    trigger.remove(string_key("bind_thread"));
+                } else {
+                    trigger.insert(
+                        string_key("bind_thread"),
+                        YamlValue::String(next_value.to_string()),
+                    );
+                }
                 Ok(trigger_id.to_string())
             })
         }
@@ -709,9 +730,44 @@ jobs:
         assert!(text.contains("cron: '*/15 * * * *'") || text.contains("cron: \"*/15 * * * *\""));
         assert!(text.contains("- review_now"));
 
+        write_trigger_field(
+            &path,
+            "review_now",
+            WorkflowTriggerEditableField::BindThread,
+            "thread-1",
+        )
+        .unwrap();
+        assert_eq!(
+            trigger_field_seed(
+                &path,
+                "review_now",
+                WorkflowTriggerEditableField::BindThread
+            )
+            .unwrap(),
+            "thread-1"
+        );
+
+        write_trigger_field(
+            &path,
+            "review_now",
+            WorkflowTriggerEditableField::BindThread,
+            "",
+        )
+        .unwrap();
+        assert_eq!(
+            trigger_field_seed(
+                &path,
+                "review_now",
+                WorkflowTriggerEditableField::BindThread
+            )
+            .unwrap(),
+            ""
+        );
+
         set_trigger_type(&path, "review_now", WorkflowTriggerType::FileWatch).unwrap();
         let file_watch_text = fs::read_to_string(&path).unwrap();
         assert!(file_watch_text.contains("type: file_watch"));
         assert!(!file_watch_text.contains("cron:"));
+        assert!(!file_watch_text.contains("bind_thread:"));
     }
 }

@@ -73,12 +73,14 @@ pub enum WorkflowOutputDelivery {
 pub struct WorkflowPhaseContext<'a> {
     pub current_user_turn: Option<&'a str>,
     pub last_assistant_message: Option<&'a str>,
+    pub trigger_thread_id: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OwnedWorkflowPhaseContext {
     pub current_user_turn: Option<String>,
     pub last_assistant_message: Option<String>,
+    pub trigger_thread_id: Option<String>,
 }
 
 impl OwnedWorkflowPhaseContext {
@@ -86,6 +88,7 @@ impl OwnedWorkflowPhaseContext {
         WorkflowPhaseContext {
             current_user_turn: self.current_user_turn.as_deref(),
             last_assistant_message: self.last_assistant_message.as_deref(),
+            trigger_thread_id: self.trigger_thread_id.as_deref(),
         }
     }
 }
@@ -95,6 +98,7 @@ impl From<WorkflowPhaseContext<'_>> for OwnedWorkflowPhaseContext {
         Self {
             current_user_turn: value.current_user_turn.map(str::to_owned),
             last_assistant_message: value.last_assistant_message.map(str::to_owned),
+            trigger_thread_id: value.trigger_thread_id.map(str::to_owned),
         }
     }
 }
@@ -230,7 +234,7 @@ pub async fn run_before_turn_workflows<C: WorkflowRuntimeClient>(
     for (workflow, trigger) in
         registry.iter_matching_triggers(WorkflowTriggerKindDiscriminant::BeforeTurn)
     {
-        if !trigger.enabled {
+        if !trigger.enabled || !trigger.matches_trigger_thread(phase_context.trigger_thread_id) {
             continue;
         }
         results.extend(
@@ -336,6 +340,7 @@ async fn run_background_workflow_selection<C: WorkflowRuntimeClient>(
                 WorkflowPhaseContext {
                     current_user_turn: None,
                     last_assistant_message: None,
+                    trigger_thread_id: None,
                 },
                 WorkflowDisabledJobBehavior::RunRootJobs,
                 Some(cancellation),
@@ -1228,6 +1233,81 @@ jobs:
             ),
             other => panic!("expected failed run, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn before_turn_workflow_respects_bind_thread() {
+        let tempdir = tempdir().expect("tempdir");
+        let workflows_dir = tempdir.path().join(".codex/workflows");
+        std::fs::create_dir_all(&workflows_dir).expect("workflow dir");
+        std::fs::write(
+            workflows_dir.join("before_turn.yaml"),
+            r#"name: director
+
+triggers:
+  - type: before_turn
+    id: bound
+    bind_thread: thread-1
+    jobs: [review_backlog]
+  - type: before_turn
+    id: global
+    jobs: [review_backlog]
+  - type: before_turn
+    id: other
+    bind_thread: thread-2
+    jobs: [review_backlog]
+
+jobs:
+  review_backlog:
+    steps:
+      - prompt: summarize the backlog
+"#,
+        )
+        .expect("workflow fixture");
+        let registry = load_workflow_registry(tempdir.path()).expect("workflow registry");
+        let client = FakeWorkflowRuntimeClient::new(vec![
+            Ok(WorkflowTurnState {
+                status: WorkflowTurnStatus::Completed,
+                error: None,
+                last_agent_message: Some("bound reply".to_string()),
+            }),
+            Ok(WorkflowTurnState {
+                status: WorkflowTurnStatus::Completed,
+                error: None,
+                last_agent_message: Some("global reply".to_string()),
+            }),
+        ]);
+
+        let results = run_before_turn_workflows(
+            &client,
+            &registry,
+            WorkflowPhaseContext {
+                current_user_turn: Some("review this"),
+                last_assistant_message: None,
+                trigger_thread_id: Some("thread-1"),
+            },
+        )
+        .await
+        .expect("before turn workflows");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| result.trigger_id.clone())
+                .collect::<Vec<_>>(),
+            vec!["bound".to_string(), "global".to_string()]
+        );
+        assert_eq!(
+            client
+                .calls
+                .lock()
+                .expect("calls lock")
+                .iter()
+                .filter(|call| call.starts_with("start_turn:"))
+                .count(),
+            2
+        );
     }
 
     #[tokio::test]

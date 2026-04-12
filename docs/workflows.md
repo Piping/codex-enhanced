@@ -60,6 +60,7 @@ The trigger page can:
 - change `Type`
 - edit `Trigger ID`
 - edit `Target Jobs`
+- edit `Bound Thread`
 - edit the trigger-specific parameter
 - open the workflow YAML directly
 
@@ -69,6 +70,8 @@ Behavior notes:
 - A disabled trigger cannot be started from `Run Now` until it is enabled again.
 - `Run Now` is available for any enabled trigger type, not only `manual`.
 - If a trigger resolves only to disabled or otherwise unrunnable jobs, the run fails visibly instead of silently doing nothing.
+- `bind_thread` is optional. Leave it empty to allow matching events from any thread.
+- When `bind_thread` is set, event-driven triggers such as `before_turn`, `after_turn`, and `file_watch` only react to events associated with that thread.
 - `After Turn` runs are dispatched as background workflow tasks after the turn finishes, so the main thread stays responsive and the transcript shows workflow start/completion cells separately.
 - `response: user` follow-ups can recursively re-trigger `after_turn`. The chain naturally stops when the workflow returns an empty reply, because no follow-up turn is queued.
 - Workflow steps default to a 30s timeout. Override this per step with `timeout`, for example `timeout: 5m`.
@@ -123,6 +126,7 @@ triggers:
   - id: pulse
     type: interval
     every: 30m
+    bind_thread: ""
     enabled: true
     jobs: [notify]
 

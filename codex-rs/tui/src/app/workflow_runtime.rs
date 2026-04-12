@@ -508,6 +508,7 @@ impl App {
         let Some(primary_thread_id) = self.primary_thread_id else {
             return Vec::new();
         };
+        let trigger_thread_id = primary_thread_id.to_string();
         if changed_paths.is_empty() {
             return Vec::new();
         }
@@ -526,7 +527,8 @@ impl App {
         for (workflow, trigger) in
             registry.iter_matching_triggers(WorkflowTriggerKindDiscriminant::FileWatch)
         {
-            if !trigger.enabled {
+            if !trigger.enabled || !trigger.matches_trigger_thread(Some(trigger_thread_id.as_str()))
+            {
                 continue;
             }
 

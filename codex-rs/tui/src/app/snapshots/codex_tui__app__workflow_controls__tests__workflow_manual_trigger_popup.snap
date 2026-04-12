@@ -6,13 +6,13 @@ expression: popup
   director · review_backlog · manual.yaml
 
   Type to search trigger actions
-› Back                  Return to the previous workflow menu.
-  Edit workflow.yaml    Open manual.yaml in your editor.
-  Run Now               Run this trigger immediately in a background workflow thread.
-  Disable Trigger       Prevent this trigger from starting until it is enabled again.
-  Type: Manual          Choose which trigger type this workflow entry should use.
-  Edit Trigger ID       Rename this trigger id.
-  Edit Target Jobs      1 job
-  No Trigger Parameter  This trigger type does not require an extra schedule parameter.
+› Back                Return to the previous workflow menu.
+  Edit workflow.yaml  Open manual.yaml in your editor.
+  Run Now             Run this trigger immediately in a background workflow thread.
+  Disable Trigger     Prevent this trigger from starting until it is enabled again.
+  Type: Manual        Choose which trigger type this workflow entry should use.
+  Edit Trigger ID     Rename this trigger id.
+  Edit Target Jobs    1 job
+  Edit Bound Thread   Current `bind_thread`: any thread.
 
   Press enter to confirm or esc to go back
