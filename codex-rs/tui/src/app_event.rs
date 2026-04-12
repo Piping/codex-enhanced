@@ -526,6 +526,11 @@ pub(crate) enum AppEvent {
         action: ProfileFallbackAction,
         error_message: String,
     },
+    ExecuteProfileFallbackRetry {
+        generation: u64,
+        profile_id: Option<String>,
+        history_message: String,
+    },
     ClawbotTurnCompleted {
         thread_id: ThreadId,
         turn: AppServerTurn,

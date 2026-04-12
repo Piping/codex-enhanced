@@ -65,6 +65,20 @@ impl ProfileController {
                 )
                 .await;
             }
+            AppEvent::ExecuteProfileFallbackRetry {
+                generation,
+                profile_id,
+                history_message,
+            } => {
+                app.execute_profile_fallback_retry(
+                    tui,
+                    app_server,
+                    generation,
+                    profile_id,
+                    history_message,
+                )
+                .await;
+            }
             _ => unreachable!("non-profile event passed to profile controller"),
         }
     }

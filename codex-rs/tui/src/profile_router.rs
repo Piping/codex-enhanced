@@ -46,20 +46,6 @@ impl ProfileRouterState {
             .any(|route| route.profile_id == profile_id)
     }
 
-    pub(crate) fn set_active_profile(&mut self, profile_id: &str) -> bool {
-        if !self.contains_profile(profile_id) {
-            return false;
-        }
-        let next = Some(profile_id.to_string());
-
-        if self.active_profile_id == next {
-            false
-        } else {
-            self.active_profile_id = next;
-            true
-        }
-    }
-
     pub(crate) fn set_runtime_active_profile(&mut self, profile_id: Option<&str>) -> bool {
         let next = profile_id
             .filter(|profile_id| self.contains_profile(profile_id))
@@ -77,16 +63,27 @@ impl ProfileRouterState {
 pub(crate) struct DefaultProfileRouter;
 
 impl DefaultProfileRouter {
-    pub(crate) fn fallback_profile(
+    pub(crate) fn next_profile(
         &self,
         state: &ProfileRouterState,
         active_profile_id: Option<&str>,
     ) -> Option<String> {
-        state
+        let first = state.routes.first()?;
+        let Some(active_profile_id) = active_profile_id else {
+            return Some(first.profile_id.clone());
+        };
+
+        let active_index = state
             .routes
             .iter()
-            .find(|route| Some(route.profile_id.as_str()) != active_profile_id)
-            .map(|route| route.profile_id.clone())
+            .position(|route| route.profile_id == active_profile_id);
+        match active_index {
+            Some(index) => {
+                let next_index = (index + 1) % state.routes.len();
+                Some(state.routes[next_index].profile_id.clone())
+            }
+            None => Some(first.profile_id.clone()),
+        }
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -205,7 +202,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn fallback_profile_skips_current_profile() {
+    fn next_profile_skips_current_profile() {
         let state = ProfileRouterState {
             version: 1,
             active_profile_id: Some("primary".to_string()),
@@ -219,10 +216,58 @@ mod tests {
             ],
         };
 
-        let fallback = DefaultProfileRouter
-            .fallback_profile(&state, /*active_profile_id*/ Some("primary"));
+        let fallback =
+            DefaultProfileRouter.next_profile(&state, /*active_profile_id*/ Some("primary"));
 
         assert_eq!(fallback, Some("secondary".to_string()));
+    }
+
+    #[test]
+    fn next_profile_round_robins_in_route_order() {
+        let state = ProfileRouterState {
+            version: 1,
+            active_profile_id: Some("secondary".to_string()),
+            routes: vec![
+                ProfileRouteEntry {
+                    profile_id: "primary".to_string(),
+                },
+                ProfileRouteEntry {
+                    profile_id: "secondary".to_string(),
+                },
+                ProfileRouteEntry {
+                    profile_id: "tertiary".to_string(),
+                },
+            ],
+        };
+
+        assert_eq!(
+            DefaultProfileRouter.next_profile(&state, Some("secondary")),
+            Some("tertiary".to_string())
+        );
+        assert_eq!(
+            DefaultProfileRouter.next_profile(&state, Some("tertiary")),
+            Some("primary".to_string())
+        );
+        assert_eq!(
+            DefaultProfileRouter.next_profile(&state, None),
+            Some("primary".to_string())
+        );
+    }
+
+    #[test]
+    fn next_profile_keeps_single_route_available() {
+        let state = ProfileRouterState {
+            version: 1,
+            active_profile_id: Some("primary".to_string()),
+            routes: vec![ProfileRouteEntry {
+                profile_id: "primary".to_string(),
+            }],
+        };
+
+        assert_eq!(
+            DefaultProfileRouter.next_profile(&state, Some("primary")),
+            Some("primary".to_string())
+        );
     }
 
     #[test]
