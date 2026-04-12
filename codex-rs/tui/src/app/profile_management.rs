@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::time::Duration;
 
 use toml::Value as TomlValue;
 
@@ -24,6 +25,38 @@ use codex_core::config::Config;
 use codex_protocol::ThreadId;
 
 const PROFILE_MANAGEMENT_VIEW_ID: &str = "profile-management";
+const PROFILE_FALLBACK_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
+
+fn profile_fallback_retry_delay(attempt: u32) -> Duration {
+    if attempt <= 1 {
+        return Duration::ZERO;
+    }
+
+    let exponent = attempt.saturating_sub(2).min(5);
+    let seconds = 1_u64 << exponent;
+    Duration::from_secs(seconds).min(PROFILE_FALLBACK_RETRY_MAX_DELAY)
+}
+
+fn profile_fallback_retry_target(
+    action: ProfileFallbackAction,
+    router_state: &ProfileRouterState,
+    active_profile_id: Option<&str>,
+    same_profile_retry_consumed: bool,
+) -> Option<String> {
+    if matches!(action, ProfileFallbackAction::RetrySameProfileFirst)
+        && !same_profile_retry_consumed
+    {
+        return active_profile_id.map(ToOwned::to_owned);
+    }
+
+    DefaultProfileRouter
+        .next_profile(router_state, active_profile_id)
+        .or_else(|| active_profile_id.map(ToOwned::to_owned))
+}
+
+fn profile_label(profile_id: Option<&str>) -> &str {
+    profile_id.unwrap_or("default")
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct RoutedProfileSummary {
@@ -331,80 +364,92 @@ impl App {
             return;
         }
 
-        match action {
-            ProfileFallbackAction::RetrySameProfileFirst => {
-                let profile_label = self
-                    .chat_widget
-                    .active_profile_label()
-                    .unwrap_or_else(|| "current".to_string());
-                if self.chat_widget.profile_retry_attempted()
-                    || !self
-                        .chat_widget
-                        .retry_last_user_turn_for_profile_fallback(format!(
-                            "Retrying the last turn on profile `{profile_label}`."
-                        ))
-                {
-                    let router_state = self.profile_router_store().load().unwrap_or_default();
-                    let Some(next_profile_id) = DefaultProfileRouter
-                        .fallback_profile(&router_state, self.active_profile.as_deref())
-                    else {
-                        self.chat_widget.add_error_message(error_message);
-                        return;
-                    };
-                    self.chat_widget.finish_failed_turn_for_profile_fallback();
-                    if let Err(err) = self
-                        .switch_runtime_profile(tui, app_server, Some(&next_profile_id))
-                        .await
-                    {
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to switch to fallback profile `{next_profile_id}`: {err}"
-                        ));
-                        return;
-                    }
-                    if let Err(err) = self.profile_router_store().update(|state| {
-                        state.set_active_profile(&next_profile_id);
-                    }) {
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to persist fallback profile `{next_profile_id}` in {PROFILE_ROUTER_STATE_RELATIVE_PATH}: {err}"
-                        ));
-                        return;
-                    }
-                    self.chat_widget.submit_profile_fallback_retry(format!(
-                        "Retrying the last turn with profile `{next_profile_id}`."
-                    ));
-                }
+        let generation = self.chat_widget.profile_retry_generation();
+        let attempt = self
+            .chat_widget
+            .profile_retry_attempt_count()
+            .saturating_add(1);
+        let router_state = self.profile_router_store().load().unwrap_or_default();
+        let profile_id = profile_fallback_retry_target(
+            action,
+            &router_state,
+            self.active_profile.as_deref(),
+            self.chat_widget.profile_retry_attempted(),
+        );
+        let target_label = profile_label(profile_id.as_deref()).to_string();
+        let history_message = format!("Retrying the last turn with profile `{target_label}`.");
+        let delay = profile_fallback_retry_delay(attempt);
+
+        self.chat_widget.finish_failed_turn_for_profile_fallback();
+
+        if delay.is_zero() {
+            self.execute_profile_fallback_retry(
+                tui,
+                app_server,
+                generation,
+                profile_id,
+                history_message,
+            )
+            .await;
+            return;
+        }
+
+        self.chat_widget.add_info_message(
+            format!(
+                "{error_message} Retrying with profile `{target_label}` in {}s.",
+                delay.as_secs()
+            ),
+            /*hint*/ None,
+        );
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            app_event_tx.send(AppEvent::ExecuteProfileFallbackRetry {
+                generation,
+                profile_id,
+                history_message,
+            });
+        });
+    }
+
+    pub(super) async fn execute_profile_fallback_retry(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        generation: u64,
+        profile_id: Option<String>,
+        history_message: String,
+    ) {
+        if !self.chat_widget.has_retryable_user_turn()
+            || self.chat_widget.profile_retry_generation() != generation
+        {
+            return;
+        }
+
+        if self.active_profile != profile_id {
+            if let Err(err) = self
+                .switch_runtime_profile(tui, app_server, profile_id.as_deref())
+                .await
+            {
+                let profile_label = profile_label(profile_id.as_deref());
+                self.chat_widget.add_error_message(format!(
+                    "Failed to switch to fallback profile `{profile_label}`: {err}"
+                ));
+                return;
             }
-            ProfileFallbackAction::SwitchProfileImmediately => {
-                let router_state = self.profile_router_store().load().unwrap_or_default();
-                let Some(next_profile_id) = DefaultProfileRouter
-                    .fallback_profile(&router_state, self.active_profile.as_deref())
-                else {
-                    self.chat_widget.add_error_message(error_message);
-                    return;
-                };
-                self.chat_widget.finish_failed_turn_for_profile_fallback();
-                if let Err(err) = self
-                    .switch_runtime_profile(tui, app_server, Some(&next_profile_id))
-                    .await
-                {
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to switch to fallback profile `{next_profile_id}`: {err}"
-                    ));
-                    return;
-                }
-                if let Err(err) = self.profile_router_store().update(|state| {
-                    state.set_active_profile(&next_profile_id);
-                }) {
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to persist fallback profile `{next_profile_id}` in {PROFILE_ROUTER_STATE_RELATIVE_PATH}: {err}"
-                    ));
-                    return;
-                }
-                self.chat_widget.submit_profile_fallback_retry(format!(
-                    "Retrying the last turn with profile `{next_profile_id}`."
+
+            if let Err(err) = self.profile_router_store().update(|state| {
+                state.set_runtime_active_profile(profile_id.as_deref());
+            }) {
+                let profile_label = profile_label(profile_id.as_deref());
+                self.chat_widget.add_error_message(format!(
+                    "Switched to fallback profile `{profile_label}`, but failed to persist {PROFILE_ROUTER_STATE_RELATIVE_PATH}: {err}"
                 ));
             }
         }
+
+        self.chat_widget
+            .submit_profile_fallback_retry(history_message);
     }
 }
 
@@ -655,6 +700,8 @@ fn rewritten_router_state(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::Terminal;
@@ -666,11 +713,14 @@ mod tests {
     use super::RoutedProfileSummary;
     use super::fallback_route_editor_seed;
     use super::parse_fallback_route_editor_contents;
+    use super::profile_fallback_retry_delay;
+    use super::profile_fallback_retry_target;
     use super::profile_management_root_params;
     use super::rewritten_router_state;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
     use crate::bottom_pane::ListSelectionView;
+    use crate::profile_router::ProfileFallbackAction;
     use crate::profile_router::ProfileRouteEntry;
     use crate::profile_router::ProfileRouterState;
     use crate::render::renderable::Renderable;
@@ -820,6 +870,73 @@ mod tests {
         assert_eq!(
             unknown,
             "Unknown profile `unknown` in fallback config. Keep only profiles currently defined in config.toml."
+        );
+    }
+
+    #[test]
+    fn profile_fallback_retry_delay_uses_exponential_backoff_with_cap() {
+        let expected = [
+            Duration::ZERO,
+            Duration::ZERO,
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+            Duration::from_secs(4),
+            Duration::from_secs(8),
+            Duration::from_secs(16),
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+        ];
+
+        for (attempt, delay) in expected.into_iter().enumerate() {
+            assert_eq!(profile_fallback_retry_delay(attempt as u32), delay);
+        }
+    }
+
+    #[test]
+    fn retry_same_profile_first_only_rotates_after_same_profile_retry_is_consumed() {
+        let router_state = test_router_state();
+
+        assert_eq!(
+            profile_fallback_retry_target(
+                ProfileFallbackAction::RetrySameProfileFirst,
+                &router_state,
+                Some("primary"),
+                /*same_profile_retry_consumed*/ false,
+            ),
+            Some("primary".to_string())
+        );
+        assert_eq!(
+            profile_fallback_retry_target(
+                ProfileFallbackAction::RetrySameProfileFirst,
+                &router_state,
+                Some("primary"),
+                /*same_profile_retry_consumed*/ true,
+            ),
+            Some("secondary".to_string())
+        );
+    }
+
+    #[test]
+    fn switch_profile_immediately_uses_next_profile_in_route_order() {
+        let router_state = test_router_state();
+
+        assert_eq!(
+            profile_fallback_retry_target(
+                ProfileFallbackAction::SwitchProfileImmediately,
+                &router_state,
+                Some("primary"),
+                /*same_profile_retry_consumed*/ false,
+            ),
+            Some("secondary".to_string())
+        );
+        assert_eq!(
+            profile_fallback_retry_target(
+                ProfileFallbackAction::SwitchProfileImmediately,
+                &router_state,
+                None,
+                /*same_profile_retry_consumed*/ false,
+            ),
+            Some("primary".to_string())
         );
     }
 

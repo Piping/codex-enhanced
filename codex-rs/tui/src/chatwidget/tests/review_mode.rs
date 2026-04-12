@@ -356,6 +356,8 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
         queued_user_messages,
         last_submitted_user_turn: None,
         profile_retry_attempted: false,
+        profile_retry_attempt_count: 0,
+        profile_retry_generation: 0,
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         task_running: false,

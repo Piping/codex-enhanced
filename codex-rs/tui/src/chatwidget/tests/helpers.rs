@@ -296,6 +296,8 @@ pub(super) async fn make_chatwidget_manual(
         last_non_retry_error: None,
         last_submitted_user_turn: None,
         profile_retry_attempted: false,
+        profile_retry_attempt_count: 0,
+        profile_retry_generation: 0,
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)

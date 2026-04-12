@@ -200,7 +200,6 @@ These guidelines apply to app-server protocol work in `codex-rs`, especially:
 - Validate with `cargo test -p codex-app-server-protocol`.
 - Avoid boilerplate tests that only assert experimental field markers for individual
   request fields in `common.rs`; rely on schema generation/tests and behavioral coverage instead.
-- cargo run --bin codex -- -p <profile> 总是 加 -p pig ; it allows api usage
 - 修改代码后总是执行 cargo build -p codex-cli; 然后执行交互式终端 (PTY) 验证要完成的特性是否实现;
 - 在跑 codex 命令之前, 总是用sudo codesign --sign - --force --preserve-metadata=entitlements,requirements,flags,runtime <bin>来给二进制签名
 - 当需求改变的时候, 要同步更新对应的文档
