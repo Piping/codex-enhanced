@@ -932,6 +932,8 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
         user_turn_pending_start: false,
         last_submitted_user_turn: None,
         profile_retry_attempted: false,
+        profile_retry_attempt_count: 0,
+        profile_retry_generation: 0,
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         task_running: true,
@@ -987,6 +989,8 @@ async fn capture_and_restore_thread_input_state_preserves_profile_fallback_retry
         Some(UserMessage::from("retry me"))
     );
     assert!(!chat.profile_retry_attempted());
+    let generation = chat.profile_retry_generation();
+    assert_eq!(chat.profile_retry_attempt_count(), 0);
 
     let snapshot = chat.capture_thread_input_state();
     chat.restore_thread_input_state(/*input_state*/ None);
@@ -1001,9 +1005,9 @@ async fn capture_and_restore_thread_input_state_preserves_profile_fallback_retry
         Some(UserMessage::from("retry me"))
     );
     assert!(!chat.profile_retry_attempted());
-    assert!(chat.retry_last_user_turn_for_profile_fallback(
-        "Retrying the last turn on profile `primary`.".to_string()
-    ));
+    assert_eq!(chat.profile_retry_attempt_count(), 0);
+    assert_eq!(chat.profile_retry_generation(), generation);
+    chat.submit_profile_fallback_retry("Retrying the last turn on profile `primary`.".to_string());
     let items = match next_submit_op(&mut op_rx) {
         Op::UserTurn { items, .. } => items,
         other => panic!("expected Op::UserTurn, got {other:?}"),
@@ -1018,6 +1022,12 @@ async fn capture_and_restore_thread_input_state_preserves_profile_fallback_retry
     assert_eq!(
         chat.last_submitted_user_turn(),
         Some(UserMessage::from("continue"))
+    );
+    assert!(chat.profile_retry_attempted());
+    assert_eq!(chat.profile_retry_attempt_count(), 1);
+    assert_eq!(
+        chat.profile_retry_generation(),
+        generation.saturating_add(1)
     );
 }
 

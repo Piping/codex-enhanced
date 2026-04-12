@@ -1076,6 +1076,8 @@ pub(crate) struct ChatWidget {
     last_non_retry_error: Option<(String, String)>,
     last_submitted_user_turn: Option<UserMessage>,
     profile_retry_attempted: bool,
+    profile_retry_attempt_count: u32,
+    profile_retry_generation: u64,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1213,6 +1215,8 @@ pub(crate) struct ThreadInputState {
     user_turn_pending_start: bool,
     last_submitted_user_turn: Option<UserMessage>,
     profile_retry_attempted: bool,
+    profile_retry_attempt_count: u32,
+    profile_retry_generation: u64,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
     task_running: bool,
@@ -3390,6 +3394,8 @@ impl ChatWidget {
             user_turn_pending_start: self.user_turn_pending_start,
             last_submitted_user_turn: self.last_submitted_user_turn.clone(),
             profile_retry_attempted: self.profile_retry_attempted,
+            profile_retry_attempt_count: self.profile_retry_attempt_count,
+            profile_retry_generation: self.profile_retry_generation,
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             task_running: self.bottom_pane.is_task_running(),
@@ -3470,6 +3476,8 @@ impl ChatWidget {
             );
             self.last_submitted_user_turn = input_state.last_submitted_user_turn;
             self.profile_retry_attempted = input_state.profile_retry_attempted;
+            self.profile_retry_attempt_count = input_state.profile_retry_attempt_count;
+            self.profile_retry_generation = input_state.profile_retry_generation;
         } else {
             self.agent_turn_running = false;
             self.goal_status_active_turn_started_at = None;
@@ -3489,6 +3497,8 @@ impl ChatWidget {
             self.queued_user_message_history_records.clear();
             self.last_submitted_user_turn = None;
             self.profile_retry_attempted = false;
+            self.profile_retry_attempt_count = 0;
+            self.profile_retry_generation = 0;
         }
         self.turn_sleep_inhibitor
             .set_turn_running(self.agent_turn_running);
@@ -5220,6 +5230,8 @@ impl ChatWidget {
             last_non_retry_error: None,
             last_submitted_user_turn: None,
             profile_retry_attempted: false,
+            profile_retry_attempt_count: 0,
+            profile_retry_generation: 0,
         };
 
         widget.prefetch_rate_limits();
@@ -6424,6 +6436,8 @@ impl ChatWidget {
                 mention_bindings: mention_bindings.clone(),
             });
             self.profile_retry_attempted = false;
+            self.profile_retry_attempt_count = 0;
+            self.profile_retry_generation = self.profile_retry_generation.saturating_add(1);
         }
         let mut items: Vec<UserInput> = Vec::new();
 
@@ -11843,12 +11857,16 @@ impl ChatWidget {
         self.refresh_plugin_mentions();
     }
 
-    pub(crate) fn active_profile_label(&self) -> Option<String> {
-        self.config.active_profile.clone()
-    }
-
     pub(crate) fn profile_retry_attempted(&self) -> bool {
         self.profile_retry_attempted
+    }
+
+    pub(crate) fn profile_retry_attempt_count(&self) -> u32 {
+        self.profile_retry_attempt_count
+    }
+
+    pub(crate) fn profile_retry_generation(&self) -> u64 {
+        self.profile_retry_generation
     }
 
     pub(crate) fn has_retryable_user_turn(&self) -> bool {
@@ -11860,38 +11878,16 @@ impl ChatWidget {
         self.last_submitted_user_turn.clone()
     }
 
-    pub(crate) fn retry_last_user_turn_for_profile_fallback(
-        &mut self,
-        history_message: String,
-    ) -> bool {
-        if self.profile_retry_attempted {
-            return false;
-        }
-        if self.last_submitted_user_turn.is_none() {
-            return false;
-        }
-
-        self.profile_retry_attempted = true;
-        self.submit_pending_steers_after_interrupt = false;
-        self.finalize_turn();
-        self.add_to_history(history_cell::new_info_event(
-            history_message,
-            /*hint*/ None,
-        ));
-        self.submit_user_message(UserMessage::from("continue"));
-        true
-    }
-
     pub(crate) fn submit_profile_fallback_retry(&mut self, history_message: String) {
         let user_message = UserMessage::from("continue");
-        self.last_submitted_user_turn = Some(user_message.clone());
-        self.profile_retry_attempted = true;
         self.submit_pending_steers_after_interrupt = false;
         self.add_to_history(history_cell::new_info_event(
             history_message,
             /*hint*/ None,
         ));
         self.submit_user_message(user_message);
+        self.profile_retry_attempted = true;
+        self.profile_retry_attempt_count = self.profile_retry_attempt_count.saturating_add(1);
     }
 
     pub(crate) fn finish_failed_turn_for_profile_fallback(&mut self) {

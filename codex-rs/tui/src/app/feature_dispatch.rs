@@ -22,7 +22,8 @@ impl FeatureRoute {
             AppEvent::OpenProfileManagementPanel
             | AppEvent::EditProfileFallbackConfig
             | AppEvent::SwitchRuntimeProfile { .. }
-            | AppEvent::RetryLastUserTurnWithProfileFallback { .. } => Some(Self::Profile),
+            | AppEvent::RetryLastUserTurnWithProfileFallback { .. }
+            | AppEvent::ExecuteProfileFallbackRetry { .. } => Some(Self::Profile),
             AppEvent::OpenThreadPanel
             | AppEvent::OpenJumpToMessagePanel
             | AppEvent::JumpToTranscriptCell { .. }
