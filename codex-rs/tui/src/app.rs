@@ -161,6 +161,8 @@ mod clawbot;
 mod clawbot_controller;
 #[path = "app/enhanced/clawbot_controls.rs"]
 mod clawbot_controls;
+#[path = "app/enhanced/config_validation.rs"]
+mod config_validation;
 #[path = "app/enhanced/dream_controller.rs"]
 mod dream_controller;
 #[path = "app/enhanced/editor_helpers.rs"]
@@ -1226,17 +1228,56 @@ impl App {
         }
     }
 
-    async fn rebuild_config_for_cwd(&self, cwd: PathBuf) -> Result<Config> {
-        let mut overrides = self.harness_overrides.clone();
-        overrides.cwd = Some(cwd.clone());
-        let cwd_display = cwd.display().to_string();
+    async fn build_config_for_cwd_with_overrides(
+        &self,
+        cwd: PathBuf,
+        mut overrides: ConfigOverrides,
+    ) -> std::io::Result<Config> {
+        overrides.cwd = Some(cwd);
         ConfigBuilder::default()
             .codex_home(self.config.codex_home.clone())
             .cli_overrides(self.cli_kv_overrides.clone())
             .harness_overrides(overrides)
             .build()
             .await
-            .wrap_err_with(|| format!("Failed to rebuild config for cwd {cwd_display}"))
+    }
+
+    async fn rebuild_config_for_cwd(&mut self, cwd: PathBuf) -> Result<Config> {
+        let missing_runtime_profile = self.harness_overrides.config_profile.clone();
+        let cwd_display = cwd.display().to_string();
+        let config = match self
+            .build_config_for_cwd_with_overrides(cwd.clone(), self.harness_overrides.clone())
+            .await
+        {
+            Ok(config) => config,
+            Err(err) => {
+                let should_clear_runtime_profile =
+                    missing_runtime_profile
+                        .as_deref()
+                        .is_some_and(|profile_id| {
+                            config_validation::missing_config_profile_name(&err).as_deref()
+                                == Some(profile_id)
+                        });
+                if !should_clear_runtime_profile {
+                    return Err(err).wrap_err_with(|| {
+                        format!("Failed to rebuild config for cwd {cwd_display}")
+                    });
+                }
+
+                let stale_profile = missing_runtime_profile.expect("checked above");
+                tracing::warn!(
+                    profile = stale_profile,
+                    "clearing stale runtime profile override after config refresh"
+                );
+                self.harness_overrides.config_profile = None;
+                self.active_profile = None;
+                self.build_config_for_cwd_with_overrides(cwd, self.harness_overrides.clone())
+                    .await
+                    .wrap_err_with(|| format!("Failed to rebuild config for cwd {cwd_display}"))?
+            }
+        };
+        self.validate_config_dependent_state(&config);
+        Ok(config)
     }
 
     async fn refresh_in_memory_config_from_disk(&mut self) -> Result<()> {
@@ -4269,6 +4310,7 @@ impl App {
                 tracing::warn!("failed to start workflow file watcher: {err}");
             }
         }
+        app.validate_config_dependent_state(&app.config);
         if let Some(started) = initial_started_thread {
             app.enqueue_primary_thread_session(started.session, started.turns)
                 .await?;
@@ -5422,6 +5464,9 @@ mod tests {
     use crate::history_cell::UserHistoryCell;
     use crate::history_cell::new_session_info;
     use crate::multi_agents::AgentPickerThreadEntry;
+    use crate::profile_router::ProfileRouteEntry;
+    use crate::profile_router::ProfileRouterState;
+    use crate::profile_router::ProfileRouterStore;
     use assert_matches::assert_matches;
     use codex_app_server_client::AppServerEvent;
 
@@ -9607,6 +9652,77 @@ model = "gpt-5.2"
 
         assert_eq!(app.config.active_profile.as_deref(), Some("fresh"));
         assert_eq!(app.active_profile.as_deref(), Some("fresh"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_in_memory_config_from_disk_clears_stale_runtime_profile_override() -> Result<()>
+    {
+        let mut app = make_test_app().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+        app.harness_overrides.config_profile = Some("pig".to_string());
+        app.active_profile = Some("pig".to_string());
+
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            r#"
+profile = "fresh"
+
+[profiles.fresh]
+model = "gpt-5.2"
+"#,
+        )?;
+
+        app.refresh_in_memory_config_from_disk().await?;
+
+        assert_eq!(app.harness_overrides.config_profile, None);
+        assert_eq!(app.config.active_profile.as_deref(), Some("fresh"));
+        assert_eq!(app.active_profile.as_deref(), Some("fresh"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_in_memory_config_from_disk_prunes_stale_profile_router_state() -> Result<()> {
+        let mut app = make_test_app().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            r#"
+[profiles.fresh]
+model = "gpt-5.2"
+"#,
+        )?;
+        ProfileRouterStore::new(codex_home.path().to_path_buf()).replace(&ProfileRouterState {
+            version: 1,
+            active_profile_id: Some("pig".to_string()),
+            routes: vec![
+                ProfileRouteEntry {
+                    profile_id: "fresh".to_string(),
+                },
+                ProfileRouteEntry {
+                    profile_id: "pig".to_string(),
+                },
+                ProfileRouteEntry {
+                    profile_id: "fresh".to_string(),
+                },
+            ],
+        })?;
+
+        app.refresh_in_memory_config_from_disk().await?;
+
+        assert_eq!(
+            ProfileRouterStore::new(codex_home.path().to_path_buf()).load()?,
+            ProfileRouterState {
+                version: 1,
+                active_profile_id: None,
+                routes: vec![ProfileRouteEntry {
+                    profile_id: "fresh".to_string(),
+                }],
+            }
+        );
         Ok(())
     }
 

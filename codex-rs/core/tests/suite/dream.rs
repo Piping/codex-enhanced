@@ -59,7 +59,8 @@ async fn dream_pipeline_writes_repo_memory_and_updates_repo_guidance() -> Result
         "memoryBlockMd": "- Feishu bridge and /dream are important workspace flows.\n",
         "nextSessionHintMd": "Start by reading AGENTS.md and the repo memory block.",
         "agentsBlockMd": "- Keep /dream focused on current-thread retrospectives.\n",
-        "skills": []
+        "skills": [],
+        "newSkills": []
     });
     let dream_mock = mount_sse_once(
         &server,

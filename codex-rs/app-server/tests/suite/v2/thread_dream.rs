@@ -60,7 +60,8 @@ async fn thread_dream_start_updates_repo_artifacts_and_returns_paths() -> Result
                 "path": skill_path.display().to_string(),
                 "blockMd": "- Demo skill should stay repo-local and concise.\n"
             }
-        ]
+        ],
+        "newSkills": []
     });
     let dream_sse = responses::sse(vec![
         responses::ev_response_created("resp-dream"),

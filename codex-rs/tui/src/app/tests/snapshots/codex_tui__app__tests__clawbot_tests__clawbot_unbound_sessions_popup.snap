@@ -1,0 +1,15 @@
+---
+source: tui/src/app/tests/clawbot_tests.rs
+assertion_line: 819
+expression: unbound_sessions_popup
+---
+  Clawbot
+  active bindings: 2
+  ws status: Unconfigured
+  turn mode: interactive
+
+› 1. Back                   Return to channel controls.
+  2. Bind Chat ID Manually  Target current thread
+  3. Bob                    1 unread
+
+  Press enter to confirm or esc to go back

@@ -4,6 +4,7 @@ Thread id: `{{thread_id}}`
 Rollout path: `{{rollout_path}}`
 Repo root: `{{repo_root}}`
 Memory root: `{{memory_root}}`
+Repo skill root: `{{repo_skill_root}}`
 Repo AGENTS path: `{{agents_path}}`
 
 ## Existing Repo Memory
@@ -23,6 +24,8 @@ Repo AGENTS path: `{{agents_path}}`
 {{visible_skill_fragments}}
 
 ## Repo-local Skill Candidates
+
+Existing skill updates must target only these candidate paths. The list may include repo-local skills auto-discovered under `{{repo_skill_root}}`, even if they were not explicitly referenced in the thread.
 
 {{skill_candidates}}
 

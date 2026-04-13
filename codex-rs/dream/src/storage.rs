@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -6,6 +7,7 @@ use bm25::Document;
 use bm25::Language;
 use bm25::SearchEngineBuilder;
 use chrono::Utc;
+use serde::Serialize;
 
 use crate::types::DreamContext;
 use crate::types::DreamIndex;
@@ -62,14 +64,21 @@ pub(crate) async fn write_dream_artifacts(
         .iter()
         .map(|skill| (skill.path.to_string_lossy().to_string(), skill.path.clone()))
         .collect::<BTreeMap<_, _>>();
-    let mut updated_skill_paths = Vec::new();
+    let mut updated_skill_paths = BTreeSet::new();
     for skill in &output.skills {
         let Some(skill_path) = skill_candidates.get(&skill.path).cloned() else {
             continue;
         };
         write_managed_block_file(&skill_path, "Dream Notes", &skill.block_md, None).await?;
-        updated_skill_paths.push(skill_path);
+        updated_skill_paths.insert(skill_path);
     }
+
+    for skill in &output.new_skills {
+        if let Some(skill_path) = create_new_skill_file(&context.repo_skill_root, skill).await? {
+            updated_skill_paths.insert(skill_path);
+        }
+    }
+    let updated_skill_paths = updated_skill_paths.into_iter().collect::<Vec<_>>();
 
     let index = build_index(
         &memory_path,
@@ -300,16 +309,81 @@ fn managed_block_contents(text: &str) -> Option<String> {
     Some(text[start..end].trim().to_string())
 }
 
+async fn create_new_skill_file(
+    repo_skill_root: &Path,
+    skill: &crate::types::DreamNewSkill,
+) -> anyhow::Result<Option<PathBuf>> {
+    let slug = sanitize_skill_slug(&skill.name);
+    let skill_path = repo_skill_root.join(&slug).join("SKILL.md");
+    if skill_path.exists() {
+        return Ok(None);
+    }
+
+    if let Some(parent) = skill_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(&skill_path, render_new_skill_contents(skill)?).await?;
+    Ok(Some(skill_path))
+}
+
+fn sanitize_skill_slug(name: &str) -> String {
+    let mut slug = String::new();
+    let mut last_was_dash = false;
+
+    for ch in name.chars().flat_map(char::to_lowercase) {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch);
+            last_was_dash = false;
+        } else if !last_was_dash && !slug.is_empty() {
+            slug.push('-');
+            last_was_dash = true;
+        }
+        if slug.len() >= 64 {
+            break;
+        }
+    }
+
+    let slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() {
+        "dream-skill".to_string()
+    } else {
+        slug
+    }
+}
+
+fn render_new_skill_contents(skill: &crate::types::DreamNewSkill) -> anyhow::Result<String> {
+    #[derive(Serialize)]
+    struct SkillFrontmatter<'a> {
+        name: &'a str,
+        description: &'a str,
+    }
+
+    let frontmatter = serde_yaml::to_string(&SkillFrontmatter {
+        name: skill.name.trim(),
+        description: skill.description.trim(),
+    })?;
+    let frontmatter = frontmatter.trim_start_matches("---\n").trim_end();
+    Ok(format!(
+        "---\n{frontmatter}\n---\n\n{}\n",
+        skill.contents_md.trim()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
+    use super::create_new_skill_file;
     use super::managed_block_contents;
+    use super::render_new_skill_contents;
+    use super::sanitize_skill_slug;
     use super::search_index;
     use super::upsert_managed_block;
     use crate::types::DreamIndex;
     use crate::types::DreamIndexDocument;
+    use crate::types::DreamNewSkill;
 
     #[test]
     fn upsert_managed_block_appends_when_markers_are_missing() {
@@ -367,5 +441,47 @@ after";
         let results = search_index(&index, "feishu runtime", 5);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].document.id, "memory:1".to_string());
+    }
+
+    #[test]
+    fn sanitize_skill_slug_normalizes_names() {
+        assert_eq!(
+            sanitize_skill_slug("Deep Review Notes"),
+            "deep-review-notes".to_string()
+        );
+        assert_eq!(sanitize_skill_slug("!!!"), "dream-skill".to_string());
+    }
+
+    #[test]
+    fn render_new_skill_contents_writes_frontmatter_and_body() {
+        let contents = render_new_skill_contents(&DreamNewSkill {
+            name: "deep-review".to_string(),
+            description: "Capture retrospective workflow".to_string(),
+            contents_md: "# Deep Review\n\nUse for dream follow-up.\n".to_string(),
+        })
+        .expect("render skill");
+        assert!(contents.starts_with("---\nname: deep-review\n"));
+        assert!(contents.contains("description: Capture retrospective workflow"));
+        assert!(contents.contains("# Deep Review"));
+    }
+
+    #[tokio::test]
+    async fn create_new_skill_file_writes_skill_under_repo_skill_root() {
+        let repo = TempDir::new().expect("temp repo");
+        let skill_root = repo.path().join(".codex").join("skills");
+        let skill_path = create_new_skill_file(
+            &skill_root,
+            &DreamNewSkill {
+                name: "deep-review".to_string(),
+                description: "Capture retrospective workflow".to_string(),
+                contents_md: "# Deep Review\n\nUse for dream follow-up.\n".to_string(),
+            },
+        )
+        .await
+        .expect("create skill")
+        .expect("skill path");
+        let contents = std::fs::read_to_string(&skill_path).expect("read skill");
+        assert!(contents.contains("name: deep-review"));
+        assert!(contents.contains("# Deep Review"));
     }
 }

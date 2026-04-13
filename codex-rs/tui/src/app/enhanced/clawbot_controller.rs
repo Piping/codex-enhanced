@@ -7,6 +7,7 @@ use super::feature_dispatch::FeatureDispatchFuture;
 use super::feature_dispatch::FeatureDispatchOutcome;
 use crate::app_event::AppEvent;
 use crate::app_event::ClawbotControlsDestination;
+use crate::app_event::ClawbotSessionBindSource;
 use crate::app_server_session::AppServerSession;
 use crate::tui;
 use codex_clawbot::PendingClawbotTurn;
@@ -83,15 +84,35 @@ impl ClawbotController {
             AppEvent::OpenClawbotFeishuConfigPrompt { field } => {
                 app.open_clawbot_feishu_config_prompt(field);
             }
+            AppEvent::OpenClawbotManualBindSessionPrompt => {
+                app.open_clawbot_manual_bind_session_prompt();
+            }
             AppEvent::SaveClawbotFeishuConfigValue { field, value } => {
                 if let Err(err) = app.save_clawbot_feishu_config_value(field, value) {
                     app.chat_widget
                         .add_error_message(format!("Failed to save Clawbot config: {err}"));
                 }
             }
+            AppEvent::BindClawbotDiscoveredSession { session_id } => {
+                if let Err(err) = app
+                    .bind_clawbot_session_to_current_thread(
+                        app_server,
+                        session_id,
+                        ClawbotSessionBindSource::DiscoveredSession,
+                    )
+                    .await
+                {
+                    app.chat_widget
+                        .add_error_message(format!("Failed to bind Clawbot session: {err}"));
+                }
+            }
             AppEvent::SaveClawbotManualBindSessionId { session_id } => {
                 if let Err(err) = app
-                    .bind_clawbot_session_to_current_thread(app_server, session_id)
+                    .bind_clawbot_session_to_current_thread(
+                        app_server,
+                        session_id,
+                        ClawbotSessionBindSource::ManualSessionId,
+                    )
                     .await
                 {
                     app.chat_widget
@@ -156,7 +177,9 @@ pub(super) fn matches_event(event: &AppEvent) -> bool {
             | AppEvent::OpenClawbotManagement
             | AppEvent::OpenClawbotManagementView { .. }
             | AppEvent::OpenClawbotFeishuConfigPrompt { .. }
+            | AppEvent::OpenClawbotManualBindSessionPrompt
             | AppEvent::SaveClawbotFeishuConfigValue { .. }
+            | AppEvent::BindClawbotDiscoveredSession { .. }
             | AppEvent::SaveClawbotManualBindSessionId { .. }
             | AppEvent::ClawbotSetTurnMode { .. }
             | AppEvent::ClawbotSetThreadForwarding { .. }

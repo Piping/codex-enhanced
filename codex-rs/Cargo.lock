@@ -2027,8 +2027,10 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+ "serde_yaml",
  "tempfile",
  "tokio",
+ "walkdir",
 ]
 
 [[package]]

@@ -127,6 +127,10 @@ impl ProfileRouterStore {
         self.save(&state)?;
         Ok(state)
     }
+
+    pub(crate) fn replace(&self, state: &ProfileRouterState) -> io::Result<()> {
+        self.save(state)
+    }
 }
 
 #[cfg(test)]

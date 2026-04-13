@@ -433,7 +433,7 @@ While compaction is running, the thread is effectively in a turn so clients shou
 
 ### Example: Run a thread dream retrospective
 
-Use `thread/dream/start` when the client wants `/dream` semantics: summarize the current thread, update repo-local memory artifacts, update repo-local guidance files, and then start a fresh thread using those new files.
+Use `thread/dream/start` when the client wants `/dream` semantics: summarize the current thread, update repo-local memory artifacts, update repo-local guidance files, auto-discover relevant repo-local skill candidates, and create or update repo-local skills when the retrospective identifies reusable workflows.
 
 ```json
 { "method": "thread/dream/start", "id": 26, "params": { "threadId": "thr_b" } }
@@ -441,8 +441,8 @@ Use `thread/dream/start` when the client wants `/dream` semantics: summarize the
     "memoryRoot": "/repo/.codex/memory",
     "retrospectivePath": "/repo/.codex/memory/threads/thr_b/retrospective.md",
     "updatedAgentsPath": "/repo/AGENTS.md",
-    "updatedSkillPaths": [],
-    "nextSessionHint": "Start by reading AGENTS.md and the repo memory block."
+    "updatedSkillPaths": ["/repo/.codex/skills/deep-review/SKILL.md"],
+    "nextSessionHint": "Start by reading AGENTS.md and the new deep-review skill first."
 } }
 ```
 

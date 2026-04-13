@@ -10,7 +10,7 @@ It should mean:
 2. run one explicit retrospective with the LLM
 3. update repo-local memory artifacts
 4. update repo-local `AGENTS.md`
-5. update repo-local `SKILL.md` files that were actually used in the thread
+5. update relevant repo-local `SKILL.md` files and create new repo-local skills when the retrospective identifies a reusable workflow
 6. rebuild a local offline memory index
 7. start a fresh thread so the next session picks up the new repo guidance
 
@@ -29,7 +29,7 @@ Only the LLM call should require network access. Everything else must work from 
 3. Core:
    - loads the current thread rollout
    - extracts model-visible rollout items
-   - collects repo root, existing repo memory, repo-root `AGENTS.md`, and repo-local skills referenced by the thread
+   - collects repo root, existing repo memory, repo-root `AGENTS.md`, visible thread fragments, and repo-local skill candidates discovered under `.codex/skills/`
    - sends a structured retrospective prompt to the model
    - validates and redacts the JSON response
    - writes managed sections into repo artifacts
@@ -53,7 +53,8 @@ Planned files:
 Managed updates outside the memory directory:
 
 - `<repo_root>/AGENTS.md`
-- repo-local `SKILL.md` files referenced by the current thread
+- repo-local `SKILL.md` files selected for updates
+- new repo-local `SKILL.md` files created under `<repo_root>/.codex/skills/`
 
 ## File update policy
 
@@ -84,10 +85,15 @@ The model returns structured JSON with:
 - `skills[]`
   - `path`
   - `blockMd`
+- `newSkills[]`
+  - `name`
+  - `description`
+  - `contentsMd`
 
 Validation rules:
 
-- skill paths must be repo-local and must match candidates extracted from the thread
+- existing skill paths must be repo-local and must match discovered candidates
+- new skills are created only under `<repo_root>/.codex/skills/<slug>/SKILL.md`
 - all stored strings are secret-redacted before writing
 
 ## Retrieval / index
@@ -145,4 +151,4 @@ Response:
 - retrieval wiring so fresh sessions can actively use `.codex/memory/index.json`
 - optional local embedding index inspired by `cocoindex-code`
 - nested `AGENTS.md` targeting instead of repo-root-only updates
-- richer skill selection beyond "skills explicitly visible in the thread"
+- richer retrieval over auto-discovered repo-local skills and generated retrospectives

@@ -90,7 +90,7 @@ impl App {
     }
 
     pub(crate) fn open_profile_management_panel(&mut self) {
-        let router_state = self.profile_router_store().load().unwrap_or_default();
+        let router_state = self.load_profile_router_state();
         let profiles = self.routed_profile_summaries(&router_state);
         self.open_selection_popup_for_view(
             PROFILE_MANAGEMENT_VIEW_ID,
@@ -108,7 +108,7 @@ impl App {
     }
 
     pub(crate) async fn edit_profile_fallback_config_from_ui(&mut self, tui: &mut tui::Tui) {
-        let router_state = self.profile_router_store().load().unwrap_or_default();
+        let router_state = self.load_profile_router_state();
         let profiles = self.routed_profile_summaries(&router_state);
         if profiles.is_empty() {
             match self
@@ -369,7 +369,7 @@ impl App {
             .chat_widget
             .profile_retry_attempt_count()
             .saturating_add(1);
-        let router_state = self.profile_router_store().load().unwrap_or_default();
+        let router_state = self.load_profile_router_state();
         let profile_id = profile_fallback_retry_target(
             action,
             &router_state,

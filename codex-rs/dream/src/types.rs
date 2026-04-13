@@ -39,6 +39,7 @@ pub(crate) struct DreamContext {
     pub(crate) rollout_path: PathBuf,
     pub(crate) repo_root: PathBuf,
     pub(crate) memory_root: PathBuf,
+    pub(crate) repo_skill_root: PathBuf,
     pub(crate) existing_memory: Option<String>,
     pub(crate) existing_agents: Option<String>,
     pub(crate) agents_path: PathBuf,
@@ -65,6 +66,8 @@ pub(crate) struct DreamModelOutput {
     pub(crate) agents_block_md: String,
     #[serde(default)]
     pub(crate) skills: Vec<DreamSkillUpdate>,
+    #[serde(default)]
+    pub(crate) new_skills: Vec<DreamNewSkill>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -72,6 +75,14 @@ pub(crate) struct DreamModelOutput {
 pub(crate) struct DreamSkillUpdate {
     pub(crate) path: String,
     pub(crate) block_md: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct DreamNewSkill {
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) contents_md: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

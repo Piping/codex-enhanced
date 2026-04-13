@@ -29,6 +29,7 @@ const EXISTING_MEMORY_TOKEN_LIMIT: usize = 6_000;
 const EXISTING_AGENTS_TOKEN_LIMIT: usize = 6_000;
 const VISIBLE_FRAGMENT_TOKEN_LIMIT: usize = 4_000;
 const SKILL_CONTENT_TOKEN_LIMIT: usize = 4_000;
+const SKILL_CANDIDATES_TOKEN_LIMIT: usize = 20_000;
 
 pub(crate) fn build_dream_prompt_request(
     context: &DreamContext,
@@ -55,12 +56,23 @@ pub(crate) fn parse_dream_model_output(result: &str) -> anyhow::Result<DreamMode
             skill
         })
         .collect();
+    output.new_skills = output
+        .new_skills
+        .into_iter()
+        .map(|mut skill| {
+            skill.name = redact_secrets(skill.name);
+            skill.description = redact_secrets(skill.description);
+            skill.contents_md = redact_secrets(skill.contents_md);
+            skill
+        })
+        .collect();
     Ok(output)
 }
 
 fn build_dream_input_message(context: &DreamContext) -> anyhow::Result<String> {
     let repo_root = context.repo_root.display().to_string();
     let memory_root = context.memory_root.display().to_string();
+    let repo_skill_root = context.repo_skill_root.display().to_string();
     let agents_path = context.agents_path.display().to_string();
     let thread_id = context.thread_id.to_string();
     let rollout_path = context.rollout_path.display().to_string();
@@ -80,10 +92,8 @@ fn build_dream_input_message(context: &DreamContext) -> anyhow::Result<String> {
         &context.visible_skill_fragments,
         VISIBLE_FRAGMENT_TOKEN_LIMIT,
     );
-    let skill_candidates = if context.skill_candidates.is_empty() {
-        "None.".to_string()
-    } else {
-        context
+    let skill_candidates = truncate_joined_segments(
+        &context
             .skill_candidates
             .iter()
             .map(|skill| {
@@ -94,9 +104,9 @@ fn build_dream_input_message(context: &DreamContext) -> anyhow::Result<String> {
                     truncate_segment(&skill.contents, SKILL_CONTENT_TOKEN_LIMIT)
                 )
             })
-            .collect::<Vec<_>>()
-            .join("\n\n---\n\n")
-    };
+            .collect::<Vec<_>>(),
+        SKILL_CANDIDATES_TOKEN_LIMIT,
+    );
     let rollout_items_json = truncate_segment(&context.rollout_items_json, ROLLOUT_TOKEN_LIMIT);
 
     Ok(DREAM_INPUT_TEMPLATE.render([
@@ -104,6 +114,7 @@ fn build_dream_input_message(context: &DreamContext) -> anyhow::Result<String> {
         ("rollout_path", rollout_path.as_str()),
         ("repo_root", repo_root.as_str()),
         ("memory_root", memory_root.as_str()),
+        ("repo_skill_root", repo_skill_root.as_str()),
         ("agents_path", agents_path.as_str()),
         ("existing_memory", existing_memory.as_str()),
         ("existing_agents", existing_agents.as_str()),
@@ -137,6 +148,19 @@ fn output_schema() -> Value {
                     "required": ["path", "blockMd"],
                     "additionalProperties": false
                 }
+            },
+            "newSkills": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string" },
+                        "description": { "type": "string" },
+                        "contentsMd": { "type": "string" }
+                    },
+                    "required": ["name", "description", "contentsMd"],
+                    "additionalProperties": false
+                }
             }
         },
         "required": [
@@ -145,7 +169,8 @@ fn output_schema() -> Value {
             "memoryBlockMd",
             "nextSessionHintMd",
             "agentsBlockMd",
-            "skills"
+            "skills",
+            "newSkills"
         ],
         "additionalProperties": false
     })
@@ -193,6 +218,7 @@ mod tests {
                 "nextSessionHintMd",
                 "agentsBlockMd",
                 "skills",
+                "newSkills",
             ]
         );
     }

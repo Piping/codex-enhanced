@@ -207,10 +207,15 @@ These guidelines apply to app-server protocol work in `codex-rs`, especially:
 <!-- codex:dream:start -->
 ## Dream Guidance
 
-## Dream Guidance
+## Dream guidance
 
-## TUI delayed-action pattern
-- For delayed TUI follow-up actions, prefer scheduling a new `AppEvent` and handling it through the existing feature router/controller path instead of keeping work inline in the origin handler.
-- Guard delayed retries with a monotonic generation/token from UI state so stale scheduled work is ignored after a new user submission or restored thread state.
-- When persisting routed profile selection after a runtime switch, use `ProfileRouterState::set_runtime_active_profile(...)` so state only records profiles that still exist in the current route set.
+- When changing `/dream` prompt semantics or output schema, keep the two template copies in sync:
+  - `codex-rs/dream/templates/dream/*`
+  - `codex-rs/core/templates/dream/*`
+- For `/dream` behavior changes, also sync the contract/docs/tests together:
+  - `codex-rs/docs/dream.md`
+  - `codex-rs/app-server/README.md`
+  - `codex-rs/core/tests/suite/dream.rs`
+  - `codex-rs/app-server/tests/suite/v2/thread_dream.rs`
+- `/dream` now supports both updating discovered repo-local skills and creating new repo-local skills; avoid documenting or testing it as “thread-visible skills only”.
 <!-- codex:dream:end -->

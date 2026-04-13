@@ -81,7 +81,8 @@ mod tests {
                 "memoryBlockMd": "- Keep repo guidance concise.\n",
                 "nextSessionHintMd": "Read AGENTS.md first.",
                 "agentsBlockMd": "- Prefer concise guidance.\n",
-                "skills": []
+                "skills": [],
+                "newSkills": []
             })
             .to_string(),
         };
@@ -108,5 +109,50 @@ mod tests {
             result.next_session_hint,
             "Read AGENTS.md first.".to_string()
         );
+    }
+
+    #[tokio::test]
+    async fn run_dream_pipeline_creates_new_repo_local_skills() {
+        let repo = tempdir().expect("repo");
+        std::fs::create_dir_all(repo.path().join(".git")).expect("git dir");
+        let sampler = FakeDreamPromptSampler {
+            response: serde_json::json!({
+                "threadTitle": "Dream Retrospective",
+                "threadSummaryMd": "## Summary\n\n- Durable note.\n",
+                "memoryBlockMd": "- Keep repo guidance concise.\n",
+                "nextSessionHintMd": "Read AGENTS.md first.",
+                "agentsBlockMd": "- Prefer concise guidance.\n",
+                "skills": [],
+                "newSkills": [
+                    {
+                        "name": "deep-review",
+                        "description": "Capture retrospective workflow",
+                        "contentsMd": "# Deep Review\n\nUse for dream follow-up.\n"
+                    }
+                ]
+            })
+            .to_string(),
+        };
+
+        let result = run_dream_pipeline(
+            &sampler,
+            DreamPipelineRequest {
+                cwd: repo.path(),
+                thread_id: ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000")
+                    .expect("thread id"),
+                rollout_path: repo.path().join("rollout.jsonl").as_path(),
+                rollout_items: &[],
+                rollout_items_json: "[]".to_string(),
+            },
+        )
+        .await
+        .expect("dream pipeline");
+
+        assert_eq!(result.updated_skill_paths.len(), 1);
+        let skill_md = tokio::fs::read_to_string(&result.updated_skill_paths[0])
+            .await
+            .expect("skill");
+        assert!(skill_md.contains("name: deep-review"));
+        assert!(skill_md.contains("# Deep Review"));
     }
 }

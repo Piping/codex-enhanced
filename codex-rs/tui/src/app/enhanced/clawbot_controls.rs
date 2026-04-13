@@ -26,6 +26,7 @@ use crate::app_event::AppEvent;
 use crate::app_event::ClawbotControlsDestination;
 use crate::app_event::ClawbotFeishuConfigField;
 use crate::app_event::ClawbotForwardingChannel;
+use crate::app_event::ClawbotSessionBindSource;
 use crate::app_event_sender::AppEventSender;
 use crate::app_server_session::AppServerSession;
 use crate::bottom_pane::SelectionAction;
@@ -180,6 +181,23 @@ impl App {
         self.chat_widget.show_view(Box::new(view));
     }
 
+    pub(crate) fn open_clawbot_manual_bind_session_prompt(&mut self) {
+        let target_thread = self.active_thread_id.as_ref().map_or_else(
+            || "Current thread: not set".to_string(),
+            |thread_id| format!("Current thread: {thread_id}"),
+        );
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Bind Feishu Chat ID".to_string(),
+            "Paste the Feishu chat_id and press Enter".to_string(),
+            Some(target_thread),
+            Box::new(move |value| {
+                tx.send(AppEvent::SaveClawbotManualBindSessionId { session_id: value });
+            }),
+        );
+        self.chat_widget.show_view(Box::new(view));
+    }
+
     pub(crate) fn save_clawbot_feishu_config_value(
         &mut self,
         field: ClawbotFeishuConfigField,
@@ -234,6 +252,7 @@ impl App {
         &mut self,
         app_server: &mut AppServerSession,
         session_id: String,
+        source: ClawbotSessionBindSource,
     ) -> Result<()> {
         let thread_id = self
             .active_thread_id
@@ -244,7 +263,9 @@ impl App {
         }
         let session = ProviderSessionRef::new(ProviderKind::Feishu, trimmed.clone());
         let mut runtime = ClawbotRuntime::load(self.config.cwd.to_path_buf())?;
-        if runtime.snapshot().config.feishu.is_some() {
+        if source == ClawbotSessionBindSource::DiscoveredSession
+            && runtime.snapshot().config.feishu.is_some()
+        {
             runtime.scan_feishu_sessions().await?;
             if !runtime.can_bind_feishu_session(&session)? {
                 return Err(anyhow::anyhow!(
@@ -640,6 +661,28 @@ impl App {
                     ClawbotControlsDestination::Channels,
                     "Return to channel controls.",
                 )];
+                items.push(SelectionItem {
+                    name: "Bind Chat ID Manually".to_string(),
+                    description: Some(match active_thread_id {
+                        Some(_) => "Target current thread".to_string(),
+                        None => "No active thread".to_string(),
+                    }),
+                    selected_description: Some(match active_thread_id.as_deref() {
+                        Some(_) => {
+                            "Enter a Feishu chat_id to bind the current thread even when it is not listed below.".to_string()
+                        }
+                        None => {
+                            "Open or switch to a Codex thread before binding a Feishu chat_id manually."
+                                .to_string()
+                        }
+                    }),
+                    is_disabled: active_thread_id.is_none(),
+                    actions: vec![Box::new(|tx| {
+                        tx.send(AppEvent::OpenClawbotManualBindSessionPrompt);
+                    })],
+                    dismiss_on_select: false,
+                    ..Default::default()
+                });
                 if unbound_sessions.is_empty() {
                     items.push(info_item(
                         "No unbound sessions".to_string(),
@@ -1118,7 +1161,7 @@ fn unbound_session_detail_items(
             }),
             is_disabled: active_thread_id.is_none(),
             actions: vec![Box::new(move |tx: &AppEventSender| {
-                tx.send(AppEvent::SaveClawbotManualBindSessionId {
+                tx.send(AppEvent::BindClawbotDiscoveredSession {
                     session_id: session_id.clone(),
                 });
             })],
@@ -1177,7 +1220,7 @@ fn clawbot_session_item(
         })]
     } else {
         vec![Box::new(move |tx: &AppEventSender| {
-            tx.send(AppEvent::SaveClawbotManualBindSessionId {
+            tx.send(AppEvent::BindClawbotDiscoveredSession {
                 session_id: session_id.clone(),
             });
         })]
