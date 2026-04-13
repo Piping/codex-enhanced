@@ -39,8 +39,15 @@ async fn bind_test_clawbot_session(
             bound_thread_id: None,
         })
         .expect("persist session");
+    if app.primary_thread_id.is_none() {
+        app.primary_thread_id = Some(thread_id);
+    }
     runtime
-        .connect_session_to_thread(&session, thread_id.to_string())
+        .connect_session_to_thread(
+            &session,
+            thread_id.to_string(),
+            app.clawbot_owner_primary_thread_id(),
+        )
         .expect("connect session");
     app.sync_clawbot_workspace(app_server).await;
     Ok((thread_id, session))
@@ -152,6 +159,7 @@ async fn noninteractive_clawbot_request_user_input_builds_auto_response() {
         VecDeque::from([PendingClawbotTurn {
             thread_id: thread_id.to_string(),
             turn_id: "turn-1".to_string(),
+            owner_primary_thread_id: Some(thread_id.to_string()),
             session: ProviderSessionRef::new(ClawbotProviderKind::Feishu, "chat_auto"),
             message_id: "msg-1".to_string(),
             auto_ack_reaction_id: None,
@@ -195,6 +203,7 @@ async fn noninteractive_clawbot_permissions_request_builds_auto_response() {
         VecDeque::from([PendingClawbotTurn {
             thread_id: thread_id.to_string(),
             turn_id: "turn-1".to_string(),
+            owner_primary_thread_id: Some(thread_id.to_string()),
             session: ProviderSessionRef::new(ClawbotProviderKind::Feishu, "chat_auto"),
             message_id: "msg-1".to_string(),
             auto_ack_reaction_id: None,
@@ -362,6 +371,7 @@ async fn clawbot_restart_recovers_pending_turn_and_forwards_reply() -> Result<()
 
     let mut restarted_app = make_test_app().await;
     restarted_app.config.cwd = tempdir.path().to_path_buf().abs();
+    restarted_app.primary_thread_id = Some(thread_id);
     restarted_app.sync_clawbot_workspace(&mut app_server).await;
 
     assert_eq!(
@@ -422,6 +432,60 @@ async fn clawbot_restart_recovers_pending_turn_and_forwards_reply() -> Result<()
     Ok(())
 }
 
+#[tokio::test]
+async fn clawbot_sync_ignores_binding_owned_by_another_app_instance() -> Result<()> {
+    let mut owner_app = make_test_app().await;
+    let mut app_server =
+        crate::start_embedded_app_server_for_picker(owner_app.chat_widget.config_ref())
+            .await
+            .expect("embedded app server");
+    let tempdir = tempdir()?;
+    owner_app.config.cwd = tempdir.path().to_path_buf().abs();
+
+    let (thread_id, session) =
+        bind_test_clawbot_session(&mut owner_app, &mut app_server, "chat_owner").await?;
+
+    let mut other_app = make_test_app().await;
+    other_app.config.cwd = tempdir.path().to_path_buf().abs();
+    other_app.primary_thread_id = Some(ThreadId::new());
+
+    let mut runtime = ClawbotRuntime::load(owner_app.config.cwd.to_path_buf())
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+    runtime
+        .apply_provider_event(ClawbotProviderEvent::InboundMessage(
+            codex_clawbot::ProviderInboundMessage {
+                session: session.clone(),
+                message_id: "msg_1".to_string(),
+                text: "owner only".to_string(),
+                received_at: 1,
+            },
+        ))
+        .expect("queue unread");
+
+    other_app.sync_clawbot_workspace(&mut app_server).await;
+    assert_eq!(other_app.clawbot.pending_turns.get(&thread_id), None);
+    assert_eq!(other_app.clawbot.outbound_reactions, Vec::new());
+
+    owner_app.sync_clawbot_workspace(&mut app_server).await;
+    assert_eq!(
+        owner_app
+            .clawbot
+            .pending_turns
+            .get(&thread_id)
+            .map(std::collections::VecDeque::len),
+        Some(1)
+    );
+    assert_eq!(
+        owner_app.clawbot.outbound_reactions,
+        vec![ProviderOutboundReaction {
+            target: ProviderMessageRef::new(ClawbotProviderKind::Feishu, "chat_owner", "msg_1"),
+            emoji_type: "TONGUE".to_string(),
+        }]
+    );
+
+    Ok(())
+}
+
 #[test]
 fn clawbot_store_persists_auto_ack_reaction_id() -> Result<()> {
     let tempdir = tempdir()?;
@@ -429,6 +493,7 @@ fn clawbot_store_persists_auto_ack_reaction_id() -> Result<()> {
     let pending_turn = PendingClawbotTurn {
         thread_id: "thread-1".to_string(),
         turn_id: "turn-1".to_string(),
+        owner_primary_thread_id: Some("owner-thread-1".to_string()),
         session: ProviderSessionRef::new(ClawbotProviderKind::Feishu, "chat_store"),
         message_id: "msg-1".to_string(),
         auto_ack_reaction_id: Some("reaction-1".to_string()),
@@ -525,6 +590,7 @@ async fn clawbot_sync_clears_stale_pending_turn_and_redelivers_unread() -> Resul
         .upsert_pending_turn(PendingClawbotTurn {
             thread_id: thread_id.to_string(),
             turn_id: "stale-turn".to_string(),
+            owner_primary_thread_id: app.clawbot_owner_primary_thread_id(),
             session: session.clone(),
             message_id: "msg_1".to_string(),
             auto_ack_reaction_id: None,
@@ -736,6 +802,7 @@ async fn clawbot_management_popup_snapshot() -> Result<()> {
         .connect_session_to_thread(
             &ProviderSessionRef::new(ClawbotProviderKind::Feishu, "chat_ops"),
             second_started.session.thread_id.to_string(),
+            app.clawbot_owner_primary_thread_id(),
         )
         .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
 

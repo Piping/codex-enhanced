@@ -135,6 +135,8 @@ pub struct SessionBinding {
     pub provider: ProviderKind,
     pub session_id: String,
     pub thread_id: String,
+    #[serde(default)]
+    pub owner_primary_thread_id: Option<String>,
     #[serde(default = "default_session_forwarding_enabled")]
     pub inbound_forwarding_enabled: bool,
     #[serde(default = "default_session_forwarding_enabled")]
@@ -180,6 +182,8 @@ impl CachedUnreadMessage {
 pub struct PendingClawbotTurn {
     pub thread_id: String,
     pub turn_id: String,
+    #[serde(default)]
+    pub owner_primary_thread_id: Option<String>,
     pub session: ProviderSessionRef,
     pub message_id: String,
     pub auto_ack_reaction_id: Option<String>,
