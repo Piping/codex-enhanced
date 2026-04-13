@@ -39,6 +39,12 @@ use crate::app_server_session::ThreadSessionState;
 const FEISHU_AUTO_ACK_EMOJI_TYPE: &str = "TONGUE";
 
 impl App {
+    pub(super) fn clawbot_owner_primary_thread_id(&self) -> Option<String> {
+        self.primary_thread_id
+            .or(self.active_thread_id)
+            .map(|thread_id| thread_id.to_string())
+    }
+
     pub(super) async fn sync_clawbot_workspace(&mut self, app_server: &mut AppServerSession) {
         if let Err(err) = self.sync_clawbot_workspace_inner(app_server).await {
             tracing::warn!(error = %err, "failed to sync clawbot workspace");
@@ -125,9 +131,13 @@ impl App {
     }
 
     fn restore_clawbot_pending_turns(&mut self) -> Result<()> {
+        let owner_primary_thread_id = self.clawbot_owner_primary_thread_id();
         let pending_turns = self.clawbot_store()?.load_pending_turns()?;
         self.clawbot_pending_turns.clear();
         for pending_turn in pending_turns {
+            if !pending_turn_belongs_to_owner(&pending_turn, owner_primary_thread_id.as_deref()) {
+                continue;
+            }
             let thread_id = ThreadId::from_string(&pending_turn.thread_id).with_context(|| {
                 format!("invalid clawbot thread id `{}`", pending_turn.thread_id)
             })?;
@@ -380,7 +390,15 @@ impl App {
                 Some(pending.session)
             } else {
                 let runtime = ClawbotRuntime::load(workspace_root.clone())?;
-                let bound_session = runtime.bound_session_for_thread(&thread_id.to_string())?;
+                let bound_session = runtime
+                    .load_binding_for_thread(&thread_id.to_string())?
+                    .filter(|binding| {
+                        binding_belongs_to_owner(
+                            binding,
+                            self.clawbot_owner_primary_thread_id().as_deref(),
+                        )
+                    })
+                    .map(|binding| binding.session_ref());
                 if let Some(session) = bound_session.as_ref()
                     && let Some(text) = clawbot_outbound_text_for_turn(&turn)
                 {
@@ -428,6 +446,20 @@ impl App {
             );
             return Ok(());
         };
+        if !binding_belongs_to_owner(&binding, self.clawbot_owner_primary_thread_id().as_deref()) {
+            let _ = append_diagnostic_event(
+                workspace_root.as_path(),
+                "bridge.dispatch_skipped",
+                serde_json::json!({
+                    "reason": "binding_owned_by_another_instance",
+                    "session_id": session.session_id,
+                    "thread_id": binding.thread_id,
+                    "binding_owner_primary_thread_id": binding.owner_primary_thread_id,
+                    "current_owner_primary_thread_id": self.clawbot_owner_primary_thread_id(),
+                }),
+            );
+            return Ok(());
+        }
         if !binding.inbound_forwarding_enabled {
             let _ = append_diagnostic_event(
                 workspace_root.as_path(),
@@ -560,6 +592,7 @@ impl App {
             message.message_id.clone(),
             auto_ack_reaction_id,
             turn_mode,
+            binding.owner_primary_thread_id.clone(),
         );
         Ok(())
     }
@@ -693,6 +726,21 @@ impl App {
             );
             return Ok(());
         };
+        if !binding_belongs_to_owner(&binding, self.clawbot_owner_primary_thread_id().as_deref()) {
+            let _ = append_diagnostic_event(
+                workspace_root,
+                "bridge.reply_skipped",
+                serde_json::json!({
+                    "reason": "binding_owned_by_another_instance",
+                    "session_id": session.session_id,
+                    "thread_id": binding.thread_id,
+                    "text": text,
+                    "binding_owner_primary_thread_id": binding.owner_primary_thread_id,
+                    "current_owner_primary_thread_id": self.clawbot_owner_primary_thread_id(),
+                }),
+            );
+            return Ok(());
+        }
         if !binding.outbound_forwarding_enabled {
             let _ = append_diagnostic_event(
                 workspace_root,
@@ -818,10 +866,12 @@ impl App {
         message_id: String,
         auto_ack_reaction_id: Option<String>,
         turn_mode: ClawbotTurnMode,
+        owner_primary_thread_id: Option<String>,
     ) {
         let pending_turn = PendingClawbotTurn {
             thread_id: thread_id.to_string(),
             turn_id,
+            owner_primary_thread_id,
             session,
             message_id,
             auto_ack_reaction_id,
@@ -1010,6 +1060,22 @@ fn next_unread_message_for_session(
                 .cmp(&right.received_at)
                 .then(left.message_id.cmp(&right.message_id))
         })
+}
+
+fn binding_belongs_to_owner(
+    binding: &codex_clawbot::SessionBinding,
+    owner_primary_thread_id: Option<&str>,
+) -> bool {
+    binding.owner_primary_thread_id.as_deref() == owner_primary_thread_id
+        && owner_primary_thread_id.is_some()
+}
+
+fn pending_turn_belongs_to_owner(
+    pending_turn: &PendingClawbotTurn,
+    owner_primary_thread_id: Option<&str>,
+) -> bool {
+    pending_turn.owner_primary_thread_id.as_deref() == owner_primary_thread_id
+        && owner_primary_thread_id.is_some()
 }
 
 fn session_title(session: &codex_clawbot::ProviderSession) -> String {

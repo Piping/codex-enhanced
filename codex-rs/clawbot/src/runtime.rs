@@ -163,6 +163,7 @@ impl ClawbotRuntime {
         &mut self,
         session: &ProviderSessionRef,
         thread_id: String,
+        owner_primary_thread_id: Option<String>,
     ) -> Result<&ClawbotSnapshot> {
         let now = unix_timestamp_now()?;
         let mut bindings = self.store.load_bindings()?;
@@ -191,12 +192,14 @@ impl ClawbotRuntime {
             .find(|binding| binding.session_ref() == *session)
         {
             binding.thread_id = thread_id.clone();
+            binding.owner_primary_thread_id = owner_primary_thread_id.clone();
             binding.updated_at = now;
         } else {
             bindings.push(SessionBinding {
                 provider: session.provider,
                 session_id: session.session_id.clone(),
                 thread_id: thread_id.clone(),
+                owner_primary_thread_id,
                 inbound_forwarding_enabled: true,
                 outbound_forwarding_enabled: true,
                 created_at: existing_binding
@@ -646,7 +649,7 @@ mod tests {
             })
             .expect("session");
         runtime
-            .connect_session_to_thread(&session, "thread_1".to_string())
+            .connect_session_to_thread(&session, "thread_1".to_string(), None)
             .expect("bind session");
 
         assert_eq!(
@@ -680,7 +683,7 @@ mod tests {
         let session = ProviderSessionRef::new(ProviderKind::Feishu, "chat_4");
 
         runtime
-            .connect_session_to_thread(&session, "thread_2".to_string())
+            .connect_session_to_thread(&session, "thread_2".to_string(), None)
             .expect("bind session");
 
         runtime
@@ -704,6 +707,7 @@ mod tests {
                 provider: ProviderKind::Feishu,
                 session_id: "chat_4".to_string(),
                 thread_id: "thread_2".to_string(),
+                owner_primary_thread_id: None,
                 inbound_forwarding_enabled: false,
                 outbound_forwarding_enabled: false,
                 created_at: runtime.snapshot().bindings[0].created_at,
@@ -720,7 +724,7 @@ mod tests {
         let unbound_session = ProviderSessionRef::new(ProviderKind::Feishu, "chat_unbound");
 
         runtime
-            .connect_session_to_thread(&bound_session, "thread_3".to_string())
+            .connect_session_to_thread(&bound_session, "thread_3".to_string(), None)
             .expect("bind session");
         runtime
             .persist_session(ProviderSession {
@@ -789,7 +793,7 @@ mod tests {
         let live_session = ProviderSessionRef::new(ProviderKind::Feishu, "chat_live");
 
         runtime
-            .connect_session_to_thread(&stale_session, "thread_stale".to_string())
+            .connect_session_to_thread(&stale_session, "thread_stale".to_string(), None)
             .expect("bind stale session");
         runtime
             .apply_provider_event(ProviderEvent::InboundMessage(ProviderInboundMessage {
@@ -817,6 +821,7 @@ mod tests {
                 provider: ProviderKind::Feishu,
                 session_id: stale_session.session_id.clone(),
                 thread_id: "thread_stale".to_string(),
+                owner_primary_thread_id: None,
                 inbound_forwarding_enabled: true,
                 outbound_forwarding_enabled: true,
                 created_at: runtime.snapshot().bindings[0].created_at,
