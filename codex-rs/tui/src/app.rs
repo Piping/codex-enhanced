@@ -90,6 +90,8 @@ use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::message_history;
+#[cfg(target_os = "windows")]
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_features::Feature;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
