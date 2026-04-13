@@ -132,6 +132,7 @@ mod notifications;
 pub mod onboarding;
 mod oss_selection;
 mod pager_overlay;
+#[path = "app/enhanced/profile_router.rs"]
 mod profile_router;
 pub mod public_widgets;
 mod render;
