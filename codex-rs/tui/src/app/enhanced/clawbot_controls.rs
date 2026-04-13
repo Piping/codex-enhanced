@@ -273,7 +273,11 @@ impl App {
                 ));
             }
         }
-        runtime.connect_session_to_thread(&session, thread_id.to_string())?;
+        runtime.connect_session_to_thread(
+            &session,
+            thread_id.to_string(),
+            self.clawbot_owner_primary_thread_id(),
+        )?;
         self.refresh_clawbot_provider_runtime()?;
         self.dispatch_next_clawbot_message(app_server, &session)
             .await?;
