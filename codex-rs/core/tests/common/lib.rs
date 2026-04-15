@@ -2,8 +2,9 @@
 
 use anyhow::Context as _;
 use anyhow::ensure;
-use codex_arg0::Arg0PathEntryGuard;
 use codex_utils_cargo_bin::CargoBinError;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::symlink;
 use std::sync::OnceLock;
 use tempfile::TempDir;
 
@@ -32,14 +33,22 @@ pub mod test_codex_exec;
 pub mod tracing;
 pub mod zsh_fork;
 
-static TEST_ARG0_PATH_ENTRY: OnceLock<Option<Arg0PathEntryGuard>> = OnceLock::new();
+#[cfg(target_os = "linux")]
+struct TestHelperPaths {
+    _temp_dir: TempDir,
+    codex_linux_sandbox_exe: Option<PathBuf>,
+}
+
+#[cfg(target_os = "linux")]
+static TEST_HELPER_PATHS: OnceLock<TestHelperPaths> = OnceLock::new();
 static TEST_PROCESS_INIT: OnceLock<()> = OnceLock::new();
 
 pub(crate) fn ensure_test_process_initialized() {
     TEST_PROCESS_INIT.get_or_init(|| {
         codex_core::test_support::set_thread_manager_test_mode(/*enabled*/ true);
         codex_core::test_support::set_deterministic_process_ids(/*enabled*/ true);
-        let _ = TEST_ARG0_PATH_ENTRY.get_or_init(codex_arg0::arg0_dispatch);
+        #[cfg(target_os = "linux")]
+        let _ = TEST_HELPER_PATHS.get_or_init(init_test_helper_paths);
 
         if std::env::var_os("INSTA_WORKSPACE_ROOT").is_some() {
             return;
@@ -59,6 +68,36 @@ pub(crate) fn ensure_test_process_initialized() {
             }
         }
     });
+}
+
+#[cfg(target_os = "linux")]
+fn init_test_helper_paths() -> TestHelperPaths {
+    let direct_sandbox_exe = codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox").ok();
+    if direct_sandbox_exe.is_some() {
+        return TestHelperPaths {
+            _temp_dir: tempfile::Builder::new()
+                .prefix("codex-core-test-helpers")
+                .tempdir()
+                .expect("helper tempdir"),
+            codex_linux_sandbox_exe: direct_sandbox_exe,
+        };
+    }
+
+    let temp_dir = tempfile::Builder::new()
+        .prefix("codex-core-test-helpers")
+        .tempdir()
+        .expect("helper tempdir");
+    let codex_linux_sandbox_exe = codex_utils_cargo_bin::cargo_bin("codex-exec")
+        .ok()
+        .and_then(|codex_exec| {
+            let alias_path = temp_dir.path().join("codex-linux-sandbox");
+            symlink(&codex_exec, &alias_path).ok()?;
+            Some(alias_path)
+        });
+    TestHelperPaths {
+        _temp_dir: temp_dir,
+        codex_linux_sandbox_exe,
+    }
 }
 
 #[track_caller]
@@ -221,15 +260,10 @@ fn default_test_overrides() -> ConfigOverrides {
 #[cfg(target_os = "linux")]
 pub fn find_codex_linux_sandbox_exe() -> Result<PathBuf, CargoBinError> {
     ensure_test_process_initialized();
-    if let Some(path) = TEST_ARG0_PATH_ENTRY
+    if let Some(path) = TEST_HELPER_PATHS
         .get()
-        .and_then(Option::as_ref)
-        .and_then(|path_entry| path_entry.paths().codex_linux_sandbox_exe.clone())
+        .and_then(|paths| paths.codex_linux_sandbox_exe.clone())
     {
-        return Ok(path);
-    }
-
-    if let Ok(path) = std::env::current_exe() {
         return Ok(path);
     }
 

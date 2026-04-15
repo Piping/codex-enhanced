@@ -260,6 +260,24 @@ fn skill_message(text: &str) -> ResponseItem {
     }
 }
 
+#[test]
+fn rotate_prompt_cache_key_for_stream_disconnected_before_completion() {
+    let err = CodexErr::Stream(
+        "stream disconnected before completion: Incomplete response returned, reason: content_filter"
+            .to_string(),
+        None,
+    );
+
+    assert!(should_rotate_prompt_cache_key_for_stream_retry(&err));
+}
+
+#[test]
+fn does_not_rotate_prompt_cache_key_for_other_stream_errors() {
+    let err = CodexErr::Stream("Selected model is at capacity.".to_string(), None);
+
+    assert!(!should_rotate_prompt_cache_key_for_stream_retry(&err));
+}
+
 #[tokio::test]
 async fn regular_turn_emits_turn_started_without_waiting_for_startup_prewarm() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
