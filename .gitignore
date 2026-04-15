@@ -93,6 +93,12 @@ __pycache__/
 *.pyc
 
 .codex/
+!.codex/
+.codex/*
+!.codex/skills/
+.codex/skills/*
+!.codex/skills/effective-use-cases/
+!.codex/skills/effective-use-cases/**
 .desloppify/
 scorecard.png
 site/

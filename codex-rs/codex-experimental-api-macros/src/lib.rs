@@ -31,11 +31,10 @@ fn derive_for_struct(input: &DeriveInput, data: &DataStruct) -> TokenStream {
     let name = &input.ident;
     let type_name_lit = LitStr::new(&name.to_string(), Span::call_site());
 
-    let (checks, experimental_fields, registrations) = match &data.fields {
+    let (checks, experimental_fields) = match &data.fields {
         Fields::Named(named) => {
             let mut checks = Vec::new();
             let mut experimental_fields = Vec::new();
-            let mut registrations = Vec::new();
             for field in &named.named {
                 if let Some(reason) = experimental_reason(&field.attrs) {
                     let expr = experimental_presence_expr(field, /*tuple_struct*/ false);
@@ -54,15 +53,6 @@ fn derive_for_struct(input: &DeriveInput, data: &DataStruct) -> TokenStream {
                                 reason: #reason,
                             }
                         });
-                        registrations.push(quote! {
-                            ::inventory::submit! {
-                                crate::experimental_api::ExperimentalField {
-                                    type_name: #type_name_lit,
-                                    field_name: #field_name_lit,
-                                    reason: #reason,
-                                }
-                            }
-                        });
                     }
                 } else if has_nested_experimental(field) {
                     let Some(ident) = field.ident.as_ref() else {
@@ -77,12 +67,11 @@ fn derive_for_struct(input: &DeriveInput, data: &DataStruct) -> TokenStream {
                     });
                 }
             }
-            (checks, experimental_fields, registrations)
+            (checks, experimental_fields)
         }
         Fields::Unnamed(unnamed) => {
             let mut checks = Vec::new();
             let mut experimental_fields = Vec::new();
-            let mut registrations = Vec::new();
             for (index, field) in unnamed.unnamed.iter().enumerate() {
                 if let Some(reason) = experimental_reason(&field.attrs) {
                     let expr = index_presence_expr(index, &field.ty);
@@ -100,15 +89,6 @@ fn derive_for_struct(input: &DeriveInput, data: &DataStruct) -> TokenStream {
                             reason: #reason,
                         }
                     });
-                    registrations.push(quote! {
-                        ::inventory::submit! {
-                            crate::experimental_api::ExperimentalField {
-                                type_name: #type_name_lit,
-                                field_name: #field_name_lit,
-                                reason: #reason,
-                            }
-                        }
-                    });
                 } else if has_nested_experimental(field) {
                     let index = syn::Index::from(index);
                     checks.push(quote! {
@@ -120,9 +100,9 @@ fn derive_for_struct(input: &DeriveInput, data: &DataStruct) -> TokenStream {
                     });
                 }
             }
-            (checks, experimental_fields, registrations)
+            (checks, experimental_fields)
         }
-        Fields::Unit => (Vec::new(), Vec::new(), Vec::new()),
+        Fields::Unit => (Vec::new(), Vec::new()),
     };
 
     let checks = if checks.is_empty() {
@@ -141,8 +121,6 @@ fn derive_for_struct(input: &DeriveInput, data: &DataStruct) -> TokenStream {
     };
 
     let expanded = quote! {
-        #(#registrations)*
-
         impl #name {
             pub(crate) const EXPERIMENTAL_FIELDS: &'static [crate::experimental_api::ExperimentalField] =
                 #experimental_fields;
@@ -181,6 +159,10 @@ fn derive_for_enum(input: &DeriveInput, data: &DataEnum) -> TokenStream {
     }
 
     let expanded = quote! {
+        impl #name {
+            pub(crate) const EXPERIMENTAL_FIELDS: &'static [crate::experimental_api::ExperimentalField] = &[];
+        }
+
         impl crate::experimental_api::ExperimentalApi for #name {
             fn experimental_reason(&self) -> Option<&'static str> {
                 match self {

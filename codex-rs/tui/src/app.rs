@@ -1202,6 +1202,14 @@ fn active_turn_steer_race(error: &TypedRequestError) -> Option<ActiveTurnSteerRa
     Some(ActiveTurnSteerRace::ExpectedTurnMismatch { actual_turn_id })
 }
 
+fn thread_rollback_server_error_message(error: &color_eyre::Report) -> Option<String> {
+    let typed_error = error.downcast_ref::<TypedRequestError>()?;
+    let TypedRequestError::Server { method, source } = typed_error else {
+        return None;
+    };
+    (method == "thread/rollback").then(|| source.message.clone())
+}
+
 impl App {
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
@@ -2757,6 +2765,10 @@ impl App {
                     Ok(response) => response,
                     Err(err) => {
                         self.handle_backtrack_rollback_failed();
+                        if let Some(message) = thread_rollback_server_error_message(&err) {
+                            self.chat_widget.add_error_message(message);
+                            return Ok(true);
+                        }
                         return Err(err);
                     }
                 };
@@ -9346,6 +9358,36 @@ jobs:
     }
 
     #[test]
+    fn thread_rollback_server_error_message_extracts_server_message() {
+        let error = color_eyre::eyre::eyre!(TypedRequestError::Server {
+            method: "thread/rollback".to_string(),
+            source: JSONRPCErrorError {
+                code: -32602,
+                message: "Cannot rollback while a turn is in progress.".to_string(),
+                data: None,
+            },
+        })
+        .wrap_err("thread/rollback failed in TUI");
+
+        assert_eq!(
+            thread_rollback_server_error_message(&error),
+            Some("Cannot rollback while a turn is in progress.".to_string())
+        );
+    }
+
+    #[test]
+    fn thread_rollback_server_error_message_ignores_transport_errors() {
+        let io_error = std::io::Error::other("socket closed");
+        let error = color_eyre::eyre::eyre!(TypedRequestError::Transport {
+            method: "thread/rollback".to_string(),
+            source: io_error,
+        })
+        .wrap_err("thread/rollback failed in TUI");
+
+        assert_eq!(thread_rollback_server_error_message(&error), None);
+    }
+
+    #[test]
     fn select_model_availability_nux_uses_existing_model_order_as_priority() {
         let mut presets = all_model_presets();
         presets.iter_mut().for_each(|preset| {
@@ -9967,6 +10009,29 @@ model = "gpt-5.2"
     async fn backtrack_remote_image_only_selection_clears_existing_composer_draft() {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
         app.transcript_cells = vec![Arc::new(UserHistoryCell {
             message: "original".to_string(),
             text_elements: Vec::new(),
@@ -10067,6 +10132,29 @@ model = "gpt-5.2"
     async fn undo_last_user_message_restores_latest_user_input_and_rolls_back_one_turn() {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
         let remote_image_url = "https://example.com/latest.png".to_string();
         app.transcript_cells = vec![
             Arc::new(UserHistoryCell {
@@ -10100,6 +10188,53 @@ model = "gpt-5.2"
         }
 
         assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn undo_last_user_message_rejects_running_thread() {
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+        app.chat_widget
+            .handle_server_notification(turn_started_notification(thread_id, "turn-1"), None);
+        app.transcript_cells = vec![Arc::new(UserHistoryCell {
+            message: "latest".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>];
+
+        assert!(!app.undo_last_user_message());
+        let cell = wait_for_history_cell_containing(
+            &mut app_event_rx,
+            "Cannot rollback while a turn is in progress.",
+        )
+        .await;
+        let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+        assert!(rendered.contains("Cannot rollback while a turn is in progress."));
+        assert!(!std::iter::from_fn(|| op_rx.try_recv().ok())
+            .any(|op| matches!(op, Op::ThreadRollback { .. })));
     }
 
     #[tokio::test]
@@ -10170,6 +10305,62 @@ model = "gpt-5.2"
         }
 
         assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn ctrl_x_ctrl_u_rejects_threads_without_persisted_history() {
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: None,
+            }),
+        });
+        app.transcript_cells = vec![Arc::new(UserHistoryCell {
+            message: "latest".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>];
+
+        let first = app.handle_key_chord_key_event(KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::CONTROL,
+        ));
+        assert!(first.is_none());
+
+        let second = app.handle_key_chord_key_event(KeyEvent::new(
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL,
+        ));
+        assert!(second.is_none());
+
+        let cell = wait_for_history_cell_containing(
+            &mut app_event_rx,
+            "Backtrack is unavailable for threads without persisted history.",
+        )
+        .await;
+        let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+        assert!(rendered.contains("Backtrack is unavailable for threads without persisted history."));
+        assert!(!std::iter::from_fn(|| op_rx.try_recv().ok())
+            .any(|op| matches!(op, Op::ThreadRollback { .. })));
     }
 
     #[tokio::test]

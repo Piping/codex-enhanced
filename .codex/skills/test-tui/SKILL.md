@@ -20,6 +20,8 @@ Use `just codex` target to run - `just codex -c ...`
 
 - For temp repos or fresh `CODEX_HOME`, preseed project trust in `CODEX_HOME/config.toml` before PTY verification, or the trust/onboarding flow can dominate the terminal output even with `--no-alt-screen`.
 - On macOS temp dirs, add trust entries for both `/tmp/...` and `/private/tmp/...` forms of the repo path.
+- For PTY workflow checks in this repo, prefer `-p newapi` and preseed the temp `CODEX_HOME` so onboarding, auth, and model-migration startup prompts do not intercept the session before the test flow begins.
 - When submitting a prompt programmatically, send the text first and then send Enter separately; sending them together is less reliable.
+- For raw PTY automation, send Enter as `\r`, and if fast typed input is being swallowed by the composer, run with `-c disable_paste_burst=true`.
 - For `/dream` PTY checks, expect the command to run in the background and then report updated memory/AGENTS/skill paths in the active thread.
 <!-- codex:dream:end -->

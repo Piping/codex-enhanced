@@ -1,0 +1,4 @@
+interface:
+  display_name: "Effective Use Cases"
+  short_description: "Turn RPDs and features into goal-driven use cases"
+  default_prompt: "Use $effective-use-cases to turn this request into a goal-driven spec: identify scope, actors, stakeholders, user-goal use cases, guarantees, main success scenarios, extensions, acceptance criteria, and implementation slices."

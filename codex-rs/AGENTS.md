@@ -56,9 +56,19 @@ Use this file for general Rust guidance in `codex-rs/`. More specific guidance l
 - Optimize for a short local edit loop. Do not automatically run `just fmt`, `cargo check`,
   `cargo test`, `just test`, `just fix`, or other broad validation commands during routine local
   iteration.
+- When changing compile parameters, Rust profiles, toolchains, or codegen backends, delete
+  `codex-rs/target` first so the next validation runs from a cold build and exercises all
+  dependencies with the new settings.
 - When you need to validate `codex-rs` changes locally, run this sequence from `codex-rs/`:
-  1. `cargo build -p codex-cli`
+  1. `just build-codex-cli`
   2. `bash install_local.sh`
   3. a PTY test that exercises the changed behavior
+- Do not use `cargo build -p codex-cli` directly for routine validation. Use
+  `just build-codex-cli` so local build hygiene for `rusty_v8` and related prebuilt artifacts is
+  handled consistently.
+- For compile-parameter or backend changes, add a cold-start test pass after the build. At
+  minimum, rerun any tests affected by generated artifacts or serialization changes, such as
+  `cargo test -p codex-app-server-protocol --test schema_fixtures` when protocol schema output is
+  involved.
 - Keep other checks and tests in the release or tag flow unless the user explicitly asks to run
   them earlier.

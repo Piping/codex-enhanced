@@ -647,10 +647,14 @@ async fn interrupt_active_workflow_turn<C: WorkflowRuntimeClient>(
 ) {
     let _ = client.interrupt_turn(thread, turn_id.clone()).await;
     let deadline = tokio::time::Instant::now() + WORKFLOW_INTERRUPT_SETTLE_TIMEOUT;
-    while tokio::time::Instant::now() < deadline {
-        match client.read_turn(thread, turn_id.clone()).await {
-            Ok(turn) if !matches!(turn.status, WorkflowTurnStatus::InProgress) => return,
-            Ok(_) | Err(_) => sleep(WORKFLOW_POLL_INTERVAL).await,
+    loop {
+        let Some(remaining) = deadline.checked_duration_since(tokio::time::Instant::now()) else {
+            return;
+        };
+        match tokio::time::timeout(remaining, client.read_turn(thread, turn_id.clone())).await {
+            Ok(Ok(turn)) if !matches!(turn.status, WorkflowTurnStatus::InProgress) => return,
+            Ok(Ok(_)) | Ok(Err(_)) => sleep(WORKFLOW_POLL_INTERVAL.min(remaining)).await,
+            Err(_) => return,
         }
     }
 }
@@ -793,6 +797,7 @@ fn should_retry_workflow_timeout(error: &WorkflowRunError) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::collections::VecDeque;
     use std::sync::Mutex;
 
@@ -807,20 +812,30 @@ mod tests {
         thread_id: String,
     }
 
+    #[derive(Clone)]
     struct FakeWorkflowRuntimeClient {
-        calls: Mutex<Vec<String>>,
+        calls: Arc<Mutex<Vec<String>>>,
         thread_id: String,
         turn_id: String,
-        reads: Mutex<VecDeque<Result<WorkflowTurnState, String>>>,
+        reads: Arc<Mutex<VecDeque<Result<WorkflowTurnState, String>>>>,
+        block_reads_after_exhaustion: bool,
     }
 
     impl FakeWorkflowRuntimeClient {
         fn new(reads: Vec<Result<WorkflowTurnState, String>>) -> Self {
             Self {
-                calls: Mutex::new(Vec::new()),
+                calls: Arc::new(Mutex::new(Vec::new())),
                 thread_id: "thr_workflow".to_string(),
                 turn_id: "turn_workflow".to_string(),
-                reads: Mutex::new(reads.into()),
+                reads: Arc::new(Mutex::new(reads.into())),
+                block_reads_after_exhaustion: false,
+            }
+        }
+
+        fn new_with_blocking_reads(reads: Vec<Result<WorkflowTurnState, String>>) -> Self {
+            Self {
+                block_reads_after_exhaustion: true,
+                ..Self::new(reads)
             }
         }
     }
@@ -864,15 +879,18 @@ mod tests {
                     .lock()
                     .expect("calls lock")
                     .push(format!("read_turn:{}:{turn_id}", thread.thread_id));
-                self.reads
-                    .lock()
-                    .expect("reads lock")
-                    .pop_front()
-                    .unwrap_or(Ok(WorkflowTurnState {
-                        status: WorkflowTurnStatus::InProgress,
-                        error: None,
-                        last_agent_message: None,
-                    }))
+                if let Some(result) = self.reads.lock().expect("reads lock").pop_front() {
+                    return result;
+                }
+                if self.block_reads_after_exhaustion {
+                    std::future::pending::<()>().await;
+                    unreachable!("pending future should not resolve");
+                }
+                Ok(WorkflowTurnState {
+                    status: WorkflowTurnStatus::InProgress,
+                    error: None,
+                    last_agent_message: None,
+                })
             })
         }
 
@@ -1044,17 +1062,29 @@ jobs:
 "#,
         )
         .expect("workflow fixture");
-        let client = FakeWorkflowRuntimeClient::new(Vec::new());
-        let run = run_background_workflow(
-            &client,
-            tempdir.path().to_path_buf(),
-            BackgroundWorkflowRunTarget::Job {
-                workflow_name: "director".to_string(),
-                job_name: "review_backlog".to_string(),
+        let client = FakeWorkflowRuntimeClient::new_with_blocking_reads(vec![Ok(
+            WorkflowTurnState {
+                status: WorkflowTurnStatus::InProgress,
+                error: None,
+                last_agent_message: None,
             },
-            CancellationToken::new(),
-        );
-        tokio::pin!(run);
+        )]);
+        let client_for_run = client.clone();
+        let run = tokio::spawn({
+            let tempdir_path = tempdir.path().to_path_buf();
+            async move {
+                run_background_workflow(
+                    &client_for_run,
+                    tempdir_path,
+                    BackgroundWorkflowRunTarget::Job {
+                        workflow_name: "director".to_string(),
+                        job_name: "review_backlog".to_string(),
+                    },
+                    CancellationToken::new(),
+                )
+                .await
+            }
+        });
 
         let configured_timeout = Duration::from_secs(1);
         tokio::task::yield_now().await;
@@ -1068,7 +1098,86 @@ jobs:
         )
         .await;
 
-        let result = run.await;
+        let result = run.await.expect("workflow task should finish");
+        match result.outcome {
+            BackgroundWorkflowRunOutcome::Failed(error) => {
+                assert_eq!(error, "workflow prompt timed out after 1s".to_string())
+            }
+            other => panic!("expected failed timeout run, got {other:?}"),
+        }
+
+        let calls = client.calls.lock().expect("calls lock").clone();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.starts_with("start_turn:"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.starts_with("interrupt_turn:"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.starts_with("unsubscribe_thread:"))
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn prompt_workflow_timeout_does_not_hang_when_interrupt_settle_read_blocks() {
+        let tempdir = tempdir().expect("tempdir");
+        let workflows_dir = tempdir.path().join(".codex/workflows");
+        std::fs::create_dir_all(&workflows_dir).expect("workflow dir");
+        std::fs::write(
+            workflows_dir.join("manual.yaml"),
+            r#"name: director
+
+jobs:
+  review_backlog:
+    steps:
+      - prompt: summarize the backlog
+        timeout: 1s
+"#,
+        )
+        .expect("workflow fixture");
+        let client = FakeWorkflowRuntimeClient::new_with_blocking_reads(Vec::new());
+        let client_for_run = client.clone();
+        let run = tokio::spawn({
+            let tempdir_path = tempdir.path().to_path_buf();
+            async move {
+                run_background_workflow(
+                    &client_for_run,
+                    tempdir_path,
+                    BackgroundWorkflowRunTarget::Job {
+                        workflow_name: "director".to_string(),
+                        job_name: "review_backlog".to_string(),
+                    },
+                    CancellationToken::new(),
+                )
+                .await
+            }
+        });
+
+        let configured_timeout = Duration::from_secs(1);
+        tokio::task::yield_now().await;
+        time::advance(
+            configured_timeout
+                + WORKFLOW_INTERRUPT_SETTLE_TIMEOUT
+                + retry_backoff_delay(1)
+                + configured_timeout
+                + WORKFLOW_INTERRUPT_SETTLE_TIMEOUT
+                + Duration::from_secs(1),
+        )
+        .await;
+
+        let result = run.await.expect("workflow task should finish");
         match result.outcome {
             BackgroundWorkflowRunOutcome::Failed(error) => {
                 assert_eq!(error, "workflow prompt timed out after 1s".to_string())

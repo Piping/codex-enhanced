@@ -97,6 +97,24 @@ pub(crate) struct PendingBacktrackRollback {
 }
 
 impl App {
+    fn backtrack_unavailable_reason(&self) -> Option<&'static str> {
+        if self.chat_widget.is_task_running() {
+            Some("Cannot rollback while a turn is in progress.")
+        } else if self.chat_widget.rollout_path().is_none() {
+            Some("Backtrack is unavailable for threads without persisted history.")
+        } else {
+            None
+        }
+    }
+
+    fn report_backtrack_unavailable(&mut self) -> bool {
+        let Some(message) = self.backtrack_unavailable_reason() else {
+            return false;
+        };
+        self.chat_widget.add_error_message(message.to_string());
+        true
+    }
+
     /// Route overlay events while the transcript overlay is active.
     ///
     /// If backtrack preview is active, Esc / Left steps selection, Right steps forward, Enter
@@ -153,6 +171,9 @@ impl App {
             ..
         }) = event
         {
+            if self.report_backtrack_unavailable() {
+                return Ok(true);
+            }
             // First Esc in transcript overlay: begin backtrack preview at latest user message.
             self.begin_overlay_backtrack_preview(tui);
             Ok(true)
@@ -166,6 +187,11 @@ impl App {
     /// Handle global Esc presses for backtracking when no overlay is present.
     pub(crate) fn handle_backtrack_esc_key(&mut self, tui: &mut tui::Tui) {
         if !self.chat_widget.composer_is_empty() {
+            return;
+        }
+
+        if self.report_backtrack_unavailable() {
+            self.reset_backtrack_state();
             return;
         }
 
@@ -185,22 +211,26 @@ impl App {
     ///
     /// The composer prefill is applied immediately as a UX convenience; it does not imply that
     /// core has accepted the rollback.
-    pub(crate) fn apply_backtrack_rollback(&mut self, selection: BacktrackSelection) {
+    pub(crate) fn apply_backtrack_rollback(&mut self, selection: BacktrackSelection) -> bool {
         let user_total = user_count(&self.transcript_cells);
         if user_total == 0 {
-            return;
+            return false;
+        }
+
+        if self.report_backtrack_unavailable() {
+            return false;
         }
 
         if self.backtrack.pending_rollback.is_some() {
             self.chat_widget
                 .add_error_message("Backtrack rollback already in progress.".to_string());
-            return;
+            return false;
         }
 
         let num_turns = user_total.saturating_sub(selection.nth_user_message);
         let num_turns = u32::try_from(num_turns).unwrap_or(u32::MAX);
         if num_turns == 0 {
-            return;
+            return false;
         }
 
         let prefill = selection.prefill.clone();
@@ -223,6 +253,7 @@ impl App {
             self.chat_widget
                 .set_composer_text(prefill, text_elements, local_image_paths);
         }
+        true
     }
 
     /// Open transcript overlay (enters alternate screen and shows full transcript).
@@ -403,8 +434,9 @@ impl App {
         let nth_user_message = self.backtrack.nth_user_message;
         let selection = self.backtrack_selection(nth_user_message);
         self.close_transcript_overlay(tui);
-        if let Some(selection) = selection {
-            self.apply_backtrack_rollback(selection);
+        if let Some(selection) = selection
+            && self.apply_backtrack_rollback(selection)
+        {
             tui.frame_requester().schedule_frame();
         }
     }
@@ -455,12 +487,17 @@ impl App {
         tui: &mut tui::Tui,
         selection: BacktrackSelection,
     ) {
-        self.apply_backtrack_rollback(selection);
-        tui.frame_requester().schedule_frame();
+        if self.apply_backtrack_rollback(selection) {
+            tui.frame_requester().schedule_frame();
+        }
     }
 
     pub(crate) fn undo_last_user_message(&mut self) -> bool {
         self.reset_backtrack_state();
+
+        if self.report_backtrack_unavailable() {
+            return false;
+        }
 
         let Some(nth_user_message) = user_count(&self.transcript_cells).checked_sub(1) else {
             self.chat_widget
@@ -474,8 +511,7 @@ impl App {
             return false;
         };
 
-        self.apply_backtrack_rollback(selection);
-        true
+        self.apply_backtrack_rollback(selection)
     }
 
     pub(crate) fn handle_backtrack_rollback_succeeded(&mut self, num_turns: u32) {

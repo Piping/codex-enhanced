@@ -107,6 +107,18 @@ fn unexpected_status_401_maps_to_unauthorized() {
 }
 
 #[test]
+fn stream_disconnect_maps_to_response_stream_disconnected() {
+    let err = CodexErr::Stream("stream closed before response.completed".to_string(), None);
+
+    assert_eq!(
+        err.to_codex_protocol_error(),
+        CodexErrorInfo::ResponseStreamDisconnected {
+            http_status_code: None,
+        }
+    );
+}
+
+#[test]
 fn sandbox_denied_uses_aggregated_output_when_stderr_empty() {
     let output = ExecToolCallOutput {
         exit_code: 77,
@@ -180,6 +192,24 @@ fn to_error_event_handles_response_stream_failed() {
         event.codex_error_info,
         Some(CodexErrorInfo::ResponseStreamConnectionFailed {
             http_status_code: Some(429)
+        })
+    );
+}
+
+#[test]
+fn to_error_event_handles_stream_disconnect() {
+    let err = CodexErr::Stream("stream closed before response.completed".to_string(), None);
+
+    let event = err.to_error_event(Some("prefix".to_string()));
+
+    assert_eq!(
+        event.message,
+        "prefix: stream disconnected before completion: stream closed before response.completed"
+    );
+    assert_eq!(
+        event.codex_error_info,
+        Some(CodexErrorInfo::ResponseStreamDisconnected {
+            http_status_code: None,
         })
     );
 }
