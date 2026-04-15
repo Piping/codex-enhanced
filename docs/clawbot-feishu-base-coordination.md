@@ -24,8 +24,9 @@ app_secret = "xxx"
 
 [feishu.coordination]
 base_token = "bascnxxxx"
-heartbeat_table_id = "tblHeartbeat"
-force_table_id = "tblForce"
+# Optional. Leave these empty to let clawbot discover or create the tables automatically.
+# heartbeat_table_id = "tblHeartbeat"
+# force_table_id = "tblForce"
 owner_priority = 100
 force_connect = false
 # Optional. When empty, codex-clawbot auto-generates a per-process instance id.
@@ -35,9 +36,20 @@ force_connect = false
 `force_connect = true` means the current Codex process continuously refreshes a force-intent row
 for its own `app_id`, so it preempts other contenders as soon as they observe the update.
 
+When `heartbeat_table_id` or `force_table_id` is omitted, `codex-clawbot` will:
+
+- list tables in the configured Base
+- reuse tables named `clawbot_coordination_heartbeat` and `clawbot_coordination_force` if they exist
+- create them if they do not exist
+- create any missing required fields on those tables
+
+If you do provide table IDs, clawbot treats them as overrides and validates their schema before it
+starts using them.
+
 ## Base Schema
 
-Create one Base with two tables. Use ASCII field names exactly as listed here.
+Create one Base with two tables, or let clawbot create them automatically. Use ASCII field names
+exactly as listed here.
 
 ### `heartbeat`
 
