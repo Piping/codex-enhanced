@@ -8,6 +8,7 @@
   - `codex-rs/app-server-protocol/AGENTS.md`
   - deeper directory-specific `AGENTS.md` files such as `codex-rs/tui/src/bottom_pane/AGENTS.md`
 - When multiple `AGENTS.md` files apply, use the closest one for the directory you are editing.
+- For requirement changes and bug fixes, always run a PTY-based validation that exercises the actual behavior before considering the work done.
 
 <!-- codex:dream:start -->
 ## Dream Guidance

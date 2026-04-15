@@ -15,6 +15,7 @@ pub(crate) fn display_preferences_items(
         DisplayPreferenceKey::StartupTooltips,
         DisplayPreferenceKey::RawThinking,
         DisplayPreferenceKey::ToolResults,
+        DisplayPreferenceKey::HookOutput,
         DisplayPreferenceKey::PatchDiffs,
     ]
     .into_iter()
@@ -71,6 +72,14 @@ fn display_preference_item(
         (DisplayPreferenceKey::ToolResults, false) => (
             "Show Tool Activity",
             "Currently hidden. Reveal tool calls and result details in transcript cells.",
+        ),
+        (DisplayPreferenceKey::HookOutput, true) => (
+            "Hide Hook Activity",
+            "Currently visible. Hide hook lifecycle messages and hook output details in the transcript.",
+        ),
+        (DisplayPreferenceKey::HookOutput, false) => (
+            "Show Hook Activity",
+            "Currently hidden. Reveal hook lifecycle messages and hook output details in the transcript.",
         ),
         (DisplayPreferenceKey::PatchDiffs, true) => (
             "Hide Patch Diffs",

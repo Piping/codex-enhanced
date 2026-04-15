@@ -106,6 +106,16 @@ impl ClawbotController {
                         .add_error_message(format!("Failed to bind Clawbot session: {err}"));
                 }
             }
+            AppEvent::BindClawbotSessionAndPreempt { session_id } => {
+                if let Err(err) = app
+                    .bind_clawbot_session_to_current_thread_and_preempt(app_server, session_id)
+                    .await
+                {
+                    app.chat_widget.add_error_message(format!(
+                        "Failed to bind and preempt Clawbot session: {err}"
+                    ));
+                }
+            }
             AppEvent::SaveClawbotManualBindSessionId { session_id } => {
                 if let Err(err) = app
                     .bind_clawbot_session_to_current_thread(
@@ -155,6 +165,13 @@ impl ClawbotController {
                     ));
                 }
             }
+            AppEvent::ToggleClawbotForceConnect => {
+                if let Err(err) = app.toggle_clawbot_force_connect() {
+                    app.chat_widget.add_error_message(format!(
+                        "Failed to update Clawbot ws preemption: {err}"
+                    ));
+                }
+            }
             AppEvent::ClawbotDisconnectThread { thread_id } => {
                 if let Err(err) = app.clawbot_disconnect_thread(thread_id) {
                     app.chat_widget
@@ -180,12 +197,14 @@ pub(super) fn matches_event(event: &AppEvent) -> bool {
             | AppEvent::OpenClawbotManualBindSessionPrompt
             | AppEvent::SaveClawbotFeishuConfigValue { .. }
             | AppEvent::BindClawbotDiscoveredSession { .. }
+            | AppEvent::BindClawbotSessionAndPreempt { .. }
             | AppEvent::SaveClawbotManualBindSessionId { .. }
             | AppEvent::ClawbotSetTurnMode { .. }
             | AppEvent::ClawbotSetThreadForwarding { .. }
             | AppEvent::ScanClawbotFeishuSessions
             | AppEvent::ClearClawbotFeishuSessions
             | AppEvent::RetryClawbotFeishuConnection
+            | AppEvent::ToggleClawbotForceConnect
             | AppEvent::ClawbotDisconnectThread { .. }
             | AppEvent::EditClawbotStateFile { .. }
     )

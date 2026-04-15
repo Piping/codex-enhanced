@@ -932,3 +932,224 @@ async fn clawbot_rebinds_discovered_session_from_management_actions() -> Result<
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn clawbot_bind_and_preempt_enables_force_connect_and_rebinds_session() -> Result<()> {
+    let mut app = make_test_app().await;
+    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let tempdir = tempdir()?;
+    app.config.cwd = tempdir.path().to_path_buf().abs();
+
+    let started = app_server
+        .start_thread(app.chat_widget.config_ref())
+        .await
+        .expect("start thread");
+    let target_thread_id = started.session.thread_id;
+    app.active_thread_id = Some(target_thread_id);
+    app.primary_thread_id = Some(target_thread_id);
+
+    let mut runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+    runtime
+        .update_feishu_config(Some(codex_clawbot::FeishuConfig {
+            app_id: "cli_app_123".to_string(),
+            app_secret: "secret_value_4567".to_string(),
+            verification_token: None,
+            encrypt_key: None,
+            bot_open_id: Some("ou_bot_open_id".to_string()),
+            bot_user_id: None,
+            coordination: Some(codex_clawbot::FeishuCoordinationConfig {
+                base_token: "bascn_preempt".to_string(),
+                force_connect: false,
+                ..codex_clawbot::FeishuCoordinationConfig::default()
+            }),
+        }))
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+
+    let (source_thread_id, session) =
+        bind_test_clawbot_session(&mut app, &mut app_server, "chat_preempt").await?;
+
+    app.bind_clawbot_session_to_current_thread_and_preempt(
+        &mut app_server,
+        "chat_preempt".to_string(),
+    )
+    .await
+    .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+
+    let runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+    assert_eq!(
+        runtime
+            .bound_session_for_thread(&target_thread_id.to_string())
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?,
+        Some(session)
+    );
+    assert_eq!(
+        runtime
+            .bound_session_for_thread(&source_thread_id.to_string())
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?,
+        None
+    );
+    assert!(
+        runtime
+            .snapshot()
+            .config
+            .feishu
+            .as_ref()
+            .and_then(|config| config.coordination.as_ref())
+            .is_some_and(|coordination| coordination.force_connect)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn clawbot_force_connect_toggle_updates_workspace_config() -> Result<()> {
+    let mut app = make_test_app().await;
+    let tempdir = tempdir()?;
+    app.config.cwd = tempdir.path().to_path_buf().abs();
+
+    let mut runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+    runtime
+        .update_feishu_config(Some(codex_clawbot::FeishuConfig {
+            app_id: "cli_app_123".to_string(),
+            app_secret: "secret_value_4567".to_string(),
+            verification_token: None,
+            encrypt_key: None,
+            bot_open_id: None,
+            bot_user_id: None,
+            coordination: Some(codex_clawbot::FeishuCoordinationConfig {
+                base_token: "bascn_toggle".to_string(),
+                force_connect: false,
+                ..codex_clawbot::FeishuCoordinationConfig::default()
+            }),
+        }))
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+
+    app.toggle_clawbot_force_connect()
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+    let runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+    assert!(
+        runtime
+            .snapshot()
+            .config
+            .feishu
+            .as_ref()
+            .and_then(|config| config.coordination.as_ref())
+            .is_some_and(|coordination| coordination.force_connect)
+    );
+
+    app.toggle_clawbot_force_connect()
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+    let runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+    assert!(
+        runtime
+            .snapshot()
+            .config
+            .feishu
+            .as_ref()
+            .and_then(|config| config.coordination.as_ref())
+            .is_some_and(|coordination| !coordination.force_connect)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn clawbot_session_detail_popups_show_bind_and_preempt_action() -> Result<()> {
+    let mut app = make_test_app().await;
+    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let tempdir = tempdir()?;
+    app.config.cwd = tempdir.path().to_path_buf().abs();
+
+    let started = app_server
+        .start_thread(app.chat_widget.config_ref())
+        .await
+        .expect("start thread");
+    let active_thread_id = started.session.thread_id;
+    app.active_thread_id = Some(active_thread_id);
+    app.primary_thread_id = Some(active_thread_id);
+
+    let mut runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+    runtime
+        .update_feishu_config(Some(codex_clawbot::FeishuConfig {
+            app_id: "cli_app_123".to_string(),
+            app_secret: "secret_value_4567".to_string(),
+            verification_token: Some("verify_token".to_string()),
+            encrypt_key: None,
+            bot_open_id: Some("ou_bot_open_id".to_string()),
+            bot_user_id: None,
+            coordination: Some(codex_clawbot::FeishuCoordinationConfig {
+                base_token: "bascn_snapshot".to_string(),
+                force_connect: false,
+                ..codex_clawbot::FeishuCoordinationConfig::default()
+            }),
+        }))
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+    runtime
+        .persist_session(ProviderSession {
+            provider: ClawbotProviderKind::Feishu,
+            session_id: "chat_discovered_detail".to_string(),
+            display_name: Some("Bob".to_string()),
+            unread_count: 1,
+            last_message_at: None,
+            status: ClawbotSessionStatus::Discovered,
+            bound_thread_id: None,
+        })
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+
+    let second_started = app_server
+        .start_thread(app.chat_widget.config_ref())
+        .await
+        .expect("second thread");
+    app.upsert_agent_picker_thread(
+        second_started.session.thread_id,
+        Some("Inbox Agent".to_string()),
+        /*agent_role*/ None,
+        /*is_closed*/ false,
+    );
+    runtime
+        .persist_session(ProviderSession {
+            provider: ClawbotProviderKind::Feishu,
+            session_id: "chat_ops_detail".to_string(),
+            display_name: Some("Ops".to_string()),
+            unread_count: 0,
+            last_message_at: None,
+            status: ClawbotSessionStatus::Discovered,
+            bound_thread_id: None,
+        })
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+    runtime
+        .connect_session_to_thread(
+            &ProviderSessionRef::new(ClawbotProviderKind::Feishu, "chat_ops_detail"),
+            second_started.session.thread_id.to_string(),
+            app.clawbot_owner_primary_thread_id(),
+        )
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+
+    app.open_clawbot_management_view(ClawbotControlsDestination::UnboundSession {
+        session_id: "chat_discovered_detail".to_string(),
+    });
+    let unbound_detail_popup = render_bottom_popup(&app.chat_widget, /*width*/ 100)
+        .replace(&active_thread_id.to_string(), "<current-thread>");
+    assert_snapshot!("clawbot_unbound_session_detail_popup", unbound_detail_popup);
+
+    app.open_clawbot_management_view(ClawbotControlsDestination::BoundChannel {
+        thread_id: second_started.session.thread_id.to_string(),
+    });
+    let bound_detail_popup = render_bottom_popup(&app.chat_widget, /*width*/ 100)
+        .replace(&active_thread_id.to_string(), "<current-thread>")
+        .replace(
+            &second_started.session.thread_id.to_string(),
+            "<bound-thread>",
+        );
+    assert_snapshot!("clawbot_bound_channel_detail_popup", bound_detail_popup);
+
+    Ok(())
+}

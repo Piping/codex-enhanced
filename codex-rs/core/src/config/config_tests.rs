@@ -323,6 +323,7 @@ fn config_toml_deserializes_tui_display_preferences() {
     let toml = r#"
 [tui.display_preferences]
 show_tool_results = false
+show_hook_output = false
 show_patch_diffs = false
 "#;
     let cfg: ConfigToml =
@@ -334,6 +335,7 @@ show_patch_diffs = false
             .display_preferences,
         TuiDisplayPreferences {
             show_tool_results: false,
+            show_hook_output: false,
             show_patch_diffs: false,
         }
     );

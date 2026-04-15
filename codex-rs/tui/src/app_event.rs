@@ -503,6 +503,10 @@ pub(crate) enum AppEvent {
         session_id: String,
     },
 
+    BindClawbotSessionAndPreempt {
+        session_id: String,
+    },
+
     SaveClawbotManualBindSessionId {
         session_id: String,
     },
@@ -522,6 +526,8 @@ pub(crate) enum AppEvent {
     ClearClawbotFeishuSessions,
 
     RetryClawbotFeishuConnection,
+
+    ToggleClawbotForceConnect,
 
     ClawbotDisconnectThread {
         thread_id: ThreadId,

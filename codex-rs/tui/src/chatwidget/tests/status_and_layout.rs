@@ -1392,6 +1392,65 @@ async fn session_start_hook_events_render_snapshot() {
     .await;
 }
 
+#[tokio::test]
+async fn hook_notifications_are_hidden_when_hook_output_preference_is_disabled() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.display_preferences.set_enabled(
+        crate::display_preferences::DisplayPreferenceKey::HookOutput,
+        /*enabled*/ false,
+    );
+
+    chat.handle_server_notification(
+        ServerNotification::HookStarted(AppServerHookStartedNotification {
+            thread_id: ThreadId::new().to_string(),
+            turn_id: Some("turn-1".to_string()),
+            run: AppServerHookRunSummary {
+                id: "session-start:0:/tmp/hooks.json".to_string(),
+                event_name: AppServerHookEventName::SessionStart,
+                handler_type: AppServerHookHandlerType::Command,
+                execution_mode: AppServerHookExecutionMode::Sync,
+                scope: AppServerHookScope::Turn,
+                source_path: PathBuf::from("/tmp/hooks.json"),
+                display_order: 0,
+                status: AppServerHookRunStatus::Running,
+                status_message: Some("warming the shell".to_string()),
+                started_at: 1,
+                completed_at: None,
+                duration_ms: None,
+                entries: Vec::new(),
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::HookCompleted(AppServerHookCompletedNotification {
+            thread_id: ThreadId::new().to_string(),
+            turn_id: Some("turn-1".to_string()),
+            run: AppServerHookRunSummary {
+                id: "session-start:0:/tmp/hooks.json".to_string(),
+                event_name: AppServerHookEventName::SessionStart,
+                handler_type: AppServerHookHandlerType::Command,
+                execution_mode: AppServerHookExecutionMode::Sync,
+                scope: AppServerHookScope::Turn,
+                source_path: PathBuf::from("/tmp/hooks.json"),
+                display_order: 0,
+                status: AppServerHookRunStatus::Completed,
+                status_message: Some("warming the shell".to_string()),
+                started_at: 1,
+                completed_at: Some(11),
+                duration_ms: Some(10),
+                entries: vec![AppServerHookOutputEntry {
+                    kind: AppServerHookOutputEntryKind::Warning,
+                    text: "Heads up from the hook".to_string(),
+                }],
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+}
+
 // Combined visual snapshot using vt100 for history + direct buffer overlay for UI.
 // This renders the final visual as seen in a terminal: history above, then a blank line,
 // then the exec block, another blank line, the status line, a blank line, and the composer.

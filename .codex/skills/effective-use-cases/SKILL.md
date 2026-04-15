@@ -2,7 +2,6 @@
 name: effective-use-cases
 description: Use when writing, reviewing, or refining product RPD/PRD, feature specs, acceptance criteria, or implementation plans that should be grounded in Alistair Cockburn-style effective use cases. Apply goal-level thinking, explicit scope, primary actor, stakeholders and interests, preconditions, minimal guarantees, success guarantees, main success scenario, extensions, and technology/data variations. Use for Chinese or English requests involving use cases, actor-goal analysis, edge cases, feature slicing, or turning product requirements into implementation-ready behavior.
 ---
-
 # Effective Use Cases
 
 Use this skill to turn a feature request into a behavioral contract, then carry that contract forward into RPD and implementation.

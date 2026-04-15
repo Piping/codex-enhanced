@@ -4055,6 +4055,9 @@ impl ChatWidget {
     }
 
     fn on_hook_started(&mut self, event: codex_protocol::protocol::HookStartedEvent) {
+        if !self.display_preferences.show_hook_output() {
+            return;
+        }
         let label = hook_event_label(event.run.event_name);
         let mut message = format!("Running {label} hook");
         if let Some(status_message) = event.run.status_message
@@ -4068,6 +4071,9 @@ impl ChatWidget {
     }
 
     fn on_hook_completed(&mut self, event: codex_protocol::protocol::HookCompletedEvent) {
+        if !self.display_preferences.show_hook_output() {
+            return;
+        }
         let status = format!("{:?}", event.run.status).to_lowercase();
         let header = format!("{} hook ({status})", hook_event_label(event.run.event_name));
         let mut lines: Vec<ratatui::text::Line<'static>> = vec![header.into()];
