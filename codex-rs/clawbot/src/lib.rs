@@ -9,6 +9,7 @@ mod store;
 pub use config::ClawbotConfig;
 pub use config::ClawbotTurnMode;
 pub use config::FeishuConfig;
+pub use config::FeishuCoordinationConfig;
 pub use diagnostics::append_diagnostic_event;
 pub use events::ProviderInboundMessage;
 pub use model::CLAWBOT_BINDINGS_RELATIVE_PATH;

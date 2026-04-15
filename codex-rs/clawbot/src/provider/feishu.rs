@@ -1,3 +1,4 @@
+mod coordination;
 mod runtime_loop;
 mod sync;
 

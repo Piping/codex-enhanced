@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use serde::Serialize;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -31,6 +32,65 @@ pub struct FeishuConfig {
     pub encrypt_key: Option<String>,
     pub bot_open_id: Option<String>,
     pub bot_user_id: Option<String>,
+    pub coordination: Option<FeishuCoordinationConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct FeishuCoordinationConfig {
+    pub base_token: String,
+    pub heartbeat_table_id: String,
+    pub force_table_id: String,
+    pub instance_id: Option<String>,
+    pub owner_priority: i64,
+    pub heartbeat_interval_secs: u64,
+    pub heartbeat_ttl_secs: u64,
+    pub force_connect: bool,
+}
+
+impl Default for FeishuCoordinationConfig {
+    fn default() -> Self {
+        Self {
+            base_token: String::new(),
+            heartbeat_table_id: String::new(),
+            force_table_id: String::new(),
+            instance_id: None,
+            owner_priority: 100,
+            heartbeat_interval_secs: 10,
+            heartbeat_ttl_secs: 30,
+            force_connect: false,
+        }
+    }
+}
+
+impl FeishuCoordinationConfig {
+    pub fn is_configured(&self) -> bool {
+        !self.base_token.trim().is_empty()
+            && !self.heartbeat_table_id.trim().is_empty()
+            && !self.force_table_id.trim().is_empty()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.base_token.trim().is_empty()
+            && self.heartbeat_table_id.trim().is_empty()
+            && self.force_table_id.trim().is_empty()
+            && self
+                .instance_id
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            && self.owner_priority == Self::default().owner_priority
+            && self.heartbeat_interval_secs == Self::default().heartbeat_interval_secs
+            && self.heartbeat_ttl_secs == Self::default().heartbeat_ttl_secs
+            && !self.force_connect
+    }
+
+    pub fn heartbeat_interval(&self) -> Duration {
+        Duration::from_secs(self.heartbeat_interval_secs.max(1))
+    }
+
+    pub fn heartbeat_ttl(&self) -> Duration {
+        Duration::from_secs(self.heartbeat_ttl_secs.max(self.heartbeat_interval_secs.max(1) * 2))
+    }
 }
 
 impl FeishuConfig {
@@ -75,5 +135,9 @@ impl FeishuConfig {
                 .bot_user_id
                 .as_deref()
                 .is_none_or(|value| value.trim().is_empty())
+            && self
+                .coordination
+                .as_ref()
+                .is_none_or(FeishuCoordinationConfig::is_empty)
     }
 }

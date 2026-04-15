@@ -595,6 +595,7 @@ mod tests {
                 encrypt_key: None,
                 bot_open_id: None,
                 bot_user_id: None,
+                coordination: None,
             }))
             .expect("save config");
         assert_eq!(
@@ -606,6 +607,7 @@ mod tests {
                 encrypt_key: None,
                 bot_open_id: None,
                 bot_user_id: None,
+                coordination: None,
             })
         );
 
