@@ -2,6 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -10,12 +11,20 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use open_lark::openlark_core::api::ApiRequest;
+use open_lark::openlark_core::api::Response;
 use open_lark::openlark_core::http::Transport;
 use serde_json::Map;
 use serde_json::Value;
+use tokio::sync::Mutex;
 
 use crate::config::FeishuConfig;
 use crate::config::FeishuCoordinationConfig;
+
+const HEARTBEAT_TABLE_NAME: &str = "clawbot_coordination_heartbeat";
+const FORCE_TABLE_NAME: &str = "clawbot_coordination_force";
+
+const FIELD_TYPE_TEXT: i64 = 1;
+const FIELD_TYPE_NUMBER: i64 = 2;
 
 const HEARTBEAT_FIELD_KEY: &str = "key";
 const HEARTBEAT_FIELD_APP_ID: &str = "app_id";
@@ -33,6 +42,35 @@ const FORCE_FIELD_TARGET_INSTANCE_ID: &str = "target_instance_id";
 const FORCE_FIELD_TARGET_SESSION_ID: &str = "target_session_id";
 const FORCE_FIELD_FORCE_UNTIL_MS: &str = "force_until_ms";
 const FORCE_FIELD_REQUESTED_AT_MS: &str = "requested_at_ms";
+
+const FEISHU_CODE_WRONG_BASE_TOKEN: i32 = 1_254_003;
+const FEISHU_CODE_WRONG_TABLE_ID: i32 = 1_254_004;
+const FEISHU_CODE_WRONG_FIELD_ID: i32 = 1_254_009;
+const FEISHU_CODE_BASE_TOKEN_NOT_FOUND: i32 = 1_254_040;
+const FEISHU_CODE_TABLE_ID_NOT_FOUND: i32 = 1_254_041;
+const FEISHU_CODE_FIELD_ID_NOT_FOUND: i32 = 1_254_044;
+const FEISHU_CODE_PERMISSION_DENIED: i32 = 1_254_302;
+
+const HEARTBEAT_FIELDS: [RequiredField; 9] = [
+    RequiredField::new(HEARTBEAT_FIELD_KEY, FIELD_TYPE_TEXT),
+    RequiredField::new(HEARTBEAT_FIELD_APP_ID, FIELD_TYPE_TEXT),
+    RequiredField::new(HEARTBEAT_FIELD_INSTANCE_ID, FIELD_TYPE_TEXT),
+    RequiredField::new(HEARTBEAT_FIELD_SESSION_ID, FIELD_TYPE_TEXT),
+    RequiredField::new(HEARTBEAT_FIELD_OWNER_PRIORITY, FIELD_TYPE_NUMBER),
+    RequiredField::new(HEARTBEAT_FIELD_LAST_SEEN_MS, FIELD_TYPE_NUMBER),
+    RequiredField::new(HEARTBEAT_FIELD_TTL_MS, FIELD_TYPE_NUMBER),
+    RequiredField::new(HEARTBEAT_FIELD_WS_STATE, FIELD_TYPE_TEXT),
+    RequiredField::new(HEARTBEAT_FIELD_WORKSPACE_ROOT, FIELD_TYPE_TEXT),
+];
+
+const FORCE_FIELDS: [RequiredField; 6] = [
+    RequiredField::new(FORCE_FIELD_KEY, FIELD_TYPE_TEXT),
+    RequiredField::new(FORCE_FIELD_APP_ID, FIELD_TYPE_TEXT),
+    RequiredField::new(FORCE_FIELD_TARGET_INSTANCE_ID, FIELD_TYPE_TEXT),
+    RequiredField::new(FORCE_FIELD_TARGET_SESSION_ID, FIELD_TYPE_TEXT),
+    RequiredField::new(FORCE_FIELD_FORCE_UNTIL_MS, FIELD_TYPE_NUMBER),
+    RequiredField::new(FORCE_FIELD_REQUESTED_AT_MS, FIELD_TYPE_NUMBER),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum WebsocketOwnershipState {
@@ -162,12 +200,19 @@ impl FeishuBaseCoordinator {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedCoordinationTables {
+    heartbeat_table_id: String,
+    force_table_id: String,
+}
+
 #[derive(Debug, Clone)]
 struct FeishuBaseClient {
     config: open_lark::openlark_core::config::Config,
     base_token: String,
-    heartbeat_table_id: String,
-    force_table_id: String,
+    configured_heartbeat_table_id: Option<String>,
+    configured_force_table_id: Option<String>,
+    schema: Arc<Mutex<Option<ResolvedCoordinationTables>>>,
 }
 
 impl FeishuBaseClient {
@@ -178,21 +223,26 @@ impl FeishuBaseClient {
         Self {
             config,
             base_token: coordination.base_token,
-            heartbeat_table_id: coordination.heartbeat_table_id,
-            force_table_id: coordination.force_table_id,
+            configured_heartbeat_table_id: trimmed_non_empty(&coordination.heartbeat_table_id),
+            configured_force_table_id: trimmed_non_empty(&coordination.force_table_id),
+            schema: Arc::new(Mutex::new(None)),
         }
     }
 
     async fn upsert_heartbeat(&self, heartbeat: &HeartbeatLease) -> Result<()> {
+        let tables = self.ensure_schema().await?;
         let fields = heartbeat.to_fields();
-        match self.find_heartbeat_record_by_key(&heartbeat.key).await? {
+        match self
+            .find_heartbeat_record_by_key(&tables.heartbeat_table_id, &heartbeat.key)
+            .await?
+        {
             Some(record) => {
-                self.update_record(&self.heartbeat_table_id, &record.record_id, fields)
+                self.update_record(&tables.heartbeat_table_id, &record.record_id, fields)
                     .await
                     .context("failed to update Feishu Base heartbeat record")?;
             }
             None => {
-                self.create_record(&self.heartbeat_table_id, fields)
+                self.create_record(&tables.heartbeat_table_id, fields)
                     .await
                     .context("failed to create Feishu Base heartbeat record")?;
             }
@@ -201,9 +251,11 @@ impl FeishuBaseClient {
     }
 
     async fn list_heartbeats(&self, app_id: &str) -> Result<Vec<HeartbeatLease>> {
+        let tables = self.ensure_schema().await?;
         let mut heartbeats = Vec::new();
-        for record in self.list_records(&self.heartbeat_table_id).await? {
-            if let Some(heartbeat) = HeartbeatLease::from_record(record)? && heartbeat.app_id == app_id
+        for record in self.list_records(&tables.heartbeat_table_id).await? {
+            if let Some(heartbeat) = HeartbeatLease::from_record(record)?
+                && heartbeat.app_id == app_id
             {
                 heartbeats.push(heartbeat);
             }
@@ -220,8 +272,11 @@ impl FeishuBaseClient {
         ttl_ms: i64,
         force_connect: bool,
     ) -> Result<()> {
+        let tables = self.ensure_schema().await?;
         let key = force_key(app_id);
-        let existing = self.find_force_record_by_key(&key).await?;
+        let existing = self
+            .find_force_record_by_key(&tables.force_table_id, &key)
+            .await?;
         let force_until_ms = if force_connect { now_ms + ttl_ms } else { now_ms };
         let should_write = force_connect
             || existing.as_ref().is_some_and(|record| {
@@ -244,7 +299,7 @@ impl FeishuBaseClient {
         .to_fields();
         if let Some(existing) = existing {
             self.update_record(
-                &self.force_table_id,
+                &tables.force_table_id,
                 &existing
                     .record_id
                     .clone()
@@ -254,7 +309,7 @@ impl FeishuBaseClient {
             .await
             .context("failed to update Feishu Base force intent record")?;
         } else {
-            self.create_record(&self.force_table_id, fields)
+            self.create_record(&tables.force_table_id, fields)
                 .await
                 .context("failed to create Feishu Base force intent record")?;
         }
@@ -262,12 +317,115 @@ impl FeishuBaseClient {
     }
 
     async fn get_force_intent(&self, app_id: &str) -> Result<Option<ForceIntentRecord>> {
-        self.find_force_record_by_key(&force_key(app_id)).await
+        let tables = self.ensure_schema().await?;
+        self.find_force_record_by_key(&tables.force_table_id, &force_key(app_id))
+            .await
     }
 
-    async fn find_force_record_by_key(&self, key: &str) -> Result<Option<ForceIntentRecord>> {
+    async fn ensure_schema(&self) -> Result<ResolvedCoordinationTables> {
+        let mut cached = self.schema.lock().await;
+        if let Some(schema) = cached.clone() {
+            return Ok(schema);
+        }
+
+        let mut tables = self.list_tables().await?;
+        let heartbeat_table = self
+            .resolve_or_create_table(
+                &mut tables,
+                self.configured_heartbeat_table_id.as_deref(),
+                HEARTBEAT_TABLE_NAME,
+            )
+            .await?;
+        self.ensure_required_fields(&heartbeat_table, &HEARTBEAT_FIELDS)
+            .await?;
+
+        let force_table = self
+            .resolve_or_create_table(
+                &mut tables,
+                self.configured_force_table_id.as_deref(),
+                FORCE_TABLE_NAME,
+            )
+            .await?;
+        self.ensure_required_fields(&force_table, &FORCE_FIELDS)
+            .await?;
+
+        let schema = ResolvedCoordinationTables {
+            heartbeat_table_id: heartbeat_table.table_id,
+            force_table_id: force_table.table_id,
+        };
+        *cached = Some(schema.clone());
+        Ok(schema)
+    }
+
+    async fn resolve_or_create_table(
+        &self,
+        tables: &mut Vec<BaseTable>,
+        configured_table_id: Option<&str>,
+        table_name: &str,
+    ) -> Result<BaseTable> {
+        if let Some(table_id) = configured_table_id
+            && let Some(table) = tables.iter().find(|table| table.table_id == table_id)
+        {
+            return Ok(table.clone());
+        }
+
+        if let Some(table) = choose_named_table(tables, table_name) {
+            return Ok(table);
+        }
+
+        self.create_table(table_name).await?;
+        *tables = self.list_tables().await?;
+        choose_named_table(tables, table_name).ok_or_else(|| {
+            anyhow!(
+                "Feishu Base coordination created table {table_name} but could not resolve its table_id"
+            )
+        })
+    }
+
+    async fn ensure_required_fields(
+        &self,
+        table: &BaseTable,
+        required_fields: &[RequiredField],
+    ) -> Result<()> {
+        let fields = self.list_fields(&table.table_id).await?;
+        for required in required_fields {
+            match fields
+                .iter()
+                .find(|field| field.field_name == required.field_name)
+            {
+                Some(existing) if existing.field_type == required.field_type => {}
+                Some(existing) => {
+                    return Err(anyhow!(
+                        "Feishu Base coordination table {} ({}) has field {} with type {} but expected {}. Repair the table schema or clear the configured table id so clawbot can recreate it.",
+                        table.name,
+                        table.table_id,
+                        required.field_name,
+                        field_type_name(existing.field_type),
+                        field_type_name(required.field_type),
+                    ));
+                }
+                None => {
+                    self.create_field(&table.table_id, required)
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to create Feishu Base coordination field {} on table {} ({})",
+                                required.field_name, table.name, table.table_id
+                            )
+                        })?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn find_force_record_by_key(
+        &self,
+        table_id: &str,
+        key: &str,
+    ) -> Result<Option<ForceIntentRecord>> {
         let mut matches = Vec::new();
-        for record in self.list_records(&self.force_table_id).await? {
+        for record in self.list_records(table_id).await? {
             if let Some(force_intent) = ForceIntentRecord::from_record(record)?
                 && force_intent.key == key
             {
@@ -282,9 +440,13 @@ impl FeishuBaseClient {
         Ok(matches.pop())
     }
 
-    async fn find_heartbeat_record_by_key(&self, key: &str) -> Result<Option<BaseRecord>> {
+    async fn find_heartbeat_record_by_key(
+        &self,
+        table_id: &str,
+        key: &str,
+    ) -> Result<Option<BaseRecord>> {
         let mut matches = self
-            .list_records(&self.heartbeat_table_id)
+            .list_records(table_id)
             .await?
             .into_iter()
             .filter(|record| {
@@ -299,37 +461,150 @@ impl FeishuBaseClient {
         Ok(matches.pop())
     }
 
+    async fn list_tables(&self) -> Result<Vec<BaseTable>> {
+        let mut page_token = None;
+        let mut tables = Vec::new();
+        loop {
+            let mut request: ApiRequest<Value> =
+                ApiRequest::get(tables_url(&self.base_token)).query("page_size", "100");
+            if let Some(token) = page_token.clone() {
+                request = request.query("page_token", token);
+            }
+            let response = self.request_json("list Feishu Base tables", request).await?;
+            let payload = paged_payload(
+                response
+                    .data
+                    .as_ref()
+                    .context("Feishu Base table list response is missing data")?,
+                "table list",
+            )?;
+            if let Some(items) = payload.get("items").and_then(Value::as_array) {
+                for item in items {
+                    if let Some(table) = BaseTable::from_value(item) {
+                        tables.push(table);
+                    }
+                }
+            }
+            let has_more = payload
+                .get("has_more")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if !has_more {
+                break;
+            }
+            let Some(next_page_token) = payload
+                .get("page_token")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|token| !token.is_empty())
+                .map(str::to_owned)
+            else {
+                break;
+            };
+            page_token = Some(next_page_token);
+        }
+        Ok(tables)
+    }
+
+    async fn create_table(&self, table_name: &str) -> Result<()> {
+        let request: ApiRequest<Value> = ApiRequest::post(tables_url(&self.base_token))
+            .json_body(&serde_json::json!({
+                "table": {
+                    "name": table_name,
+                    "fields": [{
+                        "field_name": HEARTBEAT_FIELD_KEY,
+                        "type": FIELD_TYPE_TEXT,
+                    }],
+                }
+            }));
+        self.request_json(&format!("create Feishu Base table {table_name}"), request)
+            .await?;
+        Ok(())
+    }
+
+    async fn list_fields(&self, table_id: &str) -> Result<Vec<BaseField>> {
+        let mut page_token = None;
+        let mut fields = Vec::new();
+        loop {
+            let mut request: ApiRequest<Value> = ApiRequest::get(fields_url(&self.base_token, table_id))
+                .query("page_size", "100");
+            if let Some(token) = page_token.clone() {
+                request = request.query("page_token", token);
+            }
+            let response = self
+                .request_json(&format!("list Feishu Base fields for table {table_id}"), request)
+                .await?;
+            let payload = paged_payload(
+                response
+                    .data
+                    .as_ref()
+                    .context("Feishu Base field list response is missing data")?,
+                "field list",
+            )?;
+            if let Some(items) = payload.get("items").and_then(Value::as_array) {
+                for item in items {
+                    if let Some(field) = BaseField::from_value(item) {
+                        fields.push(field);
+                    }
+                }
+            }
+            let has_more = payload
+                .get("has_more")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if !has_more {
+                break;
+            }
+            let Some(next_page_token) = payload
+                .get("page_token")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|token| !token.is_empty())
+                .map(str::to_owned)
+            else {
+                break;
+            };
+            page_token = Some(next_page_token);
+        }
+        Ok(fields)
+    }
+
+    async fn create_field(&self, table_id: &str, field: &RequiredField) -> Result<()> {
+        let request: ApiRequest<Value> = ApiRequest::post(fields_url(&self.base_token, table_id))
+            .json_body(&serde_json::json!({
+                "field_name": field.field_name,
+                "type": field.field_type,
+            }));
+        self.request_json(
+            &format!(
+                "create Feishu Base field {} on table {table_id}",
+                field.field_name
+            ),
+            request,
+        )
+        .await?;
+        Ok(())
+    }
+
     async fn list_records(&self, table_id: &str) -> Result<Vec<BaseRecord>> {
         let mut page_token = None;
         let mut records = Vec::new();
         loop {
-            let mut request: ApiRequest<Value> = ApiRequest::get(records_url(
-                &self.base_token,
-                table_id,
-            ))
-            .query("page_size", "500");
+            let mut request: ApiRequest<Value> =
+                ApiRequest::get(records_url(&self.base_token, table_id)).query("page_size", "500");
             if let Some(token) = page_token.clone() {
                 request = request.query("page_token", token);
             }
-            let response = Transport::<Value>::request(
-                request,
-                &self.config,
-                Some(Default::default()),
-            )
-                .await
-                .with_context(|| format!("failed to list Feishu Base records for table {table_id}"))?;
-            if !response.is_success() {
-                return Err(anyhow!(
-                    "failed to list Feishu Base records for table {table_id}: {}",
-                    response.msg()
-                ));
-            }
-            let data = response
-                .data
-                .as_ref()
-                .context("Feishu Base record list response is missing data")?;
-            let payload = data.get("items").is_some().then_some(data).or_else(|| data.get("data"));
-            let payload = payload.context("Feishu Base record list response is missing items payload")?;
+            let response = self
+                .request_json(&format!("list Feishu Base records for table {table_id}"), request)
+                .await?;
+            let payload = paged_payload(
+                response
+                    .data
+                    .as_ref()
+                    .context("Feishu Base record list response is missing data")?,
+                "record list",
+            )?;
             if let Some(items) = payload.get("items").and_then(Value::as_array) {
                 for item in items {
                     if let Some(record) = BaseRecord::from_value(item) {
@@ -361,26 +636,84 @@ impl FeishuBaseClient {
     async fn create_record(&self, table_id: &str, fields: Value) -> Result<()> {
         let request: ApiRequest<Value> = ApiRequest::post(records_url(&self.base_token, table_id))
             .json_body(&serde_json::json!({ "fields": fields }));
-        let response =
-            Transport::<Value>::request(request, &self.config, Some(Default::default())).await?;
-        if response.is_success() {
-            Ok(())
-        } else {
-            Err(anyhow!("failed to create Feishu Base record: {}", response.msg()))
-        }
+        self.request_json(
+            &format!("create Feishu Base record in table {table_id}"),
+            request,
+        )
+        .await?;
+        Ok(())
     }
 
     async fn update_record(&self, table_id: &str, record_id: &str, fields: Value) -> Result<()> {
         let request: ApiRequest<Value> =
             ApiRequest::put(record_url(&self.base_token, table_id, record_id))
                 .json_body(&serde_json::json!({ "fields": fields }));
-        let response =
-            Transport::<Value>::request(request, &self.config, Some(Default::default())).await?;
+        self.request_json(
+            &format!("update Feishu Base record {record_id} in table {table_id}"),
+            request,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn request_json(
+        &self,
+        operation: &str,
+        request: ApiRequest<Value>,
+    ) -> Result<Response<Value>> {
+        let response = Transport::<Value>::request(request, &self.config, Some(Default::default()))
+            .await
+            .with_context(|| format!("failed to {operation}"))?;
         if response.is_success() {
-            Ok(())
+            Ok(response)
         } else {
-            Err(anyhow!("failed to update Feishu Base record: {}", response.msg()))
+            Err(classify_feishu_api_error(operation, &self.base_token, &response))
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RequiredField {
+    field_name: &'static str,
+    field_type: i64,
+}
+
+impl RequiredField {
+    const fn new(field_name: &'static str, field_type: i64) -> Self {
+        Self {
+            field_name,
+            field_type,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BaseTable {
+    table_id: String,
+    name: String,
+}
+
+impl BaseTable {
+    fn from_value(value: &Value) -> Option<Self> {
+        Some(Self {
+            table_id: value.get("table_id")?.as_str()?.to_string(),
+            name: value.get("name")?.as_str()?.trim().to_string(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BaseField {
+    field_name: String,
+    field_type: i64,
+}
+
+impl BaseField {
+    fn from_value(value: &Value) -> Option<Self> {
+        Some(Self {
+            field_name: value.get("field_name")?.as_str()?.trim().to_string(),
+            field_type: value.get("type")?.as_i64()?,
+        })
     }
 }
 
@@ -558,6 +891,55 @@ fn select_leader(
     })
 }
 
+fn choose_named_table(tables: &[BaseTable], table_name: &str) -> Option<BaseTable> {
+    tables
+        .iter()
+        .filter(|table| table.name == table_name)
+        .cloned()
+        .min_by(|left, right| left.table_id.cmp(&right.table_id))
+}
+
+fn classify_feishu_api_error(
+    operation: &str,
+    base_token: &str,
+    response: &Response<Value>,
+) -> anyhow::Error {
+    let code = response.code();
+    let msg = response.msg().trim();
+    let request_id = response
+        .raw()
+        .request_id
+        .as_deref()
+        .map(|id| format!(", request_id {id}"))
+        .unwrap_or_default();
+
+    match code {
+        FEISHU_CODE_PERMISSION_DENIED => anyhow!(
+            "Feishu Base coordination could not {operation}: permission denied (code {code}{request_id}): {msg}. Grant the app edit/admin access on base {base_token} or add it to a Base role with write permission."
+        ),
+        FEISHU_CODE_WRONG_BASE_TOKEN | FEISHU_CODE_BASE_TOKEN_NOT_FOUND => anyhow!(
+            "Feishu Base coordination could not {operation}: base_token {base_token} is invalid or inaccessible (code {code}{request_id}): {msg}. Check [feishu.coordination].base_token and make sure the app can access that Base."
+        ),
+        FEISHU_CODE_WRONG_TABLE_ID | FEISHU_CODE_TABLE_ID_NOT_FOUND => anyhow!(
+            "Feishu Base coordination could not {operation}: the configured table id is invalid (code {code}{request_id}): {msg}. Clear or repair heartbeat_table_id / force_table_id so clawbot can resolve or recreate its coordination tables."
+        ),
+        FEISHU_CODE_WRONG_FIELD_ID | FEISHU_CODE_FIELD_ID_NOT_FOUND => anyhow!(
+            "Feishu Base coordination could not {operation}: the coordination table schema is missing a required field (code {code}{request_id}): {msg}. Repair the Base schema or let clawbot recreate the coordination tables."
+        ),
+        _ => anyhow!(
+            "Feishu Base coordination could not {operation} (code {code}{request_id}): {msg}"
+        ),
+    }
+}
+
+fn paged_payload<'a>(data: &'a Value, label: &str) -> Result<&'a Value> {
+    data.get("items")
+        .is_some()
+        .then_some(data)
+        .or_else(|| data.get("data"))
+        .with_context(|| format!("Feishu Base {label} response is missing items payload"))
+}
+
 fn default_instance_id(workspace_root: &str) -> String {
     let hostname = std::env::var("HOSTNAME").unwrap_or_else(|_| "local".to_string());
     let mut hasher = DefaultHasher::new();
@@ -573,12 +955,33 @@ fn force_key(app_id: &str) -> String {
     app_id.to_string()
 }
 
+fn tables_url(base_token: &str) -> String {
+    format!("/open-apis/bitable/v1/apps/{base_token}/tables")
+}
+
+fn fields_url(base_token: &str, table_id: &str) -> String {
+    format!("/open-apis/bitable/v1/apps/{base_token}/tables/{table_id}/fields")
+}
+
 fn records_url(base_token: &str, table_id: &str) -> String {
     format!("/open-apis/bitable/v1/apps/{base_token}/tables/{table_id}/records")
 }
 
 fn record_url(base_token: &str, table_id: &str, record_id: &str) -> String {
     format!("/open-apis/bitable/v1/apps/{base_token}/tables/{table_id}/records/{record_id}")
+}
+
+fn trimmed_non_empty(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn field_type_name(field_type: i64) -> &'static str {
+    match field_type {
+        FIELD_TYPE_TEXT => "text",
+        FIELD_TYPE_NUMBER => "number",
+        _ => "unknown",
+    }
 }
 
 fn string_field(fields: &Map<String, Value>, key: &str) -> Option<String> {
@@ -614,8 +1017,14 @@ fn unix_timestamp_ms_now() -> Result<i64> {
 mod tests {
     use pretty_assertions::assert_eq;
 
+    use super::FORCE_FIELDS;
     use super::ForceIntentRecord;
+    use super::HEARTBEAT_FIELDS;
     use super::HeartbeatLease;
+    use super::RequiredField;
+    use super::BaseTable;
+    use super::choose_named_table;
+    use super::classify_feishu_api_error;
     use super::select_leader;
 
     #[test]
@@ -699,6 +1108,47 @@ mod tests {
 
         assert_eq!(leader.leader_instance_id, "instance_a");
         assert_eq!(leader.forced_instance_id, Some("instance_b".to_string()));
+    }
+
+    #[test]
+    fn choose_named_table_is_deterministic_when_duplicates_exist() {
+        let tables = vec![
+            BaseTable {
+                table_id: "tbl_b".to_string(),
+                name: "clawbot_coordination_heartbeat".to_string(),
+            },
+            BaseTable {
+                table_id: "tbl_a".to_string(),
+                name: "clawbot_coordination_heartbeat".to_string(),
+            },
+        ];
+
+        let chosen = choose_named_table(&tables, "clawbot_coordination_heartbeat")
+            .expect("named table");
+        assert_eq!(chosen.table_id, "tbl_a");
+    }
+
+    #[test]
+    fn required_field_sets_match_expected_shape() {
+        assert_eq!(HEARTBEAT_FIELDS.first(), Some(&RequiredField::new("key", 1)));
+        assert_eq!(FORCE_FIELDS.first(), Some(&RequiredField::new("key", 1)));
+    }
+
+    #[test]
+    fn permission_error_is_actionable() {
+        let response = open_lark::openlark_core::api::Response::error(
+            1_254_302,
+            "The role has no permissions.",
+        );
+        let message = classify_feishu_api_error(
+            "create Feishu Base table clawbot_coordination_heartbeat",
+            "bascn_test",
+            &response,
+        )
+        .to_string();
+
+        assert!(message.contains("Grant the app edit/admin access"));
+        assert!(message.contains("bascn_test"));
     }
 
     fn heartbeat(

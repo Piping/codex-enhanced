@@ -114,10 +114,10 @@ impl ClawbotFeishuConfigField {
                 "Paste the Feishu Base token, or submit an empty value to clear it"
             }
             Self::CoordinationHeartbeatTableId => {
-                "Paste the heartbeat table_id, or submit an empty value to clear it"
+                "Paste an optional heartbeat table_id, or leave it empty so clawbot can auto-discover or create the table"
             }
             Self::CoordinationForceTableId => {
-                "Paste the force table_id, or submit an empty value to clear it"
+                "Paste an optional force table_id, or leave it empty so clawbot can auto-discover or create the table"
             }
             Self::CoordinationInstanceId => {
                 "Paste an optional stable instance_id, or submit an empty value to auto-generate"

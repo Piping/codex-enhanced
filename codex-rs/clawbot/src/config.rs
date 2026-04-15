@@ -66,8 +66,6 @@ impl Default for FeishuCoordinationConfig {
 impl FeishuCoordinationConfig {
     pub fn is_configured(&self) -> bool {
         !self.base_token.trim().is_empty()
-            && !self.heartbeat_table_id.trim().is_empty()
-            && !self.force_table_id.trim().is_empty()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -90,6 +88,36 @@ impl FeishuCoordinationConfig {
 
     pub fn heartbeat_ttl(&self) -> Duration {
         Duration::from_secs(self.heartbeat_ttl_secs.max(self.heartbeat_interval_secs.max(1) * 2))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FeishuCoordinationConfig;
+
+    #[test]
+    fn coordination_is_configured_with_base_token_only() {
+        let mut config = FeishuCoordinationConfig {
+            base_token: "bascn_test".to_string(),
+            ..FeishuCoordinationConfig::default()
+        };
+
+        assert!(config.is_configured());
+
+        config.base_token.clear();
+        assert!(!config.is_configured());
+    }
+
+    #[test]
+    fn coordination_ttl_is_at_least_twice_the_interval() {
+        let config = FeishuCoordinationConfig {
+            base_token: "bascn_test".to_string(),
+            heartbeat_interval_secs: 9,
+            heartbeat_ttl_secs: 5,
+            ..FeishuCoordinationConfig::default()
+        };
+
+        assert_eq!(config.heartbeat_ttl().as_secs(), 18);
     }
 }
 
