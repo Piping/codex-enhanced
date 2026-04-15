@@ -57,12 +57,15 @@ impl FeatureRoute {
             | AppEvent::OpenClawbotManagementView { .. }
             | AppEvent::OpenClawbotFeishuConfigPrompt { .. }
             | AppEvent::SaveClawbotFeishuConfigValue { .. }
+            | AppEvent::BindClawbotDiscoveredSession { .. }
+            | AppEvent::BindClawbotSessionAndPreempt { .. }
             | AppEvent::SaveClawbotManualBindSessionId { .. }
             | AppEvent::ClawbotSetTurnMode { .. }
             | AppEvent::ClawbotSetThreadForwarding { .. }
             | AppEvent::ScanClawbotFeishuSessions
             | AppEvent::ClearClawbotFeishuSessions
             | AppEvent::RetryClawbotFeishuConnection
+            | AppEvent::ToggleClawbotForceConnect
             | AppEvent::ClawbotDisconnectThread { .. }
             | AppEvent::EditClawbotStateFile { .. } => Some(Self::Clawbot),
             _ => None,

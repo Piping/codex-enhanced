@@ -10,6 +10,7 @@ pub(crate) enum DisplayPreferenceKey {
     StartupTooltips,
     RawThinking,
     ToolResults,
+    HookOutput,
     PatchDiffs,
 }
 
@@ -18,6 +19,7 @@ pub(crate) struct DisplayPreferences {
     show_startup_tooltips: Arc<AtomicBool>,
     show_raw_thinking: Arc<AtomicBool>,
     show_tool_results: Arc<AtomicBool>,
+    show_hook_output: Arc<AtomicBool>,
     show_patch_diffs: Arc<AtomicBool>,
 }
 
@@ -27,6 +29,7 @@ impl Default for DisplayPreferences {
             show_startup_tooltips: Arc::new(AtomicBool::new(true)),
             show_raw_thinking: Arc::new(AtomicBool::new(false)),
             show_tool_results: Arc::new(AtomicBool::new(true)),
+            show_hook_output: Arc::new(AtomicBool::new(true)),
             show_patch_diffs: Arc::new(AtomicBool::new(true)),
         }
     }
@@ -44,6 +47,7 @@ impl DisplayPreferences {
             DisplayPreferenceKey::StartupTooltips => self.show_startup_tooltips(),
             DisplayPreferenceKey::RawThinking => self.show_raw_thinking(),
             DisplayPreferenceKey::ToolResults => self.show_tool_results(),
+            DisplayPreferenceKey::HookOutput => self.show_hook_output(),
             DisplayPreferenceKey::PatchDiffs => self.show_patch_diffs(),
         }
     }
@@ -58,6 +62,9 @@ impl DisplayPreferences {
             }
             DisplayPreferenceKey::ToolResults => {
                 self.show_tool_results.store(enabled, Ordering::Relaxed);
+            }
+            DisplayPreferenceKey::HookOutput => {
+                self.show_hook_output.store(enabled, Ordering::Relaxed);
             }
             DisplayPreferenceKey::PatchDiffs => {
                 self.show_patch_diffs.store(enabled, Ordering::Relaxed);
@@ -77,6 +84,10 @@ impl DisplayPreferences {
         self.show_tool_results.load(Ordering::Relaxed)
     }
 
+    pub(crate) fn show_hook_output(&self) -> bool {
+        self.show_hook_output.load(Ordering::Relaxed)
+    }
+
     pub(crate) fn show_patch_diffs(&self) -> bool {
         self.show_patch_diffs.load(Ordering::Relaxed)
     }
@@ -88,6 +99,10 @@ impl DisplayPreferences {
             .store(config.show_raw_agent_reasoning, Ordering::Relaxed);
         self.show_tool_results.store(
             config.tui_display_preferences.show_tool_results,
+            Ordering::Relaxed,
+        );
+        self.show_hook_output.store(
+            config.tui_display_preferences.show_hook_output,
             Ordering::Relaxed,
         );
         self.show_patch_diffs.store(
@@ -115,6 +130,14 @@ pub(crate) fn display_preference_edit(key: DisplayPreferenceKey, enabled: bool) 
             ],
             value: enabled.into(),
         },
+        DisplayPreferenceKey::HookOutput => ConfigEdit::SetPath {
+            segments: vec![
+                "tui".to_string(),
+                "display_preferences".to_string(),
+                "show_hook_output".to_string(),
+            ],
+            value: enabled.into(),
+        },
         DisplayPreferenceKey::PatchDiffs => ConfigEdit::SetPath {
             segments: vec![
                 "tui".to_string(),
@@ -136,6 +159,9 @@ pub(crate) fn set_display_preference_in_config(
         DisplayPreferenceKey::RawThinking => config.show_raw_agent_reasoning = enabled,
         DisplayPreferenceKey::ToolResults => {
             config.tui_display_preferences.show_tool_results = enabled;
+        }
+        DisplayPreferenceKey::HookOutput => {
+            config.tui_display_preferences.show_hook_output = enabled;
         }
         DisplayPreferenceKey::PatchDiffs => {
             config.tui_display_preferences.show_patch_diffs = enabled;
@@ -175,15 +201,19 @@ mod tests {
     async fn transcript_visibility_preferences_follow_config_and_setters() {
         let mut config = ConfigBuilder::default().build().await.expect("config");
         config.tui_display_preferences.show_tool_results = false;
+        config.tui_display_preferences.show_hook_output = false;
         config.tui_display_preferences.show_patch_diffs = false;
 
         let preferences = DisplayPreferences::from_config(&config);
         assert!(!preferences.show_tool_results());
+        assert!(!preferences.show_hook_output());
         assert!(!preferences.show_patch_diffs());
 
         preferences.set_enabled(DisplayPreferenceKey::ToolResults, /*enabled*/ true);
+        preferences.set_enabled(DisplayPreferenceKey::HookOutput, /*enabled*/ true);
         preferences.set_enabled(DisplayPreferenceKey::PatchDiffs, /*enabled*/ true);
         assert!(preferences.show_tool_results());
+        assert!(preferences.show_hook_output());
         assert!(preferences.show_patch_diffs());
 
         set_display_preference_in_config(
@@ -193,10 +223,16 @@ mod tests {
         );
         set_display_preference_in_config(
             &mut config,
+            DisplayPreferenceKey::HookOutput,
+            /*enabled*/ true,
+        );
+        set_display_preference_in_config(
+            &mut config,
             DisplayPreferenceKey::PatchDiffs,
             /*enabled*/ true,
         );
         assert!(config.tui_display_preferences.show_tool_results);
+        assert!(config.tui_display_preferences.show_hook_output);
         assert!(config.tui_display_preferences.show_patch_diffs);
     }
 
@@ -227,6 +263,21 @@ mod tests {
                         "tui".to_string(),
                         "display_preferences".to_string(),
                         "show_tool_results".to_string(),
+                    ]
+                );
+                assert_eq!(value.to_string(), "false");
+            }
+            other => panic!("unexpected config edit: {other:?}"),
+        }
+
+        match display_preference_edit(DisplayPreferenceKey::HookOutput, /*enabled*/ false) {
+            ConfigEdit::SetPath { segments, value } => {
+                assert_eq!(
+                    segments,
+                    vec![
+                        "tui".to_string(),
+                        "display_preferences".to_string(),
+                        "show_hook_output".to_string(),
                     ]
                 );
                 assert_eq!(value.to_string(), "false");

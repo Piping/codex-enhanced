@@ -627,6 +627,11 @@ pub struct TuiDisplayPreferences {
     #[serde(default = "default_true")]
     pub show_tool_results: bool,
 
+    /// Show hook lifecycle and hook output entries in the transcript.
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub show_hook_output: bool,
+
     /// Show patch/edit diff summaries in transcript cells.
     /// Defaults to `true`.
     #[serde(default = "default_true")]
@@ -637,6 +642,7 @@ impl Default for TuiDisplayPreferences {
     fn default() -> Self {
         Self {
             show_tool_results: true,
+            show_hook_output: true,
             show_patch_diffs: true,
         }
     }

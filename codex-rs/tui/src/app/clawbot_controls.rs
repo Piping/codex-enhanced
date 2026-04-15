@@ -27,6 +27,7 @@ use crate::app_event::AppEvent;
 use crate::app_event::ClawbotControlsDestination;
 use crate::app_event::ClawbotFeishuConfigField;
 use crate::app_event::ClawbotForwardingChannel;
+use crate::app_event::ClawbotSessionBindSource;
 use crate::app_event_sender::AppEventSender;
 use crate::app_server_session::AppServerSession;
 use crate::bottom_pane::SelectionAction;
@@ -270,7 +271,9 @@ impl App {
                 coordination.owner_priority = if trimmed.is_empty() {
                     FeishuCoordinationConfig::default().owner_priority
                 } else {
-                    trimmed.parse().context("coordination priority must be an integer")?
+                    trimmed
+                        .parse()
+                        .context("coordination priority must be an integer")?
                 };
             }
             ClawbotFeishuConfigField::CoordinationForceConnect => {
@@ -313,6 +316,50 @@ impl App {
         app_server: &mut AppServerSession,
         session_id: String,
     ) -> Result<()> {
+        self.bind_clawbot_session_to_current_thread_with_options(
+            app_server,
+            session_id,
+            ClawbotSessionBindSource::ManualSessionId,
+            /*preempt_ws*/ false,
+        )
+        .await
+    }
+
+    pub(crate) async fn bind_clawbot_discovered_session_to_current_thread(
+        &mut self,
+        app_server: &mut AppServerSession,
+        session_id: String,
+    ) -> Result<()> {
+        self.bind_clawbot_session_to_current_thread_with_options(
+            app_server,
+            session_id,
+            ClawbotSessionBindSource::DiscoveredSession,
+            /*preempt_ws*/ false,
+        )
+        .await
+    }
+
+    pub(crate) async fn bind_clawbot_session_to_current_thread_and_preempt(
+        &mut self,
+        app_server: &mut AppServerSession,
+        session_id: String,
+    ) -> Result<()> {
+        self.bind_clawbot_session_to_current_thread_with_options(
+            app_server,
+            session_id,
+            ClawbotSessionBindSource::DiscoveredSession,
+            /*preempt_ws*/ true,
+        )
+        .await
+    }
+
+    async fn bind_clawbot_session_to_current_thread_with_options(
+        &mut self,
+        app_server: &mut AppServerSession,
+        session_id: String,
+        source: ClawbotSessionBindSource,
+        preempt_ws: bool,
+    ) -> Result<()> {
         let thread_id = self
             .active_thread_id
             .context("no active thread available for Clawbot binding")?;
@@ -322,13 +369,20 @@ impl App {
         }
         let session = ProviderSessionRef::new(ProviderKind::Feishu, trimmed.clone());
         let mut runtime = ClawbotRuntime::load(self.config.cwd.to_path_buf())?;
-        if runtime.snapshot().config.feishu.is_some() {
-            runtime.scan_feishu_sessions().await?;
+        if source == ClawbotSessionBindSource::DiscoveredSession
+            && runtime.snapshot().config.feishu.is_some()
+        {
+            if !runtime.can_bind_feishu_session(&session)? {
+                runtime.scan_feishu_sessions().await?;
+            }
             if !runtime.can_bind_feishu_session(&session)? {
                 return Err(anyhow::anyhow!(
                     "Feishu session {trimmed} is not visible to the current bot"
                 ));
             }
+        }
+        if preempt_ws {
+            enable_clawbot_force_connect(&mut runtime)?;
         }
         runtime.connect_session_to_thread(
             &session,
@@ -340,7 +394,11 @@ impl App {
             .await?;
         self.refresh_clawbot_management_popup();
         self.chat_widget.add_info_message(
-            format!("Bound thread {thread_id} to Feishu session {trimmed}."),
+            if preempt_ws {
+                format!("Bound thread {thread_id} to Feishu session {trimmed} and enabled ws preemption.")
+            } else {
+                format!("Bound thread {thread_id} to Feishu session {trimmed}.")
+            },
             /*hint*/ None,
         );
         Ok(())
@@ -452,6 +510,29 @@ impl App {
         self.refresh_clawbot_management_popup();
         self.chat_widget.add_info_message(
             "Restarted Feishu runtime bridge.".to_string(),
+            /*hint*/ None,
+        );
+        Ok(())
+    }
+
+    pub(crate) fn toggle_clawbot_force_connect(&mut self) -> Result<()> {
+        let mut runtime = ClawbotRuntime::load(self.config.cwd.to_path_buf())?;
+        let enabled = !runtime
+            .snapshot()
+            .config
+            .feishu
+            .as_ref()
+            .and_then(|config| config.coordination.as_ref())
+            .is_some_and(|coordination| coordination.force_connect);
+        set_clawbot_force_connect(&mut runtime, enabled)?;
+        self.refresh_clawbot_provider_runtime()?;
+        self.refresh_clawbot_management_popup();
+        self.chat_widget.add_info_message(
+            if enabled {
+                "Enabled Clawbot ws preemption.".to_string()
+            } else {
+                "Disabled Clawbot ws preemption.".to_string()
+            },
             /*hint*/ None,
         );
         Ok(())
@@ -588,6 +669,9 @@ impl App {
             .collect::<Vec<_>>();
         let unbound_session_count = unbound_sessions.len();
         let has_api_credentials = feishu_config.is_some_and(FeishuConfig::has_api_credentials);
+        let can_preempt_ws = feishu_config
+            .and_then(|config| config.coordination.as_ref())
+            .is_some_and(FeishuCoordinationConfig::is_configured);
 
         let items = match destination {
             ClawbotControlsDestination::Root => vec![
@@ -708,6 +792,7 @@ impl App {
                             thread_label,
                             session.map_or_else(|| binding.session_id.clone(), session_title),
                             session.map_or(0, |session| session.unread_count),
+                            can_preempt_ws,
                         ));
                     }
                     None => items.push(info_item(
@@ -749,6 +834,7 @@ impl App {
                         items.extend(unbound_session_detail_items(
                             session,
                             active_thread_id.as_deref(),
+                            can_preempt_ws,
                         ));
                     }
                     None => items.push(info_item(
@@ -809,6 +895,7 @@ impl App {
                     dismiss_on_select: false,
                     ..Default::default()
                 },
+                clawbot_force_connect_toggle_item(feishu_config),
                 clawbot_config_item(ClawbotFeishuConfigField::AppId, feishu_config),
                 clawbot_config_item(ClawbotFeishuConfigField::AppSecret, feishu_config),
                 clawbot_config_item(ClawbotFeishuConfigField::VerificationToken, feishu_config),
@@ -833,10 +920,6 @@ impl App {
                 ),
                 clawbot_config_item(
                     ClawbotFeishuConfigField::CoordinationOwnerPriority,
-                    feishu_config,
-                ),
-                clawbot_config_item(
-                    ClawbotFeishuConfigField::CoordinationForceConnect,
                     feishu_config,
                 ),
             ],
@@ -994,6 +1077,44 @@ fn clawbot_config_item(
     }
 }
 
+fn clawbot_force_connect_toggle_item(config: Option<&FeishuConfig>) -> SelectionItem {
+    let coordination = config.and_then(|config| config.coordination.as_ref());
+    let enabled = coordination.is_some_and(|coordination| coordination.force_connect);
+    SelectionItem {
+        name: if enabled {
+            "Disable Force Connect".to_string()
+        } else {
+            "Enable Force Connect".to_string()
+        },
+        description: Some(match coordination {
+            Some(coordination) if coordination.is_configured() && enabled => {
+                "Currently enabled. This Codex session keeps preempting Feishu websocket leadership."
+                    .to_string()
+            }
+            Some(coordination) if coordination.is_configured() => {
+                "Currently disabled. Enable ws preemption for this Codex session.".to_string()
+            }
+            _ => "Configure the coordination base token before using ws preemption.".to_string(),
+        }),
+        selected_description: Some(match coordination {
+            Some(coordination) if coordination.is_configured() && enabled => {
+                "Stop refreshing this workspace as the forced Feishu websocket owner."
+                    .to_string()
+            }
+            Some(coordination) if coordination.is_configured() => {
+                "Continuously refresh this workspace as the forced Feishu websocket owner."
+                    .to_string()
+            }
+            _ => "Add [feishu.coordination].base_token before toggling ws preemption."
+                .to_string(),
+        }),
+        is_disabled: !coordination.is_some_and(FeishuCoordinationConfig::is_configured),
+        actions: vec![Box::new(|tx| tx.send(AppEvent::ToggleClawbotForceConnect))],
+        dismiss_on_select: false,
+        ..Default::default()
+    }
+}
+
 fn connection_description(state: &ProviderRuntimeState) -> String {
     let status = match state.connection {
         ConnectionStatus::Unconfigured => "Unconfigured",
@@ -1070,6 +1191,7 @@ fn bound_channel_detail_items(
     thread_label: String,
     session_title: String,
     unread_count: usize,
+    can_preempt_ws: bool,
 ) -> Vec<SelectionItem> {
     let jump_target = ThreadId::from_string(&binding.thread_id).ok();
     let toggle_inbound_enabled = !binding.inbound_forwarding_enabled;
@@ -1091,6 +1213,48 @@ fn bound_channel_detail_items(
             Some(forwarding_state_label(binding.outbound_forwarding_enabled).to_string()),
         ),
     ];
+    let rebind_to_current_thread_item = SelectionItem {
+        name: "Bind current thread + preempt ws".to_string(),
+        description: Some(match active_thread_id {
+            Some(thread_id) if thread_id == binding.thread_id => {
+                "Already bound to current thread".to_string()
+            }
+            Some(thread_id) if can_preempt_ws => format!("Move to current thread {thread_id}"),
+            Some(_) => "Coordination base token required".to_string(),
+            None => "No active thread".to_string(),
+        }),
+        selected_description: Some(match active_thread_id {
+            Some(thread_id) if thread_id == binding.thread_id => format!(
+                "Feishu session {} is already bound to current thread {thread_id}.",
+                binding.session_id
+            ),
+            Some(thread_id) if can_preempt_ws => format!(
+                "Rebind Feishu session {} to current thread {thread_id} and force this Codex session to preempt websocket ownership.",
+                binding.session_id
+            ),
+            Some(_) => {
+                "Configure Feishu coordination with a base token before using ws preemption."
+                    .to_string()
+            }
+            None => format!(
+                "Open or switch to a Codex thread before rebinding Feishu session {}.",
+                binding.session_id
+            ),
+        }),
+        is_disabled: active_thread_id.is_none()
+            || active_thread_id == Some(binding.thread_id.as_str())
+            || !can_preempt_ws,
+        actions: vec![Box::new({
+            let session_id = binding.session_id.clone();
+            move |tx| {
+                tx.send(AppEvent::BindClawbotSessionAndPreempt {
+                    session_id: session_id.clone(),
+                });
+            }
+        })],
+        dismiss_on_select: false,
+        ..Default::default()
+    };
     let jump_item = SelectionItem {
         name: "Jump to thread".to_string(),
         description: Some(if active_thread_id == Some(binding.thread_id.as_str()) {
@@ -1117,6 +1281,7 @@ fn bound_channel_detail_items(
         dismiss_on_select: false,
         ..Default::default()
     };
+    items.push(rebind_to_current_thread_item);
     items.push(jump_item);
     if let Some(thread_id) = jump_target {
         let inbound_thread_id = thread_id;
@@ -1206,8 +1371,10 @@ fn unbound_session_item(session: &ProviderSession) -> SelectionItem {
 fn unbound_session_detail_items(
     session: &ProviderSession,
     active_thread_id: Option<&str>,
+    can_preempt_ws: bool,
 ) -> Vec<SelectionItem> {
-    let session_id = session.session_id.clone();
+    let bind_session_id = session.session_id.clone();
+    let preempt_session_id = session.session_id.clone();
     vec![
         info_item("Session".to_string(), Some(session_title(session))),
         info_item("Session ID".to_string(), Some(session.session_id.clone())),
@@ -1230,14 +1397,67 @@ fn unbound_session_detail_items(
             }),
             is_disabled: active_thread_id.is_none(),
             actions: vec![Box::new(move |tx: &AppEventSender| {
-                tx.send(AppEvent::SaveClawbotManualBindSessionId {
-                    session_id: session_id.clone(),
+                tx.send(AppEvent::BindClawbotDiscoveredSession {
+                    session_id: bind_session_id.clone(),
+                });
+            })],
+            dismiss_on_select: false,
+            ..Default::default()
+        },
+        SelectionItem {
+            name: "Bind current thread + preempt ws".to_string(),
+            description: Some(match active_thread_id {
+                Some(thread_id) if can_preempt_ws => format!("Target thread {thread_id}"),
+                Some(_) => "Coordination base token required".to_string(),
+                None => "No active thread".to_string(),
+            }),
+            selected_description: Some(match active_thread_id {
+                Some(thread_id) if can_preempt_ws => format!(
+                    "Bind current thread {thread_id} to Feishu session {} and force this Codex session to preempt websocket ownership.",
+                    session.session_id
+                ),
+                Some(_) => {
+                    "Configure Feishu coordination with a base token before using ws preemption."
+                        .to_string()
+                }
+                None => format!(
+                    "Open or switch to a Codex thread before binding and preempting Feishu session {}.",
+                    session.session_id
+                ),
+            }),
+            is_disabled: active_thread_id.is_none() || !can_preempt_ws,
+            actions: vec![Box::new(move |tx: &AppEventSender| {
+                tx.send(AppEvent::BindClawbotSessionAndPreempt {
+                    session_id: preempt_session_id.clone(),
                 });
             })],
             dismiss_on_select: false,
             ..Default::default()
         },
     ]
+}
+
+fn enable_clawbot_force_connect(runtime: &mut ClawbotRuntime) -> Result<()> {
+    set_clawbot_force_connect(runtime, /*enabled*/ true)
+}
+
+fn set_clawbot_force_connect(runtime: &mut ClawbotRuntime, enabled: bool) -> Result<()> {
+    let mut config = runtime
+        .snapshot()
+        .config
+        .feishu
+        .clone()
+        .context("Feishu credentials are not configured")?;
+    let mut coordination = config.coordination.unwrap_or_default();
+    if !coordination.is_configured() {
+        return Err(anyhow::anyhow!(
+            "Feishu coordination base token is required to preempt websocket ownership"
+        ));
+    }
+    coordination.force_connect = enabled;
+    config.coordination = Some(coordination);
+    runtime.update_feishu_config(Some(config))?;
+    Ok(())
 }
 
 fn forwarding_state_label(enabled: bool) -> &'static str {

@@ -4195,7 +4195,19 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    fn on_background_event(&mut self, message: String) {
+        debug!("BackgroundEvent: {message}");
+        self.bottom_pane.ensure_status_indicator();
+        self.bottom_pane
+            .set_interrupt_hint_visible(/*visible*/ true);
+        self.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
+        self.set_status_header(message);
+    }
+
     fn on_hook_started(&mut self, run: codex_app_server_protocol::HookRunSummary) {
+        if !self.display_preferences.show_hook_output() {
+            return;
+        }
         self.flush_answer_stream_with_separator();
         self.flush_completed_hook_output();
         match self.active_hook_cell.as_mut() {
@@ -4215,6 +4227,9 @@ impl ChatWidget {
     }
 
     fn on_hook_completed(&mut self, completed: codex_app_server_protocol::HookRunSummary) {
+        if !self.display_preferences.show_hook_output() {
+            return;
+        }
         let completed_existing_run = self
             .active_hook_cell
             .as_mut()
@@ -7664,8 +7679,8 @@ impl ChatWidget {
             | EventMsg::DynamicToolCallRequest(_)
             | EventMsg::DynamicToolCallResponse(_)
             | EventMsg::RealtimeConversationListVoicesResponse(_) => {}
-            EventMsg::HookStarted(event) => self.on_hook_started(event),
-            EventMsg::HookCompleted(event) => self.on_hook_completed(event),
+            EventMsg::HookStarted(event) => self.on_hook_started(event.run),
+            EventMsg::HookCompleted(event) => self.on_hook_completed(event.run),
             EventMsg::RealtimeConversationStarted(ev) => {
                 if !from_replay {
                     self.on_realtime_conversation_started(ev);
