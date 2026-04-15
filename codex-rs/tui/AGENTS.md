@@ -34,3 +34,4 @@ See `styles.md` for the broader TUI style conventions.
   updating the relevant `insta` snapshot tests.
 - Generating, reviewing, and accepting snapshot updates belongs in the release or tag flow unless
   the user explicitly asks to do it during local iteration.
+- For TUI PTY validation in this repo, prefer running with `-p newapi` so startup is not blocked by onboarding or auth flows.

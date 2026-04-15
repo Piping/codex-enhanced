@@ -236,6 +236,9 @@ impl CodexErr {
             CodexErr::ResponseStreamFailed(_) => CodexErrorInfo::ResponseStreamConnectionFailed {
                 http_status_code: self.http_status_code_value(),
             },
+            CodexErr::Stream(_, _) => CodexErrorInfo::ResponseStreamDisconnected {
+                http_status_code: self.http_status_code_value(),
+            },
             CodexErr::RefreshTokenFailed(_) => CodexErrorInfo::Unauthorized,
             CodexErr::SessionConfiguredNotFirstEvent
             | CodexErr::InternalServerError

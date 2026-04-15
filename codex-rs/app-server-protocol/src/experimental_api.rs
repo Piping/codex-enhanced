@@ -19,11 +19,28 @@ pub struct ExperimentalField {
     pub reason: &'static str,
 }
 
-inventory::collect!(ExperimentalField);
+const REGISTERED_EXPERIMENTAL_FIELD_GROUPS: &[&[ExperimentalField]] = &[
+    crate::protocol::v2::ProfileV2::EXPERIMENTAL_FIELDS,
+    crate::protocol::v2::Config::EXPERIMENTAL_FIELDS,
+    crate::protocol::v2::ConfigReadResponse::EXPERIMENTAL_FIELDS,
+    crate::protocol::v2::ConfigRequirements::EXPERIMENTAL_FIELDS,
+    crate::protocol::v2::ConfigRequirementsReadResponse::EXPERIMENTAL_FIELDS,
+    crate::protocol::v2::LoginAccountParams::EXPERIMENTAL_FIELDS,
+    crate::protocol::v2::ThreadStartParams::EXPERIMENTAL_FIELDS,
+    crate::protocol::v2::ThreadStartResponse::EXPERIMENTAL_FIELDS,
+    crate::protocol::v2::ThreadResumeParams::EXPERIMENTAL_FIELDS,
+    crate::protocol::v2::ThreadResumeResponse::EXPERIMENTAL_FIELDS,
+    crate::protocol::v2::ThreadForkParams::EXPERIMENTAL_FIELDS,
+    crate::protocol::v2::ThreadForkResponse::EXPERIMENTAL_FIELDS,
+    crate::protocol::v2::CommandExecutionRequestApprovalParams::EXPERIMENTAL_FIELDS,
+];
 
 /// Returns all experimental fields registered across the protocol types.
 pub fn experimental_fields() -> Vec<&'static ExperimentalField> {
-    inventory::iter::<ExperimentalField>.into_iter().collect()
+    REGISTERED_EXPERIMENTAL_FIELD_GROUPS
+        .iter()
+        .flat_map(|fields| fields.iter())
+        .collect()
 }
 
 /// Constructs a consistent error message for experimental gating.

@@ -8,3 +8,13 @@
   - `codex-rs/app-server-protocol/AGENTS.md`
   - deeper directory-specific `AGENTS.md` files such as `codex-rs/tui/src/bottom_pane/AGENTS.md`
 - When multiple `AGENTS.md` files apply, use the closest one for the directory you are editing.
+
+<!-- codex:dream:start -->
+## Dream Guidance
+
+## Dream Guidance
+
+### Paper artifact location
+- When a session in this repo downloads or organizes papers, store them under `~/Documents/logseq/source/papers/` by default unless the user asks for a different destination.
+- Treat this as the default landing path for local paper PDFs and related notes, rather than ad-hoc temp locations.
+<!-- codex:dream:end -->

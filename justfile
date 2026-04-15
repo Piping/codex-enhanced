@@ -24,8 +24,11 @@ file-search *args:
     cargo run --bin codex-file-search -- "$@"
 
 # Build the CLI and run the app-server test client
+build-codex-cli *args:
+    ./scripts/build_codex_cli.sh "$@"
+
 app-server-test-client *args:
-    cargo build -p codex-cli
+    ./scripts/build_codex_cli.sh
     cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex "$@"
 
 # format code

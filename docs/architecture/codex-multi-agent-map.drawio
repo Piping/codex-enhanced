@@ -1,0 +1,579 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/29.6.6 Chrome/144.0.7559.236 Electron/40.8.4 Safari/537.36" version="29.6.6" pages="4">
+  <diagram id="system-map" name="System Map">
+    <mxGraphModel grid="1" page="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="5KzbJF-vTB_ej1Avj3Tm-35" parent="0" value="未命名图层" />
+        <mxCell id="2" parent="5KzbJF-vTB_ej1Avj3Tm-35" style="text;html=1;strokeColor=none;fillColor=none;gradientColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=20;" value="Codex Enhanced runtime map&#xa;Focus: protocol, core, multi-agent, multi-thread data paths" vertex="1">
+          <mxGeometry height="40" width="620" x="20" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="3" parent="5KzbJF-vTB_ej1Avj3Tm-35" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" value="User / operator&#xa;terminal + keyboard + slash commands" vertex="1">
+          <mxGeometry height="80" width="170" x="30" y="120" as="geometry" />
+        </mxCell>
+        <mxCell id="4" parent="5KzbJF-vTB_ej1Avj3Tm-35" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" value="TUI layer&#xa;codex-rs/tui/src/app.rs&#xa;ChatWidget&#xa;ThreadEventChannel / ThreadEventStore&#xa;AgentNavigationState" vertex="1">
+          <mxGeometry height="140" width="250" x="270" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="5" parent="5KzbJF-vTB_ej1Avj3Tm-35" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" value="AppServerSession / client bridge&#xa;tui/app_server_session.rs&#xa;in-process or remote app-server session" vertex="1">
+          <mxGeometry height="110" width="220" x="720" y="105" as="geometry" />
+        </mxCell>
+        <mxCell id="6" parent="5KzbJF-vTB_ej1Avj3Tm-35" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="app-server protocol surface&#xa;app-server-protocol&#xa;ClientRequest / ServerRequest / ServerNotification&#xa;Thread / Turn / Item JSON-RPC schema" vertex="1">
+          <mxGeometry height="150" width="270" x="1140" y="95" as="geometry" />
+        </mxCell>
+        <mxCell id="7" parent="5KzbJF-vTB_ej1Avj3Tm-35" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="app-server orchestration&#xa;message_processor.rs&#xa;codex_message_processor.rs&#xa;thread_state_manager / thread_watch_manager&#xa;bespoke_event_handling.rs" vertex="1">
+          <mxGeometry height="150" width="280" x="1640" y="95" as="geometry" />
+        </mxCell>
+        <mxCell id="8" parent="5KzbJF-vTB_ej1Avj3Tm-35" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="core live thread fabric&#xa;ThreadManagerState.threads&#xa;CodexThread -&gt; Codex -&gt; Session / Turn loop&#xa;Op::* submission + EventMsg stream" vertex="1">
+          <mxGeometry height="150" width="310" x="500" y="320" as="geometry" />
+        </mxCell>
+        <mxCell id="9" parent="5KzbJF-vTB_ej1Avj3Tm-35" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="multi-agent control plane&#xa;tools/handlers/multi_agents(_v2)&#xa;AgentControl&#xa;AgentRegistry (root-scoped)&#xa;spawn / send_input / wait / close / resume" vertex="1">
+          <mxGeometry height="150" width="300" x="860" y="320" as="geometry" />
+        </mxCell>
+        <mxCell id="10" parent="5KzbJF-vTB_ej1Avj3Tm-35" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="persisted state&#xa;rollout JSONL session history&#xa;state_db thread_spawn_edge(Open/Closed)&#xa;config / project trust / workflow files" vertex="1">
+          <mxGeometry height="140" width="250" x="1390" y="430" as="geometry" />
+        </mxCell>
+        <mxCell id="11" parent="5KzbJF-vTB_ej1Avj3Tm-35" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="external boundaries&#xa;Responses API / model provider&#xa;shell / file edits / approvals&#xa;MCP / plugins / auth / filesystem" vertex="1">
+          <mxGeometry height="130" width="250" x="20" y="260" as="geometry" />
+        </mxCell>
+        <mxCell id="12" parent="5KzbJF-vTB_ej1Avj3Tm-35" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" value="subagent tree recovery&#xa;tui/app/loaded_threads.rs&#xa;thread/loaded/list + SessionSource::SubAgent(ThreadSpawn) BFS" vertex="1">
+          <mxGeometry height="100" width="300" x="230" y="530" as="geometry" />
+        </mxCell>
+        <mxCell id="13" parent="5KzbJF-vTB_ej1Avj3Tm-35" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" value="Key ownership rules&#xa;1. live thread objects live in ThreadManagerState&#xa;2. agent nickname/path/slot metadata live in AgentRegistry&#xa;3. thread lineage survives restart via state_db spawn edges&#xa;4. TUI routes all thread-scoped traffic by ThreadId" vertex="1">
+          <mxGeometry height="110" width="520" x="660" y="530" as="geometry" />
+        </mxCell>
+        <mxCell id="20" edge="1" parent="5KzbJF-vTB_ej1Avj3Tm-35" source="3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="4" value="submit intent">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="21" edge="1" parent="5KzbJF-vTB_ej1Avj3Tm-35" source="4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="5" value="AppEvent / request">
+          <mxGeometry relative="1" x="-0.2837" y="-50" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="22" edge="1" parent="5KzbJF-vTB_ej1Avj3Tm-35" source="5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="6" value="JSON-RPC v2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="23" edge="1" parent="5KzbJF-vTB_ej1Avj3Tm-35" source="6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="7" value="typed request dispatch">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="24" edge="1" parent="5KzbJF-vTB_ej1Avj3Tm-35" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" value="thread/start, turn/start&#xa;-&gt; Op::OverrideTurnContext / Op::UserInput">
+          <mxGeometry relative="1" x="-1" as="geometry">
+            <mxPoint x="1435" y="280.0000000000001" as="sourcePoint" />
+            <mxPoint x="660" y="435" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="25" edge="1" parent="5KzbJF-vTB_ej1Avj3Tm-35" source="8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="9" value="tool handlers call AgentControl">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="26" edge="1" parent="5KzbJF-vTB_ej1Avj3Tm-35" source="9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="8" value="spawn child thread&#xa;send_op / subscribe_status">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="27" edge="1" parent="5KzbJF-vTB_ej1Avj3Tm-35" source="8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="10" value="persist history + lineage">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="28" edge="1" parent="5KzbJF-vTB_ej1Avj3Tm-35" source="9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="10" value="upsert_thread_spawn_edge(Open/Closed)">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="29" edge="1" parent="5KzbJF-vTB_ej1Avj3Tm-35" source="8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="11" value="Responses + tools">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="30" edge="1" parent="5KzbJF-vTB_ej1Avj3Tm-35" source="8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="7" value="EventMsg stream">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="31" edge="1" parent="5KzbJF-vTB_ej1Avj3Tm-35" source="7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="6" value="ServerNotification / ServerRequest">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="32" edge="1" parent="5KzbJF-vTB_ej1Avj3Tm-35" source="6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="5" value="thread-scoped events">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="33" edge="1" parent="5KzbJF-vTB_ej1Avj3Tm-35" source="5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="4" value="app_server_adapter routes by ThreadId">
+          <mxGeometry relative="1" x="0.2" y="30" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="34" edge="1" parent="5KzbJF-vTB_ej1Avj3Tm-35" source="12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;exitX=0.5;exitY=0;exitDx=0;exitDy=0;" target="4" value="rebuild child list on resume / switch">
+          <mxGeometry relative="1" x="-1" as="geometry">
+            <Array as="points">
+              <mxPoint x="370" y="430" />
+              <mxPoint x="395" y="430" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="35" edge="1" parent="5KzbJF-vTB_ej1Avj3Tm-35" source="12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="6" value="thread/loaded/list + thread/read">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="sequence-flow" name="Spawn-Message-Wait Flow">
+    <mxGraphModel dx="2037" dy="1139" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" style="locked=0;" value="Main" />
+        <mxCell id="SWHheLootIeEi3qsSYIu-167" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" value="TUI / operator" vertex="1">
+          <mxGeometry height="56" width="180" x="40" y="1097" as="geometry" />
+        </mxCell>
+        <mxCell id="SWHheLootIeEi3qsSYIu-168" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="AppServerSession&lt;br&gt;&amp;nbsp;app-server-protocol&lt;br&gt;codex_message_processor" vertex="1">
+          <mxGeometry height="56" width="180" x="270" y="1097" as="geometry" />
+        </mxCell>
+        <mxCell id="SWHheLootIeEi3qsSYIu-169" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" value="Event bridge listener + bespoke_event_handling + app_server_adapter" vertex="1">
+          <mxGeometry height="70" width="180" x="1450" y="1097" as="geometry" />
+        </mxCell>
+        <mxCell id="SWHheLootIeEi3qsSYIu-170" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="Parent CodexThread&lt;br&gt;multi_agents handler" vertex="1">
+          <mxGeometry height="56" width="190" x="600" y="1097" as="geometry" />
+        </mxCell>
+        <mxCell id="SWHheLootIeEi3qsSYIu-171" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="AgentControl&lt;br&gt;ThreadManager&lt;br&gt;&amp;nbsp; AgentRegistry" vertex="1">
+          <mxGeometry height="56" width="220" x="880" y="1097" as="geometry" />
+        </mxCell>
+        <mxCell id="SWHheLootIeEi3qsSYIu-172" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="Child CodexThread" vertex="1">
+          <mxGeometry height="56" width="190" x="1180" y="1097" as="geometry" />
+        </mxCell>
+        <mxCell id="E8VEQDsVTNWo-Smn1ndB-197" parent="0" style="locked=0;" value="ALL" />
+        <mxCell id="E8VEQDsVTNWo-Smn1ndB-196" parent="0" style="locked=0;" value="Edge" />
+        <mxCell id="E8VEQDsVTNWo-Smn1ndB-199" parent="0" value="背景" />
+        <mxCell id="102" parent="E8VEQDsVTNWo-Smn1ndB-199" style="rounded=0;whiteSpace=wrap;html=1;dashed=1;movable=1;resizable=1;rotatable=1;deletable=1;editable=1;locked=0;connectable=1;labelBackgroundColor=none;fillColor=#b0e3e6;strokeColor=#0e8088;" value="" vertex="1">
+          <mxGeometry height="410" width="1680" x="20" y="180" as="geometry" />
+        </mxCell>
+        <mxCell id="100" parent="E8VEQDsVTNWo-Smn1ndB-199" style="text;html=1;strokeColor=none;fillColor=none;gradientColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=20;" value="Spawn-Message-Wait sequence: parent thread spawns a subagent, streams child work, then waits on status" vertex="1">
+          <mxGeometry height="40" width="1180" x="20" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="104" parent="E8VEQDsVTNWo-Smn1ndB-199" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;dashed=1;movable=1;resizable=1;rotatable=1;deletable=1;editable=1;locked=0;connectable=1;" value="" vertex="1">
+          <mxGeometry height="120" width="1680" x="20" y="610" as="geometry" />
+        </mxCell>
+        <mxCell id="101" parent="E8VEQDsVTNWo-Smn1ndB-199" style="text;html=1;strokeColor=none;fillColor=none;gradientColor=none;align=left;verticalAlign=top;fontSize=12;" value="Verified path: turn/start -&gt; Op::UserInput -&gt; spawn_agent -&gt; child EventMsg stream -&gt; send_input / wait_agent -&gt; AgentStatus" vertex="1">
+          <mxGeometry height="30" width="1250" x="20" y="55" as="geometry" />
+        </mxCell>
+        <mxCell id="103" parent="E8VEQDsVTNWo-Smn1ndB-199" style="text;html=1;strokeColor=none;fillColor=none;gradientColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;" value="Spawn phase" vertex="1">
+          <mxGeometry height="25" width="120" x="30" y="190" as="geometry" />
+        </mxCell>
+        <mxCell id="106" parent="E8VEQDsVTNWo-Smn1ndB-199" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;dashed=1;movable=1;resizable=1;rotatable=1;deletable=1;editable=1;locked=0;connectable=1;shadow=0;glass=0;" value="" vertex="1">
+          <mxGeometry height="340" width="1680" x="20" y="750" as="geometry" />
+        </mxCell>
+        <mxCell id="120" parent="E8VEQDsVTNWo-Smn1ndB-199" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" value="TUI / operator" vertex="1">
+          <mxGeometry height="56" width="180" x="40" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="121" parent="E8VEQDsVTNWo-Smn1ndB-199" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="AppServerSession&lt;br&gt;&amp;nbsp;app-server-protocol&lt;br&gt;codex_message_processor" vertex="1">
+          <mxGeometry height="56" width="180" x="270" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="126" parent="E8VEQDsVTNWo-Smn1ndB-199" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" value="Event bridge listener + bespoke_event_handling + app_server_adapter" vertex="1">
+          <mxGeometry height="70" width="180" x="1450" y="93" as="geometry" />
+        </mxCell>
+        <mxCell id="130" parent="E8VEQDsVTNWo-Smn1ndB-199" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#999999;dashed=1;" value="" vertex="1">
+          <mxGeometry height="935" width="2" x="129" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="131" parent="E8VEQDsVTNWo-Smn1ndB-199" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#999999;dashed=1;" value="" vertex="1">
+          <mxGeometry height="935" width="2" x="320" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="136" parent="E8VEQDsVTNWo-Smn1ndB-199" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#999999;dashed=1;" value="" vertex="1">
+          <mxGeometry height="935" width="2" x="1539" y="163" as="geometry" />
+        </mxCell>
+        <mxCell id="143" parent="E8VEQDsVTNWo-Smn1ndB-199" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" value="" vertex="1">
+          <mxGeometry height="880" width="14" x="1532" y="190" as="geometry" />
+        </mxCell>
+        <mxCell id="145" parent="E8VEQDsVTNWo-Smn1ndB-199" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;shadow=0;sketch=1;curveFitting=1;jiggle=2;glass=0;align=left;spacingLeft=10;" value="TUI invariant&#xa;Notifications are routed by ThreadId.&#xa;Parent collab items stay on the primary thread; child transcript and child status stay on child thread_id." vertex="1">
+          <mxGeometry height="80" width="449" x="170" y="430" as="geometry" />
+        </mxCell>
+        <mxCell id="TXqEshlWBtNYA023o0Pp-175" parent="E8VEQDsVTNWo-Smn1ndB-199" style="text;html=1;strokeColor=none;fillColor=none;gradientColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;" value="wait_agent phase" vertex="1">
+          <mxGeometry height="25" width="160" x="1580" y="750" as="geometry" />
+        </mxCell>
+        <mxCell id="TXqEshlWBtNYA023o0Pp-176" parent="E8VEQDsVTNWo-Smn1ndB-199" style="text;html=1;strokeColor=none;fillColor=none;gradientColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;" value="Later send_input &lt;br&gt;/&amp;nbsp;interrupt" vertex="1">
+          <mxGeometry height="25" width="220" x="1580" y="610" as="geometry" />
+        </mxCell>
+        <mxCell id="E8VEQDsVTNWo-Smn1ndB-170" parent="E8VEQDsVTNWo-Smn1ndB-199" style="text;html=1;strokeColor=none;fillColor=none;gradientColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;" value="Spawn phase" vertex="1">
+          <mxGeometry height="25" width="120" x="1580" y="190" as="geometry" />
+        </mxCell>
+        <mxCell id="E8VEQDsVTNWo-Smn1ndB-180" parent="E8VEQDsVTNWo-Smn1ndB-199" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#999999;dashed=1;" value="" vertex="1">
+          <mxGeometry height="935" width="2" x="415" y="157" as="geometry" />
+        </mxCell>
+        <mxCell id="105" parent="E8VEQDsVTNWo-Smn1ndB-199" style="text;html=1;strokeColor=none;fillColor=none;gradientColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;" value="Later send_input / interrupt" vertex="1">
+          <mxGeometry height="25" width="220" x="35" y="620" as="geometry" />
+        </mxCell>
+        <mxCell id="107" parent="E8VEQDsVTNWo-Smn1ndB-199" style="text;html=1;strokeColor=none;fillColor=none;gradientColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=14;" value="wait_agent phase" vertex="1">
+          <mxGeometry height="25" width="160" x="35" y="760" as="geometry" />
+        </mxCell>
+        <mxCell id="E8VEQDsVTNWo-Smn1ndB-169" connectable="0" parent="E8VEQDsVTNWo-Smn1ndB-199" style="group;spacingLeft=10;align=left;" value="" vertex="1">
+          <mxGeometry height="650" width="835" x="695" y="370" as="geometry" />
+        </mxCell>
+        <mxCell id="E8VEQDsVTNWo-Smn1ndB-195" connectable="0" parent="E8VEQDsVTNWo-Smn1ndB-199" style="group" value="" vertex="1">
+          <mxGeometry height="836.1800000000001" width="1396" x="131" y="213.82" as="geometry" />
+        </mxCell>
+        <mxCell id="146" parent="E8VEQDsVTNWo-Smn1ndB-199" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#b0e3e6;sketch=1;curveFitting=1;jiggle=2;shadow=0;labelBackgroundColor=none;strokeColor=#0e8088;align=left;spacingLeft=10;" value="wait_agent does not scan transcript.&#xa;It subscribes to child status, then wakes on final AgentStatus or timeout." vertex="1">
+          <mxGeometry height="74" width="420" x="250" y="920" as="geometry" />
+        </mxCell>
+        <mxCell id="150" edge="1" parent="E8VEQDsVTNWo-Smn1ndB-199" style="edgeStyle=elbowEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;labelBackgroundColor=none;spacingBottom=30;jumpStyle=arc;spacingLeft=10;spacingRight=0;align=left;flowAnimation=1;elbow=vertical;" value="1. turn/start(thread_id, input)">
+          <mxGeometry relative="1" x="-1" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="131" y="213.82" as="sourcePoint" />
+            <mxPoint x="320" y="214" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="151" edge="1" parent="E8VEQDsVTNWo-Smn1ndB-199" style="rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;labelBackgroundColor=none;spacingBottom=30;jumpStyle=arc;spacingLeft=10;spacingRight=0;align=left;elbow=vertical;flowAnimation=1;edgeStyle=elbowEdgeStyle;" value="2. ClientRequest::TurnStart -&amp;gt; codex_message_processor">
+          <mxGeometry relative="1" x="-1" y="1" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="323" y="261" as="sourcePoint" />
+            <mxPoint x="410" y="260" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="152" edge="1" parent="E8VEQDsVTNWo-Smn1ndB-199" style="edgeStyle=elbowEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;labelBackgroundColor=none;spacingBottom=30;jumpStyle=arc;spacingLeft=10;spacingRight=0;align=left;flowAnimation=1;elbow=vertical;" value="3. Op::OverrideTurnContext? + Op::UserInput">
+          <mxGeometry relative="1" x="-1" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="420" y="340" as="sourcePoint" />
+            <mxPoint x="687" y="340" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="167" edge="1" parent="E8VEQDsVTNWo-Smn1ndB-199" style="edgeStyle=elbowEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;labelBackgroundColor=none;spacingBottom=0;jumpStyle=arc;spacingLeft=0;spacingRight=10;align=right;spacingTop=30;flowAnimation=1;elbow=vertical;" value="18. parent status UI update on primary thread">
+          <mxGeometry relative="1" x="-0.9995" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="1530" y="1050" as="sourcePoint" />
+            <mxPoint x="133" y="1049.62" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TXqEshlWBtNYA023o0Pp-174" edge="1" parent="E8VEQDsVTNWo-Smn1ndB-199" style="endArrow=block;html=1;rounded=0;spacingLeft=-20;spacingRight=0;align=right;spacingBottom=0;flowAnimation=1;edgeStyle=elbowEdgeStyle;elbow=vertical;endFill=1;strokeColor=#535353;jumpStyle=arc;labelBackgroundColor=none;spacingTop=30;" value="9. UI Cell Inserted into TUI">
+          <mxGeometry height="50" relative="1" width="50" x="-1" y="-1" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="1530" y="651" as="sourcePoint" />
+            <mxPoint x="133" y="650" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="E8VEQDsVTNWo-Smn1ndB-168" parent="0" style="locked=0;" value="Thread&amp;Agent" />
+        <mxCell id="E8VEQDsVTNWo-Smn1ndB-177" connectable="0" parent="E8VEQDsVTNWo-Smn1ndB-168" style="group;sketch=1;curveFitting=1;jiggle=2;rounded=1;" value="" vertex="1">
+          <mxGeometry height="966" width="770" x="600" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="E8VEQDsVTNWo-Smn1ndB-173" parent="E8VEQDsVTNWo-Smn1ndB-177" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="" vertex="1">
+          <mxGeometry height="270" width="14" x="88" y="660" as="geometry" />
+        </mxCell>
+        <mxCell id="133" parent="E8VEQDsVTNWo-Smn1ndB-177" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#999999;dashed=1;" value="" vertex="1">
+          <mxGeometry height="935" width="2" x="94" y="56" as="geometry" />
+        </mxCell>
+        <mxCell id="E8VEQDsVTNWo-Smn1ndB-175" parent="E8VEQDsVTNWo-Smn1ndB-177" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="" vertex="1">
+          <mxGeometry height="35" width="14" x="88" y="580" as="geometry" />
+        </mxCell>
+        <mxCell id="123" parent="E8VEQDsVTNWo-Smn1ndB-177" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="Parent CodexThread&lt;br&gt;multi_agents handler" vertex="1">
+          <mxGeometry height="56" width="190" as="geometry" />
+        </mxCell>
+        <mxCell id="124" parent="E8VEQDsVTNWo-Smn1ndB-177" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="AgentControl&lt;br&gt;ThreadManager&lt;br&gt;&amp;nbsp; AgentRegistry" vertex="1">
+          <mxGeometry height="56" width="220" x="280" as="geometry" />
+        </mxCell>
+        <mxCell id="125" parent="E8VEQDsVTNWo-Smn1ndB-177" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="Child CodexThread" vertex="1">
+          <mxGeometry height="56" width="190" x="580" as="geometry" />
+        </mxCell>
+        <mxCell id="134" parent="E8VEQDsVTNWo-Smn1ndB-177" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#999999;dashed=1;" value="" vertex="1">
+          <mxGeometry height="935" width="2" x="389" y="56" as="geometry" />
+        </mxCell>
+        <mxCell id="135" parent="E8VEQDsVTNWo-Smn1ndB-177" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#999999;dashed=1;" value="" vertex="1">
+          <mxGeometry height="935" width="2" x="674" y="56" as="geometry" />
+        </mxCell>
+        <mxCell id="140" parent="E8VEQDsVTNWo-Smn1ndB-177" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="" vertex="1">
+          <mxGeometry height="270" width="14" x="90" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="141" parent="E8VEQDsVTNWo-Smn1ndB-177" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="" vertex="1">
+          <mxGeometry height="200" width="14" x="382" y="290" as="geometry" />
+        </mxCell>
+        <mxCell id="142" parent="E8VEQDsVTNWo-Smn1ndB-177" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="" vertex="1">
+          <mxGeometry height="130" width="14" x="667" y="400" as="geometry" />
+        </mxCell>
+        <mxCell id="144" parent="E8VEQDsVTNWo-Smn1ndB-177" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;sketch=1;curveFitting=1;jiggle=2;" value="Internal control-plane mutation&#xa;reserve nickname / slot&#xa;SessionSource::SubAgent(ThreadSpawn)&#xa;upsert_thread_spawn_edge(Open)" vertex="1">
+          <mxGeometry height="88" width="260" x="406" y="290" as="geometry" />
+        </mxCell>
+        <mxCell id="TXqEshlWBtNYA023o0Pp-178" parent="E8VEQDsVTNWo-Smn1ndB-177" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="" vertex="1">
+          <mxGeometry height="70" width="14" x="382" y="670" as="geometry" />
+        </mxCell>
+        <mxCell id="TXqEshlWBtNYA023o0Pp-179" parent="E8VEQDsVTNWo-Smn1ndB-177" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="" vertex="1">
+          <mxGeometry height="108" width="14" x="383" y="782" as="geometry" />
+        </mxCell>
+        <mxCell id="SWHheLootIeEi3qsSYIu-173" parent="E8VEQDsVTNWo-Smn1ndB-177" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="" vertex="1">
+          <mxGeometry height="110" width="14" x="670" y="790" as="geometry" />
+        </mxCell>
+        <object label="4. EventMsg::CollabAgentSpawnBegin(parent_thread_id)" width="100" id="153">
+          <mxCell edge="1" parent="E8VEQDsVTNWo-Smn1ndB-177" style="edgeStyle=elbowEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;labelBackgroundColor=none;spacingBottom=30;jumpStyle=arc;spacingLeft=10;spacingRight=0;align=left;flowAnimation=1;elbow=vertical;arcSize=20;">
+            <mxGeometry relative="1" x="-1" as="geometry">
+              <mxPoint as="offset" />
+              <mxPoint x="105" y="260.43" as="sourcePoint" />
+              <mxPoint x="930" y="260.43" as="targetPoint" />
+            </mxGeometry>
+          </mxCell>
+        </object>
+        <mxCell id="E8VEQDsVTNWo-Smn1ndB-178" parent="E8VEQDsVTNWo-Smn1ndB-168" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="" vertex="1">
+          <mxGeometry height="90" width="14" x="1270" y="760" as="geometry" />
+        </mxCell>
+        <mxCell id="154" edge="1" parent="E8VEQDsVTNWo-Smn1ndB-168" style="edgeStyle=elbowEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;labelBackgroundColor=none;spacingBottom=30;jumpStyle=arc;spacingLeft=10;spacingRight=0;align=left;flowAnimation=1;elbow=vertical;" value="5. spawn_agent(...)">
+          <mxGeometry relative="1" x="-1" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="705" y="410" as="sourcePoint" />
+            <mxPoint x="983" y="410" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="155" edge="1" parent="E8VEQDsVTNWo-Smn1ndB-168" style="edgeStyle=elbowEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;labelBackgroundColor=none;spacingBottom=30;jumpStyle=arc;spacingLeft=10;spacingRight=0;align=left;flowAnimation=1;elbow=vertical;" value="6. spawn_new_thread_with_source(...)">
+          <mxGeometry relative="1" x="-1" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="1000" y="540" as="sourcePoint" />
+            <mxPoint x="1265" y="540" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="156" edge="1" parent="E8VEQDsVTNWo-Smn1ndB-168" style="edgeStyle=elbowEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;labelBackgroundColor=none;spacingBottom=30;jumpStyle=arc;spacingLeft=10;spacingRight=0;align=left;flowAnimation=1;elbow=vertical;" value="7. send_input(initial Op)">
+          <mxGeometry relative="1" x="-1" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="1000" y="575" as="sourcePoint" />
+            <mxPoint x="1265" y="575" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="160" edge="1" parent="E8VEQDsVTNWo-Smn1ndB-168" style="edgeStyle=elbowEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;labelBackgroundColor=none;spacingBottom=30;jumpStyle=arc;spacingLeft=10;spacingRight=0;align=left;flowAnimation=1;elbow=vertical;" value="11. send_input(agent_id, message) / interrupt_agent()">
+          <mxGeometry relative="1" x="-1" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="705" y="800" as="sourcePoint" />
+            <mxPoint x="980" y="800" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="161" edge="1" parent="E8VEQDsVTNWo-Smn1ndB-168" style="edgeStyle=elbowEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;labelBackgroundColor=none;spacingBottom=30;jumpStyle=arc;spacingLeft=10;spacingRight=0;align=left;flowAnimation=1;elbow=vertical;" value="12. Op::InterAgentCommunication or interrupt">
+          <mxGeometry relative="1" x="-1" as="geometry">
+            <mxPoint x="1000" y="835" as="sourcePoint" />
+            <mxPoint x="1265" y="835" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="163" edge="1" parent="E8VEQDsVTNWo-Smn1ndB-168" style="edgeStyle=elbowEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;labelBackgroundColor=none;spacingBottom=30;jumpStyle=arc;spacingLeft=10;spacingRight=0;align=left;flowAnimation=1;elbow=vertical;" value="14. wait_agent(agent_id)">
+          <mxGeometry relative="1" x="-1" as="geometry">
+            <mxPoint x="705" y="915" as="sourcePoint" />
+            <mxPoint x="980" y="915" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="164" edge="1" parent="E8VEQDsVTNWo-Smn1ndB-168" style="edgeStyle=elbowEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;labelBackgroundColor=none;spacingBottom=30;jumpStyle=arc;spacingLeft=10;spacingRight=0;align=left;flowAnimation=1;elbow=vertical;" value="15. subscribe_status()">
+          <mxGeometry relative="1" x="-1" as="geometry">
+            <mxPoint x="1" as="offset" />
+            <mxPoint x="1000" y="953" as="sourcePoint" />
+            <mxPoint x="1265" y="950" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="165" edge="1" parent="E8VEQDsVTNWo-Smn1ndB-168" style="edgeStyle=elbowEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;endArrow=block;endFill=0;strokeColor=#666666;labelBackgroundColor=none;spacingBottom=0;jumpStyle=arc;spacingLeft=0;spacingRight=10;align=right;spacingTop=30;flowAnimation=1;elbow=vertical;" value="16. AgentStatus::Completed | Interrupted | Errored">
+          <mxGeometry relative="1" x="-1" y="-5" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="1266" y="976" as="sourcePoint" />
+            <mxPoint x="1000" y="976" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="159" edge="1" parent="E8VEQDsVTNWo-Smn1ndB-168" style="edgeStyle=elbowEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;labelBackgroundColor=#FFFFFF00;spacingBottom=30;jumpStyle=arc;align=left;labelPosition=center;verticalLabelPosition=middle;verticalAlign=middle;horizontal=1;spacingLeft=10;spacingRight=0;flowAnimation=1;elbow=vertical;" value="10. EventMsg::CollabAgentInteractionBegin(parent_thread_id)">
+          <mxGeometry relative="1" x="-1" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="704" y="700" as="sourcePoint" />
+            <mxPoint x="1530" y="700" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="162" edge="1" parent="E8VEQDsVTNWo-Smn1ndB-168" style="edgeStyle=elbowEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;labelBackgroundColor=none;spacingBottom=30;jumpStyle=arc;spacingLeft=10;spacingRight=0;align=left;flowAnimation=1;elbow=vertical;" value="13. EventMsg::CollabWaitingBegin(parent_thread_id)">
+          <mxGeometry relative="1" x="-1" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="705" y="870" as="sourcePoint" />
+            <mxPoint x="1530" y="870" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="166" edge="1" parent="E8VEQDsVTNWo-Smn1ndB-168" style="edgeStyle=elbowEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;labelBackgroundColor=none;spacingBottom=30;jumpStyle=arc;spacingLeft=10;spacingRight=0;align=left;flowAnimation=1;elbow=vertical;" value="17. EventMsg::CollabWaitingEnd + status snapshot">
+          <mxGeometry relative="1" x="-1" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="705" y="1020" as="sourcePoint" />
+            <mxPoint x="1530" y="1020" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="157" edge="1" parent="E8VEQDsVTNWo-Smn1ndB-168" style="edgeStyle=elbowEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;labelBackgroundColor=light-dark(#DAE8FC,#EDEDED);spacingBottom=30;jumpStyle=arc;fontSize=12;verticalAlign=middle;spacingLeft=10;spacingRight=0;align=left;fontStyle=0;flowAnimation=1;elbow=vertical;textShadow=0;labelBorderColor=none;" value="8. child EventMsg stream: &lt;br&gt;TurnStarted / Item* / TurnComplete">
+          <mxGeometry relative="1" x="-1" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="1284" y="620" as="sourcePoint" />
+            <mxPoint x="1530" y="620" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="state-machine" name="State Machine">
+    <mxGraphModel dx="1350" dy="791" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1700" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="200" parent="1" style="text;html=1;strokeColor=none;fillColor=none;gradientColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=20;" value="State model" vertex="1">
+          <mxGeometry height="30" width="300" x="20" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="201" parent="1" style="text;html=1;strokeColor=none;fillColor=none;gradientColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=16;" value="A. core subagent lifecycle (AgentStatus)" vertex="1">
+          <mxGeometry height="30" width="360" x="30" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="202" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" value="PendingInit" vertex="1">
+          <mxGeometry height="60" width="120" x="60" y="150" as="geometry" />
+        </mxCell>
+        <mxCell id="203" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="Running" vertex="1">
+          <mxGeometry height="60" width="120" x="260" y="150" as="geometry" />
+        </mxCell>
+        <mxCell id="204" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="Interrupted" vertex="1">
+          <mxGeometry height="60" width="130" x="460" y="150" as="geometry" />
+        </mxCell>
+        <mxCell id="205" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="Completed(final assistant message)" vertex="1">
+          <mxGeometry height="70" width="220" x="700" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="206" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="Errored" vertex="1">
+          <mxGeometry height="60" width="140" x="720" y="190" as="geometry" />
+        </mxCell>
+        <mxCell id="207" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" value="Shutdown" vertex="1">
+          <mxGeometry height="60" width="120" x="980" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="208" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" value="NotFound" vertex="1">
+          <mxGeometry height="60" width="120" x="980" y="250" as="geometry" />
+        </mxCell>
+        <mxCell id="209" edge="1" parent="1" source="202" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="203" value="TurnStarted">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="210" edge="1" parent="1" source="203" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="204" value="TurnAborted(Interrupted)">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="211" edge="1" parent="1" source="204" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="203" value="send_input / new turn">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="212" edge="1" parent="1" source="203" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="205" value="TurnComplete">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="213" edge="1" parent="1" source="203" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="206" value="Error or TurnAborted(other)">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="214" edge="1" parent="1" source="205" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="207" value="close_agent / shutdown_live_agent / thread shutdown">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="215" edge="1" parent="1" source="206" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="207" value="shutdown">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="216" edge="1" parent="1" source="202" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="208" value="manager dropped / lookup miss">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="217" parent="1" style="text;html=1;strokeColor=none;fillColor=none;gradientColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=16;" value="B. TUI thread-channel lifecycle" vertex="1">
+          <mxGeometry height="30" width="360" x="30" y="380" as="geometry" />
+        </mxCell>
+        <mxCell id="218" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" value="Absent&#xa;no ThreadEventChannel yet" vertex="1">
+          <mxGeometry height="80" width="160" x="40" y="550" as="geometry" />
+        </mxCell>
+        <mxCell id="219" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="Live attached&#xa;resume_thread attached listener&#xa;store.active=true" vertex="1">
+          <mxGeometry height="90" width="190" x="300" y="430" as="geometry" />
+        </mxCell>
+        <mxCell id="220" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="Replay-only snapshot&#xa;thread/read fallback&#xa;no live listener" vertex="1">
+          <mxGeometry height="80" width="190" x="25" y="740" as="geometry" />
+        </mxCell>
+        <mxCell id="221" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="Active thread&#xa;active_thread_id == thread_id&#xa;events rendered immediately" vertex="1">
+          <mxGeometry height="90" width="190" x="630" y="430" as="geometry" />
+        </mxCell>
+        <mxCell id="222" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" value="Inactive buffered&#xa;notifications stored in ThreadEventStore.buffer&#xa;pending approvals tracked" vertex="1">
+          <mxGeometry height="90" width="220" x="615" y="620" as="geometry" />
+        </mxCell>
+        <mxCell id="223" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="Closed / fail back to primary&#xa;ThreadClosed on active non-primary thread&#xa;switch back to primary_thread_id" vertex="1">
+          <mxGeometry height="90" width="230" x="910" y="620" as="geometry" />
+        </mxCell>
+        <mxCell id="224" edge="1" parent="1" source="218" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;entryX=0;entryY=0.5;entryDx=0;entryDy=0;exitX=0.5;exitY=0;exitDx=0;exitDy=0;" target="219" value="thread/start or attach_live_thread_for_selection">
+          <mxGeometry relative="1" x="-0.318" y="15" as="geometry">
+            <mxPoint x="-1" as="offset" />
+            <Array as="points">
+              <mxPoint x="120" y="475" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="225" edge="1" parent="1" source="218" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;entryX=0.5;entryY=0;entryDx=0;entryDy=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="220" value="thread/read fallback">
+          <mxGeometry relative="1" x="-0.013" y="10" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="120" y="740" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="226" edge="1" parent="1" source="219" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="221" value="selected">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="227" edge="1" parent="1" source="221" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="222" value="switch away / store receiver">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="228" edge="1" parent="1" source="222" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="221" value="select again + replay snapshot">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="229" edge="1" parent="1" source="221" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="223" value="ThreadClosed on non-primary active child">
+          <mxGeometry relative="1" x="0.2424" y="-15" as="geometry">
+            <mxPoint x="1" y="-30" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="230" edge="1" parent="1" source="220" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="223" value="cannot live reattach until materialized">
+          <mxGeometry relative="1" x="0.8068" y="-30" as="geometry">
+            <mxPoint x="1" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="231" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" value="Persisted lineage side state&#xa;state_db thread_spawn_edge status: Open -&gt; Closed on close_agent().&#xa;Open edges enable descendant discovery / resume after process restart." vertex="1">
+          <mxGeometry height="120" width="330" x="280" y="820" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="ownership-debug" name="Ownership and Debug Map">
+    <mxGraphModel dx="1429" dy="838" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="300" parent="1" style="text;html=1;strokeColor=none;fillColor=none;gradientColor=none;align=left;verticalAlign=top;fontStyle=1;fontSize=20;" value="Ownership and debug map" vertex="1">
+          <mxGeometry height="30" width="400" x="20" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="301" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" value="Protocol types&#xa;protocol/src/protocol.rs&#xa;InterAgentCommunication&#xa;SessionSource::SubAgent(ThreadSpawn)&#xa;AgentStatus&#xa;Collab* begin/end events" vertex="1">
+          <mxGeometry height="160" width="250" x="40" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="302" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="app-server request + listener layer&#xa;message_processor.rs&#xa;codex_message_processor.rs&#xa;ensure_conversation_listener_task()&#xa;bespoke_event_handling.rs" vertex="1">
+          <mxGeometry height="180" width="290" x="380" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="303" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="core thread execution&#xa;thread_manager.rs&#xa;codex_thread.rs&#xa;codex.rs / Session / Turn loop&#xa;state.send_op(thread_id, Op)" vertex="1">
+          <mxGeometry height="180" width="280" x="790" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="304" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" value="root-scoped multi-agent ownership&#xa;agent/control.rs&#xa;agent/registry.rs&#xa;reserve spawn slot&#xa;path/nickname/last_task_message&#xa;subscribe_status()" vertex="1">
+          <mxGeometry height="180" width="290" x="1270" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="305" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="Persistence&#xa;rollout JSONL&#xa;state_db upsert_thread_spawn_edge(Open/Closed)&#xa;thread metadata for resume / backfill" vertex="1">
+          <mxGeometry height="160" width="250" x="1660" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="306" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" value="TUI state ownership&#xa;tui/app_server_adapter.rs&#xa;tui/app.rs&#xa;ThreadEventStore.buffer&#xa;active_thread_id / primary_thread_id&#xa;AgentNavigationState + loaded_threads BFS" vertex="1">
+          <mxGeometry height="190" width="520" x="60" y="700" as="geometry" />
+        </mxCell>
+        <mxCell id="307" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" value="What each layer mutates&#xa;protocol: wire format + IDs only&#xa;app-server: connection subscriptions, request/response routing, EventMsg -&gt; notifications&#xa;core thread fabric: live thread map and task execution&#xa;AgentRegistry: root-local multi-agent metadata and quotas&#xa;state_db: cross-process spawn lineage&#xa;TUI: per-thread buffered view state" vertex="1">
+          <mxGeometry height="180" width="520" x="670" y="450" as="geometry" />
+        </mxCell>
+        <mxCell id="308" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" value="Debug first when spawn/send/wait breaks&#xa;1. spawn not visible: multi_agents spawn handler -&gt; agent/control.rs -&gt; state_db edge write&#xa;2. child runs but UI misses it: ensure_conversation_listener_task -&gt; bespoke_event_handling -&gt; app_server_adapter -&gt; enqueue_thread_notification&#xa;3. resume tree wrong: loaded_threads BFS + SessionSource::SubAgent + state_db edge status&#xa;4. wait_agent wrong: subscribe_status() + AgentStatus derivation in agent/status.rs" vertex="1">
+          <mxGeometry height="200" width="390" x="1590" y="430" as="geometry" />
+        </mxCell>
+        <mxCell id="309" edge="1" parent="1" source="301" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="302" value="request path">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="310" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="303" value="submit Op / listen EventMsg">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="710" y="190" as="sourcePoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="311" edge="1" parent="1" source="303" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="304" value="spawn / send / wait / close / resume">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="312" edge="1" parent="1" source="304" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="305" value="persist lineage">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="313" edge="1" parent="1" source="302" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="306" value="typed notifications by ThreadId">
+          <mxGeometry relative="1" x="-0.8095" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="485" y="530" />
+              <mxPoint x="485" y="530" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="314" edge="1" parent="1" source="301" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="306" value="uses protocol IDs + metadata">
+          <mxGeometry relative="1" x="-0.7273" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="165" y="590" />
+              <mxPoint x="165" y="590" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="315" edge="1" parent="1" source="303" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="307" value="ownership summary">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="316" edge="1" parent="1" source="305" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="308" value="diagnose resume issues">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1575" y="420" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="317" edge="1" parent="1" source="306" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#666666;" target="308" value="diagnose UI routing issues">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
