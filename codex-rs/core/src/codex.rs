@@ -6722,7 +6722,8 @@ fn should_rotate_prompt_cache_key_for_stream_retry(err: &CodexErr) -> bool {
     matches!(
         err,
         CodexErr::Stream(message, _)
-            if message.contains("stream closed before response.completed")
+            if message.contains("stream disconnected before completion")
+                || message.contains("stream closed before response.completed")
                 || message.contains("websocket closed by server before response.completed")
     )
 }
