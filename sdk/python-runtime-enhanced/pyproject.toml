@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "codex-enhanced"
-version = "0.1.27"
+version = "0.1.28"
 description = "Enhanced Codex CLI with loop automation, Feishu clawbot support, and fast session respawn"
 readme = "README.md"
 requires-python = ">=3"
