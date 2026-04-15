@@ -45,6 +45,25 @@ impl ClawbotController {
                         .add_error_message(format!("Failed to save Clawbot config: {err}"));
                 }
             }
+            AppEvent::BindClawbotDiscoveredSession { session_id } => {
+                if let Err(err) = app
+                    .bind_clawbot_discovered_session_to_current_thread(app_server, session_id)
+                    .await
+                {
+                    app.chat_widget
+                        .add_error_message(format!("Failed to bind Clawbot session: {err}"));
+                }
+            }
+            AppEvent::BindClawbotSessionAndPreempt { session_id } => {
+                if let Err(err) = app
+                    .bind_clawbot_session_to_current_thread_and_preempt(app_server, session_id)
+                    .await
+                {
+                    app.chat_widget.add_error_message(format!(
+                        "Failed to bind and preempt Clawbot session: {err}"
+                    ));
+                }
+            }
             AppEvent::SaveClawbotManualBindSessionId { session_id } => {
                 if let Err(err) = app
                     .bind_clawbot_session_to_current_thread(app_server, session_id)
@@ -87,6 +106,13 @@ impl ClawbotController {
                 if let Err(err) = app.retry_clawbot_feishu_connection() {
                     app.chat_widget.add_error_message(format!(
                         "Failed to restart Clawbot Feishu runtime: {err}"
+                    ));
+                }
+            }
+            AppEvent::ToggleClawbotForceConnect => {
+                if let Err(err) = app.toggle_clawbot_force_connect() {
+                    app.chat_widget.add_error_message(format!(
+                        "Failed to update Clawbot ws preemption: {err}"
                     ));
                 }
             }

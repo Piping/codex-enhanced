@@ -1,0 +1,19 @@
+---
+source: tui/src/app/tests/clawbot_tests.rs
+expression: bound_detail_popup
+---
+  Clawbot
+  active bindings: 1
+  ws status: Unconfigured
+  turn mode: interactive
+
+› 1. Back                              Return to bound channels.
+     Thread
+     Session
+     Session ID
+     Unread
+     Inbound Forwarding
+     Outbound Forwarding
+  8. Bind current thread + preempt ws  Move to current thread <current-thread>
+
+  Press enter to confirm or esc to go back

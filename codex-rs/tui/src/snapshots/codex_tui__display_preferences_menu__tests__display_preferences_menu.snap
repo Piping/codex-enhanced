@@ -20,7 +20,13 @@ expression: render_lines(&view)
                             and result details  
                             in transcript       
                             cells.              
-  4. Hide Patch Diffs       Currently visible.  
+  4. Hide Hook Activity     Currently visible.  
+                            Hide hook           
+                            lifecycle messages  
+                            and hook output     
+                            details in the      
+                            transcript.         
+  5. Hide Patch Diffs       Currently visible.  
                             Collapse patch/     
                             edit diff           
                             summaries in        

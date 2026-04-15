@@ -4212,6 +4212,9 @@ impl ChatWidget {
     }
 
     fn on_hook_started(&mut self, event: codex_protocol::protocol::HookStartedEvent) {
+        if !self.display_preferences.show_hook_output() {
+            return;
+        }
         self.flush_answer_stream_with_separator();
         self.flush_completed_hook_output();
         match self.active_hook_cell.as_mut() {
@@ -4231,6 +4234,9 @@ impl ChatWidget {
     }
 
     fn on_hook_completed(&mut self, event: codex_protocol::protocol::HookCompletedEvent) {
+        if !self.display_preferences.show_hook_output() {
+            return;
+        }
         let completed = event.run;
         let completed_existing_run = self
             .active_hook_cell

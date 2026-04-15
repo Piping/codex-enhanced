@@ -99,6 +99,12 @@ pub(crate) enum ClawbotForwardingChannel {
     Outbound,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClawbotSessionBindSource {
+    DiscoveredSession,
+    ManualSessionId,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) enum ClawbotControlsDestination {
     #[default]
@@ -556,7 +562,13 @@ pub(crate) enum AppEvent {
         field: ClawbotFeishuConfigField,
         value: String,
     },
+    BindClawbotDiscoveredSession {
+        session_id: String,
+    },
 
+    BindClawbotSessionAndPreempt {
+        session_id: String,
+    },
     SaveClawbotManualBindSessionId {
         session_id: String,
     },
@@ -576,6 +588,8 @@ pub(crate) enum AppEvent {
     ClearClawbotFeishuSessions,
 
     RetryClawbotFeishuConnection,
+
+    ToggleClawbotForceConnect,
 
     ClawbotDisconnectThread {
         thread_id: ThreadId,

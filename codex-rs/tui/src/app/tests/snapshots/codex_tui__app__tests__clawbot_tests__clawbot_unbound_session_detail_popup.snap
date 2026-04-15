@@ -1,0 +1,17 @@
+---
+source: tui/src/app/tests/clawbot_tests.rs
+expression: unbound_detail_popup
+---
+  Clawbot
+  active bindings: 1
+  ws status: Unconfigured
+  turn mode: interactive
+
+› 1. Back                              Return to unbound sessions.
+     Session
+     Session ID
+     Unread
+  5. Bind to current thread            Target thread <current-thread>
+  6. Bind current thread + preempt ws  Target thread <current-thread>
+
+  Press enter to confirm or esc to go back

@@ -1919,6 +1919,7 @@
             }
           ],
           "default": {
+            "show_hook_output": true,
             "show_patch_diffs": true,
             "show_tool_results": true
           },
@@ -1992,6 +1993,11 @@
     "TuiDisplayPreferences": {
       "additionalProperties": false,
       "properties": {
+        "show_hook_output": {
+          "default": true,
+          "description": "Show hook lifecycle and hook output entries in the transcript. Defaults to `true`.",
+          "type": "boolean"
+        },
         "show_patch_diffs": {
           "default": true,
           "description": "Show patch/edit diff summaries in transcript cells. Defaults to `true`.",
