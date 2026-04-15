@@ -1882,7 +1882,6 @@ dependencies = [
  "core-foundation 0.9.4",
  "core_test_support",
  "csv",
- "ctor 0.6.3",
  "dirs",
  "dunce",
  "env-flags",
@@ -6932,6 +6931,7 @@ dependencies = [
  "openlark-client",
  "openlark-communication",
  "openlark-core",
+ "openlark-docs",
  "serde",
  "serde_json",
  "serde_repr",
@@ -6974,6 +6974,7 @@ dependencies = [
  "openlark-auth",
  "openlark-communication",
  "openlark-core",
+ "openlark-docs",
  "prost 0.13.5",
  "reqwest",
  "serde",
@@ -7023,6 +7024,34 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
+ "urlencoding",
+ "uuid",
+]
+
+[[package]]
+name = "openlark-docs"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff30823a5df1ae99b2316ffeb4548fb9c90f5c9a145d719626b77cfafa0d3e07"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "futures",
+ "futures-util",
+ "log",
+ "once_cell",
+ "openlark-core",
+ "rand 0.8.5",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_repr",
+ "thiserror 2.0.18",
+ "tokio",
  "url",
  "urlencoding",
  "uuid",

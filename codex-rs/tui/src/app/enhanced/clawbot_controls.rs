@@ -9,6 +9,7 @@ use codex_clawbot::ClawbotStore;
 use codex_clawbot::ClawbotTurnMode;
 use codex_clawbot::ConnectionStatus;
 use codex_clawbot::FeishuConfig;
+use codex_clawbot::FeishuCoordinationConfig;
 use codex_clawbot::ForwardingDirection;
 use codex_clawbot::ForwardingState;
 use codex_clawbot::ProviderKind;
@@ -48,6 +49,12 @@ impl ClawbotFeishuConfigField {
             Self::EncryptKey => "Feishu Encrypt Key",
             Self::BotOpenId => "Feishu Bot Open ID",
             Self::BotUserId => "Feishu Bot User ID",
+            Self::CoordinationBaseToken => "Coordination Base Token",
+            Self::CoordinationHeartbeatTableId => "Heartbeat Table ID",
+            Self::CoordinationForceTableId => "Force Table ID",
+            Self::CoordinationInstanceId => "Coordination Instance ID",
+            Self::CoordinationOwnerPriority => "Coordination Priority",
+            Self::CoordinationForceConnect => "Force Connect",
         }
     }
 
@@ -59,6 +66,24 @@ impl ClawbotFeishuConfigField {
             Self::EncryptKey => config.and_then(|config| config.encrypt_key.clone()),
             Self::BotOpenId => config.and_then(|config| config.bot_open_id.clone()),
             Self::BotUserId => config.and_then(|config| config.bot_user_id.clone()),
+            Self::CoordinationBaseToken => config
+                .and_then(|config| config.coordination.as_ref())
+                .map(|coordination| coordination.base_token.clone()),
+            Self::CoordinationHeartbeatTableId => config
+                .and_then(|config| config.coordination.as_ref())
+                .map(|coordination| coordination.heartbeat_table_id.clone()),
+            Self::CoordinationForceTableId => config
+                .and_then(|config| config.coordination.as_ref())
+                .map(|coordination| coordination.force_table_id.clone()),
+            Self::CoordinationInstanceId => config
+                .and_then(|config| config.coordination.as_ref())
+                .and_then(|coordination| coordination.instance_id.clone()),
+            Self::CoordinationOwnerPriority => config
+                .and_then(|config| config.coordination.as_ref())
+                .map(|coordination| coordination.owner_priority.to_string()),
+            Self::CoordinationForceConnect => config
+                .and_then(|config| config.coordination.as_ref())
+                .map(|coordination| coordination.force_connect.to_string()),
         }?;
         let trimmed = value.trim().to_string();
         (!trimmed.is_empty()).then_some(trimmed)
@@ -85,6 +110,24 @@ impl ClawbotFeishuConfigField {
             Self::EncryptKey => "Paste the encrypt key, or submit an empty value to clear it",
             Self::BotOpenId => "Paste the bot open_id, or submit an empty value to clear it",
             Self::BotUserId => "Paste the bot user_id, or submit an empty value to clear it",
+            Self::CoordinationBaseToken => {
+                "Paste the Feishu Base token, or submit an empty value to clear it"
+            }
+            Self::CoordinationHeartbeatTableId => {
+                "Paste the heartbeat table_id, or submit an empty value to clear it"
+            }
+            Self::CoordinationForceTableId => {
+                "Paste the force table_id, or submit an empty value to clear it"
+            }
+            Self::CoordinationInstanceId => {
+                "Paste an optional stable instance_id, or submit an empty value to auto-generate"
+            }
+            Self::CoordinationOwnerPriority => {
+                "Paste the coordination priority integer, or submit an empty value for the default"
+            }
+            Self::CoordinationForceConnect => {
+                "Enter true or false to control whether this Codex process force-preempts leadership"
+            }
         }
     }
 
@@ -103,7 +146,10 @@ impl ClawbotFeishuConfigField {
     fn is_secret(self) -> bool {
         matches!(
             self,
-            Self::AppSecret | Self::VerificationToken | Self::EncryptKey
+            Self::AppSecret
+                | Self::VerificationToken
+                | Self::EncryptKey
+                | Self::CoordinationBaseToken
         )
     }
 }
@@ -205,6 +251,7 @@ impl App {
     ) -> Result<()> {
         let mut runtime = ClawbotRuntime::load(self.config.cwd.to_path_buf())?;
         let mut config = runtime.snapshot().config.feishu.clone().unwrap_or_default();
+        let mut coordination = config.coordination.clone().unwrap_or_default();
         let trimmed = value.trim().to_string();
         match field {
             ClawbotFeishuConfigField::AppId => {
@@ -225,7 +272,38 @@ impl App {
             ClawbotFeishuConfigField::BotUserId => {
                 config.bot_user_id = (!trimmed.is_empty()).then_some(trimmed);
             }
+            ClawbotFeishuConfigField::CoordinationBaseToken => {
+                coordination.base_token = trimmed;
+            }
+            ClawbotFeishuConfigField::CoordinationHeartbeatTableId => {
+                coordination.heartbeat_table_id = trimmed;
+            }
+            ClawbotFeishuConfigField::CoordinationForceTableId => {
+                coordination.force_table_id = trimmed;
+            }
+            ClawbotFeishuConfigField::CoordinationInstanceId => {
+                coordination.instance_id = (!trimmed.is_empty()).then_some(trimmed);
+            }
+            ClawbotFeishuConfigField::CoordinationOwnerPriority => {
+                coordination.owner_priority = if trimmed.is_empty() {
+                    FeishuCoordinationConfig::default().owner_priority
+                } else {
+                    trimmed.parse().context("coordination priority must be an integer")?
+                };
+            }
+            ClawbotFeishuConfigField::CoordinationForceConnect => {
+                coordination.force_connect = match trimmed.to_ascii_lowercase().as_str() {
+                    "" | "false" | "0" | "off" | "no" => false,
+                    "true" | "1" | "on" | "yes" => true,
+                    _ => {
+                        return Err(anyhow::anyhow!(
+                            "force connect must be one of: true, false, 1, 0, on, off, yes, no"
+                        ));
+                    }
+                };
+            }
         }
+        config.coordination = (!coordination.is_empty()).then_some(coordination);
         runtime.update_feishu_config(Some(config))?;
         self.refresh_clawbot_provider_runtime()?;
         self.refresh_clawbot_management_popup();
@@ -780,6 +858,30 @@ impl App {
                 clawbot_config_item(ClawbotFeishuConfigField::EncryptKey, feishu_config),
                 clawbot_config_item(ClawbotFeishuConfigField::BotOpenId, feishu_config),
                 clawbot_config_item(ClawbotFeishuConfigField::BotUserId, feishu_config),
+                clawbot_config_item(
+                    ClawbotFeishuConfigField::CoordinationBaseToken,
+                    feishu_config,
+                ),
+                clawbot_config_item(
+                    ClawbotFeishuConfigField::CoordinationHeartbeatTableId,
+                    feishu_config,
+                ),
+                clawbot_config_item(
+                    ClawbotFeishuConfigField::CoordinationForceTableId,
+                    feishu_config,
+                ),
+                clawbot_config_item(
+                    ClawbotFeishuConfigField::CoordinationInstanceId,
+                    feishu_config,
+                ),
+                clawbot_config_item(
+                    ClawbotFeishuConfigField::CoordinationOwnerPriority,
+                    feishu_config,
+                ),
+                clawbot_config_item(
+                    ClawbotFeishuConfigField::CoordinationForceConnect,
+                    feishu_config,
+                ),
             ],
             ClawbotControlsDestination::Diagnostics => vec![
                 clawbot_back_item(
@@ -959,12 +1061,18 @@ fn clawbot_config_summary(config: Option<&FeishuConfig>, turn_mode: ClawbotTurnM
         ClawbotFeishuConfigField::EncryptKey,
         ClawbotFeishuConfigField::BotOpenId,
         ClawbotFeishuConfigField::BotUserId,
+        ClawbotFeishuConfigField::CoordinationBaseToken,
+        ClawbotFeishuConfigField::CoordinationHeartbeatTableId,
+        ClawbotFeishuConfigField::CoordinationForceTableId,
+        ClawbotFeishuConfigField::CoordinationInstanceId,
+        ClawbotFeishuConfigField::CoordinationOwnerPriority,
+        ClawbotFeishuConfigField::CoordinationForceConnect,
     ]
     .into_iter()
     .filter(|field| field.current_value(config).is_some())
     .count();
     format!(
-        "{configured}/6 configured · {}",
+        "{configured}/12 configured · {}",
         clawbot_turn_mode_label(turn_mode)
     )
 }

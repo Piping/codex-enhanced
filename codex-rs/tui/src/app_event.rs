@@ -87,6 +87,12 @@ pub(crate) enum ClawbotFeishuConfigField {
     EncryptKey,
     BotOpenId,
     BotUserId,
+    CoordinationBaseToken,
+    CoordinationHeartbeatTableId,
+    CoordinationForceTableId,
+    CoordinationInstanceId,
+    CoordinationOwnerPriority,
+    CoordinationForceConnect,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

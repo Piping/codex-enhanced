@@ -725,6 +725,7 @@ async fn clawbot_manual_bind_allows_undiscovered_chat_id_with_configured_feishu(
             encrypt_key: None,
             bot_open_id: Some("ou_bot_open_id".to_string()),
             bot_user_id: None,
+            coordination: None,
         }))
         .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
 
@@ -820,6 +821,7 @@ async fn clawbot_management_popup_snapshot() -> Result<()> {
             encrypt_key: None,
             bot_open_id: Some("ou_bot_open_id".to_string()),
             bot_user_id: None,
+            coordination: None,
         }))
         .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
     runtime
