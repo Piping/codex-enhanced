@@ -41,6 +41,7 @@ fn toml_string_literal(value: &str) -> String {
 }
 
 pub fn test_codex_exec() -> TestCodexExecBuilder {
+    crate::ensure_test_process_initialized();
     TestCodexExecBuilder {
         home: TempDir::new().expect("create temp home"),
         cwd: TempDir::new().expect("create temp cwd"),

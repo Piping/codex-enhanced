@@ -4,7 +4,6 @@ use anyhow::Context as _;
 use anyhow::ensure;
 use codex_arg0::Arg0PathEntryGuard;
 use codex_utils_cargo_bin::CargoBinError;
-use ctor::ctor;
 use std::sync::OnceLock;
 use tempfile::TempDir;
 
@@ -28,40 +27,37 @@ pub mod tracing;
 pub mod zsh_fork;
 
 static TEST_ARG0_PATH_ENTRY: OnceLock<Option<Arg0PathEntryGuard>> = OnceLock::new();
+static TEST_PROCESS_INIT: OnceLock<()> = OnceLock::new();
 
-#[ctor]
-fn enable_deterministic_unified_exec_process_ids_for_tests() {
-    codex_core::test_support::set_thread_manager_test_mode(/*enabled*/ true);
-    codex_core::test_support::set_deterministic_process_ids(/*enabled*/ true);
-}
+pub(crate) fn ensure_test_process_initialized() {
+    TEST_PROCESS_INIT.get_or_init(|| {
+        codex_core::test_support::set_thread_manager_test_mode(/*enabled*/ true);
+        codex_core::test_support::set_deterministic_process_ids(/*enabled*/ true);
+        let _ = TEST_ARG0_PATH_ENTRY.get_or_init(codex_arg0::arg0_dispatch);
 
-#[ctor]
-fn configure_arg0_dispatch_for_test_binaries() {
-    let _ = TEST_ARG0_PATH_ENTRY.get_or_init(codex_arg0::arg0_dispatch);
-}
-
-#[ctor]
-fn configure_insta_workspace_root_for_snapshot_tests() {
-    if std::env::var_os("INSTA_WORKSPACE_ROOT").is_some() {
-        return;
-    }
-
-    let workspace_root = codex_utils_cargo_bin::repo_root()
-        .ok()
-        .map(|root| root.join("codex-rs"));
-
-    if let Some(workspace_root) = workspace_root
-        && let Ok(workspace_root) = workspace_root.canonicalize()
-    {
-        // Safety: this ctor runs at process startup before test threads begin.
-        unsafe {
-            std::env::set_var("INSTA_WORKSPACE_ROOT", workspace_root);
+        if std::env::var_os("INSTA_WORKSPACE_ROOT").is_some() {
+            return;
         }
-    }
+
+        let workspace_root = codex_utils_cargo_bin::repo_root()
+            .ok()
+            .map(|root| root.join("codex-rs"));
+
+        if let Some(workspace_root) = workspace_root
+            && let Ok(workspace_root) = workspace_root.canonicalize()
+        {
+            // Safety: guarded by OnceLock so process-global test setup runs
+            // once before helpers rely on the environment variable.
+            unsafe {
+                std::env::set_var("INSTA_WORKSPACE_ROOT", workspace_root);
+            }
+        }
+    });
 }
 
 #[track_caller]
 pub fn assert_regex_match<'s>(pattern: &str, actual: &'s str) -> regex_lite::Captures<'s> {
+    ensure_test_process_initialized();
     let regex = Regex::new(pattern).unwrap_or_else(|err| {
         panic!("failed to compile regex {pattern:?}: {err}");
     });
@@ -148,6 +144,7 @@ pub fn fetch_dotslash_file(
     dotslash_file: &std::path::Path,
     dotslash_cache: Option<&std::path::Path>,
 ) -> anyhow::Result<PathBuf> {
+    ensure_test_process_initialized();
     let mut command = std::process::Command::new("dotslash");
     command.arg("--").arg("fetch").arg(dotslash_file);
     if let Some(dotslash_cache) = dotslash_cache {
@@ -183,6 +180,7 @@ pub fn fetch_dotslash_file(
 /// temporary directory. Using a per-test directory keeps tests hermetic and
 /// avoids clobbering a developer’s real `~/.codex`.
 pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
+    ensure_test_process_initialized();
     ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(default_test_overrides())
@@ -208,6 +206,7 @@ fn default_test_overrides() -> ConfigOverrides {
 
 #[cfg(target_os = "linux")]
 pub fn find_codex_linux_sandbox_exe() -> Result<PathBuf, CargoBinError> {
+    ensure_test_process_initialized();
     if let Some(path) = TEST_ARG0_PATH_ENTRY
         .get()
         .and_then(Option::as_ref)

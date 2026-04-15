@@ -6682,6 +6682,9 @@ async fn run_sampling_request(
         }
         if retries < max_retries {
             retries += 1;
+            if should_rotate_prompt_cache_key_for_stream_retry(&err) {
+                client_session.rotate_prompt_cache_key_for_retry();
+            }
             let delay = match &err {
                 CodexErr::Stream(_, requested_delay) => {
                     requested_delay.unwrap_or_else(|| backoff(retries))
@@ -6713,6 +6716,15 @@ async fn run_sampling_request(
             return Err(err);
         }
     }
+}
+
+fn should_rotate_prompt_cache_key_for_stream_retry(err: &CodexErr) -> bool {
+    matches!(
+        err,
+        CodexErr::Stream(message, _)
+            if message.contains("stream closed before response.completed")
+                || message.contains("websocket closed by server before response.completed")
+    )
 }
 
 pub(crate) async fn built_tools(

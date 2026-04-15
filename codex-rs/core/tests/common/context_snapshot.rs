@@ -56,11 +56,13 @@ pub fn format_request_input_snapshot(
     request: &ResponsesRequest,
     options: &ContextSnapshotOptions,
 ) -> String {
+    crate::ensure_test_process_initialized();
     let items = request.input();
     format_response_items_snapshot(items.as_slice(), options)
 }
 
 pub fn format_response_items_snapshot(items: &[Value], options: &ContextSnapshotOptions) -> String {
+    crate::ensure_test_process_initialized();
     items
         .iter()
         .enumerate()
@@ -211,6 +213,7 @@ pub fn format_labeled_requests_snapshot(
     sections: &[(&str, &ResponsesRequest)],
     options: &ContextSnapshotOptions,
 ) -> String {
+    crate::ensure_test_process_initialized();
     let sections = sections
         .iter()
         .map(|(title, request)| {
