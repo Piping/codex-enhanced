@@ -153,7 +153,6 @@ codex-otel = { workspace = true }
 codex-test-binary-support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 core_test_support = { workspace = true }
-ctor = { workspace = true }
 insta = { workspace = true }
 maplit = { workspace = true }
 opentelemetry = { workspace = true }
