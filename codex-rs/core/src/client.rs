@@ -211,6 +211,8 @@ pub struct ModelClient {
 pub struct ModelClientSession {
     client: ModelClient,
     websocket_session: WebsocketSession,
+    prompt_cache_key_override: Option<String>,
+    prompt_cache_retry_generation: u64,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -330,6 +332,8 @@ impl ModelClient {
         ModelClientSession {
             client: self.clone(),
             websocket_session: self.take_cached_websocket_session(),
+            prompt_cache_key_override: None,
+            prompt_cache_retry_generation: 0,
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -807,6 +811,15 @@ impl ModelClientSession {
             .set_connection_reused(/*connection_reused*/ false);
     }
 
+    pub(crate) fn rotate_prompt_cache_key_for_retry(&mut self) {
+        self.prompt_cache_retry_generation += 1;
+        let conversation_id = self.client.state.conversation_id;
+        let retry_generation = self.prompt_cache_retry_generation;
+        self.prompt_cache_key_override =
+            Some(format!("{conversation_id}:stream-retry:{retry_generation}"));
+        self.reset_websocket_session();
+    }
+
     fn build_responses_request(
         &self,
         provider: &codex_api::Provider,
@@ -852,7 +865,11 @@ impl ModelClientSession {
             None
         };
         let text = create_text_param_for_request(verbosity, &prompt.output_schema);
-        let prompt_cache_key = Some(self.client.state.conversation_id.to_string());
+        let prompt_cache_key = Some(
+            self.prompt_cache_key_override
+                .clone()
+                .unwrap_or_else(|| self.client.state.conversation_id.to_string()),
+        );
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
             instructions: instructions.clone(),
