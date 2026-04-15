@@ -685,6 +685,58 @@ async fn clawbot_manual_bind_replays_cached_unread_messages() -> Result<()> {
 }
 
 #[tokio::test]
+async fn clawbot_manual_bind_allows_undiscovered_chat_id_with_configured_feishu() -> Result<()> {
+    let mut app = make_test_app().await;
+    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let tempdir = tempdir()?;
+    app.config.cwd = tempdir.path().to_path_buf().abs();
+
+    let started = app_server
+        .start_thread(app.chat_widget.config_ref())
+        .await
+        .expect("start thread");
+    let thread_id = started.session.thread_id;
+    app.active_thread_id = Some(thread_id);
+
+    let mut runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+    runtime
+        .update_feishu_config(Some(codex_clawbot::FeishuConfig {
+            app_id: "cli_app_123".to_string(),
+            app_secret: "secret_value_4567".to_string(),
+            verification_token: None,
+            encrypt_key: None,
+            bot_open_id: Some("ou_bot_open_id".to_string()),
+            bot_user_id: None,
+            coordination: None,
+        }))
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+
+    app.bind_clawbot_session_to_current_thread(
+        &mut app_server,
+        "chat_manual_only".to_string(),
+        ClawbotSessionBindSource::ManualSessionId,
+    )
+    .await
+    .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+
+    let runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+    assert_eq!(
+        runtime
+            .bound_session_for_thread(&thread_id.to_string())
+            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?,
+        Some(ProviderSessionRef::new(
+            ClawbotProviderKind::Feishu,
+            "chat_manual_only"
+        ))
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn clawbot_current_thread_controls_update_binding_state() -> Result<()> {
     let mut app = make_test_app().await;
     let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
@@ -754,6 +806,7 @@ async fn clawbot_management_popup_snapshot() -> Result<()> {
             encrypt_key: None,
             bot_open_id: Some("ou_bot_open_id".to_string()),
             bot_user_id: None,
+            coordination: None,
         }))
         .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
     runtime
