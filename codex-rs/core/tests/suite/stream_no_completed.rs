@@ -98,6 +98,14 @@ async fn retries_on_early_close() {
         2,
         "expected retry after incomplete SSE stream"
     );
+    let first_request: serde_json::Value =
+        serde_json::from_slice(&requests[0]).expect("first request should be valid JSON");
+    let second_request: serde_json::Value =
+        serde_json::from_slice(&requests[1]).expect("second request should be valid JSON");
+    assert_ne!(
+        first_request["prompt_cache_key"], second_request["prompt_cache_key"],
+        "expected retry after incomplete stream to rotate prompt_cache_key"
+    );
 
     server.shutdown().await;
 }

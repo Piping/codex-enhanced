@@ -976,12 +976,19 @@ fn custom_tool_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value 
     panic!("custom_tool_call_output {call_id} not found");
 }
 
-fn custom_tool_call_output_text(bodies: &[Value], call_id: &str) -> String {
+fn try_custom_tool_call_output_text(
+    bodies: &[Value],
+    call_id: &str,
+) -> std::result::Result<String, String> {
     let output = custom_tool_call_output(bodies, call_id)
         .get("output")
-        .unwrap_or_else(|| panic!("custom_tool_call_output {call_id} missing output"));
+        .ok_or_else(|| format!("custom_tool_call_output {call_id} missing output"))?;
     output_value_to_text(output)
-        .unwrap_or_else(|| panic!("custom_tool_call_output {call_id} missing text output"))
+        .ok_or_else(|| format!("custom_tool_call_output {call_id} missing text output"))
+}
+
+fn custom_tool_call_output_text(bodies: &[Value], call_id: &str) -> String {
+    try_custom_tool_call_output_text(bodies, call_id).unwrap_or_else(|err| panic!("{err}"))
 }
 
 fn function_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
@@ -1000,6 +1007,7 @@ fn function_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
 }
 
 pub fn test_codex() -> TestCodexBuilder {
+    crate::ensure_test_process_initialized();
     TestCodexBuilder {
         config_mutators: vec![],
         auth: CodexAuth::from_api_key("dummy"),
@@ -1032,8 +1040,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "custom_tool_call_output call-2 missing output")]
-    fn custom_tool_call_output_text_panics_when_output_is_missing() {
+    fn custom_tool_call_output_text_reports_missing_output() {
         let bodies = vec![json!({
             "input": [{
                 "type": "custom_tool_call_output",
@@ -1041,6 +1048,9 @@ mod tests {
             }]
         })];
 
-        let _ = custom_tool_call_output_text(&bodies, "call-2");
+        assert_eq!(
+            try_custom_tool_call_output_text(&bodies, "call-2"),
+            Err("custom_tool_call_output call-2 missing output".to_string())
+        );
     }
 }
