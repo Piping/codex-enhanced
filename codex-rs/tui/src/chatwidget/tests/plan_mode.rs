@@ -913,7 +913,7 @@ async fn plan_implementation_popup_skips_when_messages_queued() {
 
     chat.on_task_complete(
         Some("Plan details".to_string()),
-        /*duration_ms*/ None,
+        /*turn_duration_ms*/ None,
         /*from_replay*/ false,
     );
 
@@ -941,7 +941,8 @@ async fn plan_implementation_popup_skips_without_proposed_plan() {
         }],
     });
     chat.on_task_complete(
-        /*last_agent_message*/ None, /*duration_ms*/ None, /*from_replay*/ false,
+        /*last_agent_message*/ None, /*turn_duration_ms*/ None,
+        /*from_replay*/ false,
     );
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -963,7 +964,8 @@ async fn plan_implementation_popup_shows_after_proposed_plan_output() {
     chat.on_plan_delta("- Step 1\n- Step 2\n".to_string());
     chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
     chat.on_task_complete(
-        /*last_agent_message*/ None, /*duration_ms*/ None, /*from_replay*/ false,
+        /*last_agent_message*/ None, /*turn_duration_ms*/ None,
+        /*from_replay*/ false,
     );
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -1006,7 +1008,8 @@ async fn plan_implementation_popup_skips_when_steer_follows_proposed_plan() {
 
     complete_user_message(&mut chat, "user-1", "Please continue.");
     chat.on_task_complete(
-        /*last_agent_message*/ None, /*duration_ms*/ None, /*from_replay*/ false,
+        /*last_agent_message*/ None, /*turn_duration_ms*/ None,
+        /*from_replay*/ false,
     );
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -1053,7 +1056,8 @@ async fn plan_implementation_popup_shows_after_new_plan_follows_steer() {
         .to_string(),
     );
     chat.on_task_complete(
-        /*last_agent_message*/ None, /*duration_ms*/ None, /*from_replay*/ false,
+        /*last_agent_message*/ None, /*turn_duration_ms*/ None,
+        /*from_replay*/ false,
     );
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -1082,7 +1086,8 @@ async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
     });
     chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 92.0)));
     chat.on_task_complete(
-        /*last_agent_message*/ None, /*duration_ms*/ None, /*from_replay*/ false,
+        /*last_agent_message*/ None, /*turn_duration_ms*/ None,
+        /*from_replay*/ false,
     );
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);

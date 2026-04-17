@@ -165,6 +165,32 @@
       ],
       "type": "string"
     },
+    "SubAgentSpawnParams": {
+      "properties": {
+        "agentNickname": {
+          "description": "Optional nickname shown in thread pickers for the spawned child thread.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agentRole": {
+          "description": "Optional role shown in thread pickers for the spawned child thread.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parentThreadId": {
+          "description": "Loaded parent thread whose spawn tree should own the new child thread.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "parentThreadId"
+      ],
+      "type": "object"
+    },
     "ThreadSource": {
       "enum": [
         "user",
@@ -297,6 +323,16 @@
       "anyOf": [
         {
           "$ref": "#/definitions/ThreadStartSource"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "subAgentSpawn": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/SubAgentSpawnParams"
         },
         {
           "type": "null"

@@ -351,6 +351,7 @@ export type { SkillsListExtraRootsForCwd } from "./SkillsListExtraRootsForCwd";
 export type { SkillsListParams } from "./SkillsListParams";
 export type { SkillsListResponse } from "./SkillsListResponse";
 export type { SortDirection } from "./SortDirection";
+export type { SubAgentSpawnParams } from "./SubAgentSpawnParams";
 export type { SubagentMigration } from "./SubagentMigration";
 export type { TerminalInteractionNotification } from "./TerminalInteractionNotification";
 export type { TextElement } from "./TextElement";

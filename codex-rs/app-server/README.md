@@ -142,9 +142,9 @@ Example with notification opt-out:
 
 ## API Overview
 
-- `thread/start` — create a new thread; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for that thread. When the request includes a `cwd` and the resolved sandbox is `workspace-write` or full access, app-server also marks that project as trusted in the user `config.toml`. Pass `sessionStartSource: "clear"` when starting a replacement thread after clearing the current session so `SessionStart` hooks receive `source: "clear"` instead of the default `"startup"`. For permissions, prefer experimental `permissions` profile selection; the legacy `sandbox` shorthand is still accepted but cannot be combined with `permissions`. Experimental `environments` selects the sticky execution environments for turns on the thread; omit it to use the server default, pass `[]` to disable environments, or pass explicit environment ids with per-environment `cwd`.
+- `thread/start` — create a new thread; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for that thread. When the request includes a `cwd` and the resolved sandbox is `workspace-write` or full access, app-server also marks that project as trusted in the user `config.toml`. Pass `sessionStartSource: "clear"` when starting a replacement thread after clearing the current session so `SessionStart` hooks receive `source: "clear"` instead of the default `"startup"`. For permissions, prefer experimental `permissions` profile selection; the legacy `sandbox` shorthand is still accepted but cannot be combined with `permissions`. Experimental `environments` selects the sticky execution environments for turns on the thread; omit it to use the server default, pass `[]` to disable environments, or pass explicit environment ids with per-environment `cwd`. Pass `subAgentSpawn` to create the new thread as a `subagent/thread_spawn` child of an already-loaded parent thread.
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it. Accepts the same permission override rules as `thread/start`.
-- `thread/fork` — fork an existing thread into a new thread id by copying the stored history; if the source thread is currently mid-turn, the fork records the same interruption marker as `turn/interrupt` instead of inheriting an unmarked partial turn suffix. The returned `thread.forkedFromId` points at the source thread when known. Accepts `ephemeral: true` for an in-memory temporary fork, emits `thread/started` (including the current `thread.status`), and auto-subscribes you to turn/item events for the new thread. Experimental clients can pass `excludeTurns: true` when they plan to page fork history via `thread/turns/list` instead of receiving the full turn array immediately. Accepts the same permission override rules as `thread/start`.
+- `thread/fork` — fork an existing thread into a new thread id by copying the stored history; if the source thread is currently mid-turn, the fork records the same interruption marker as `turn/interrupt` instead of inheriting an unmarked partial turn suffix. The returned `thread.forkedFromId` points at the source thread when known. Accepts `ephemeral: true` for an in-memory temporary fork, emits `thread/started` (including the current `thread.status`), and auto-subscribes you to turn/item events for the new thread. Experimental clients can pass `excludeTurns: true` when they plan to page fork history via `thread/turns/list` instead of receiving the full turn array immediately. Pass `subAgentSpawn` to mark the forked thread as a `subagent/thread_spawn` child of an already-loaded parent thread. Accepts the same permission override rules as `thread/start`.
 - `thread/start`, `thread/resume`, and `thread/fork` responses include the legacy `sandbox` compatibility projection. Experimental clients can read response `permissionProfile` for the exact active runtime permissions and `activePermissionProfile` for the named or implicit built-in profile identity/provenance when known.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
@@ -312,6 +312,21 @@ To branch from a stored session, call `thread/fork` with the `thread.id`. This c
 ```
 
 Like `thread/resume`, experimental clients can pass `excludeTurns: true` to `thread/fork` to return only thread metadata in `thread.turns` and page history with `thread/turns/list`. In that mode the server skips replaying restored `thread/tokenUsage/updated`, which keeps the fork path from rebuilding turns just to attribute historical usage.
+
+`thread/start` and `thread/fork` also accept an optional `subAgentSpawn` object:
+
+```json
+{
+  "parentThreadId": "thr_parent",
+  "agentNickname": "Scout",
+  "agentRole": "btw"
+}
+```
+
+When present, the new thread is created with `source = { "subAgent": { "threadSpawn": ... } }`.
+The `parentThreadId` must reference a thread that is currently loaded in the app-server process.
+
+Experimental API: `thread/start`, `thread/resume`, and `thread/fork` accept `persistExtendedHistory: true` to persist a richer subset of ThreadItems for non-lossy history when calling `thread/read`, `thread/resume`, and `thread/fork` later. This does not backfill events that were not persisted previously.
 
 ### Example: List threads (with pagination & filters)
 

@@ -9,6 +9,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::SubAgentSpawnParams;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadReadParams;
@@ -35,9 +36,9 @@ use codex_app_server_client::AppServerRequestHandle;
 
 const BTW_DEVELOPER_INSTRUCTIONS: &str = concat!(
     "This is a hidden `/btw` discussion thread. ",
-    "Treat it as a temporary scratchpad that must not mutate the workspace or persistent state. ",
-    "Do not write files, apply patches, spawn agents, or perform side-effectful actions. ",
-    "If you need to inspect local context, keep it read-only and concise. ",
+    "Treat it as a temporary scratchpad that runs with the same approval and sandbox settings ",
+    "as the source thread. ",
+    "You may inspect local context and use tools that are allowed by that thread. ",
     "Your answer will be shown to the user in a temporary confirmation view and may be inserted ",
     "back into the main composer."
 );
@@ -53,6 +54,13 @@ pub(crate) struct BtwSessionState {
     pub(crate) last_status: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct BtwPermissions {
+    pub(super) approval_policy: AskForApproval,
+    pub(super) approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
+    pub(super) sandbox_policy: SandboxPolicy,
+}
+
 impl App {
     pub(crate) async fn start_btw_discussion(
         &mut self,
@@ -66,7 +74,13 @@ impl App {
             return;
         }
 
-        let thread_id = match self.start_btw_thread(app_server).await {
+        let permissions = self.btw_permissions().await;
+        let agent_nickname = btw_agent_nickname(trimmed_prompt);
+        let subagent_spawn = self.btw_subagent_spawn(&agent_nickname);
+        let thread_id = match self
+            .start_btw_thread(app_server, &permissions, subagent_spawn.as_ref())
+            .await
+        {
             Ok(thread_id) => thread_id,
             Err(err) => {
                 self.chat_widget
@@ -76,7 +90,7 @@ impl App {
         };
         self.upsert_agent_picker_thread(
             thread_id,
-            Some(btw_agent_nickname(trimmed_prompt)),
+            Some(agent_nickname),
             Some("btw".to_string()),
             /*is_closed*/ false,
         );
@@ -87,9 +101,9 @@ impl App {
                 thread_id,
                 btw_turn_input(trimmed_prompt),
                 self.btw_turn_cwd_path(app_server),
-                AskForApproval::Never,
-                self.config.approvals_reviewer,
-                SandboxPolicy::new_read_only_policy(),
+                permissions.approval_policy,
+                permissions.approvals_reviewer,
+                permissions.sandbox_policy.clone(),
                 self.chat_widget.current_model().to_string(),
                 self.chat_widget.current_reasoning_effort(),
                 /*summary*/ None,
@@ -143,7 +157,7 @@ impl App {
             return None;
         }
 
-        let reason = btw_request_rejection_reason(request);
+        let reason = btw_request_rejection_reason(request)?;
         session.last_status = Some(reason.clone());
         self.open_btw_failure_popup(&format!("`/btw` cannot continue: {reason}"));
         Some(reason)
@@ -294,13 +308,24 @@ impl App {
         }
     }
 
-    async fn start_btw_thread(&self, app_server: &AppServerSession) -> Result<ThreadId, String> {
+    async fn start_btw_thread(
+        &self,
+        app_server: &AppServerSession,
+        permissions: &BtwPermissions,
+        subagent_spawn: Option<&SubAgentSpawnParams>,
+    ) -> Result<ThreadId, String> {
         let request_handle = app_server.request_handle();
         if let Some(thread_id) = self.btw_fork_source_thread_id(&request_handle).await? {
             let response: ThreadForkResponse = request_handle
                 .request_typed(ClientRequest::ThreadFork {
                     request_id: request_id(),
-                    params: btw_thread_fork_params(self, thread_id, app_server),
+                    params: btw_thread_fork_params(
+                        self,
+                        thread_id,
+                        app_server,
+                        permissions,
+                        subagent_spawn,
+                    ),
                 })
                 .await
                 .map_err(|err| format!("failed to fork temporary thread: {err}"))?;
@@ -310,7 +335,7 @@ impl App {
             let response: ThreadStartResponse = request_handle
                 .request_typed(ClientRequest::ThreadStart {
                     request_id: request_id(),
-                    params: btw_thread_start_params(self, app_server),
+                    params: btw_thread_start_params(self, app_server, permissions, subagent_spawn),
                 })
                 .await
                 .map_err(|err| format!("failed to start temporary thread: {err}"))?;
@@ -319,11 +344,49 @@ impl App {
         }
     }
 
+    pub(super) async fn btw_permissions(&self) -> BtwPermissions {
+        if let Some(thread_id) = self.current_displayed_thread_id()
+            && let Some(channel) = self.thread_event_channels.get(&thread_id)
+        {
+            let store = channel.store.lock().await;
+            if let Some(session) = store.session.as_ref() {
+                return BtwPermissions {
+                    approval_policy: session.approval_policy,
+                    approvals_reviewer: session.approvals_reviewer,
+                    sandbox_policy: session.sandbox_policy.clone(),
+                };
+            }
+        }
+
+        if let Some(session) = self.primary_session_configured.as_ref() {
+            return BtwPermissions {
+                approval_policy: session.approval_policy,
+                approvals_reviewer: session.approvals_reviewer,
+                sandbox_policy: session.sandbox_policy.clone(),
+            };
+        }
+
+        BtwPermissions {
+            approval_policy: self.config.permissions.approval_policy.value(),
+            approvals_reviewer: self.config.approvals_reviewer,
+            sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
+        }
+    }
+
+    fn btw_subagent_spawn(&self, agent_nickname: &str) -> Option<SubAgentSpawnParams> {
+        let parent_thread_id = self.current_displayed_thread_id()?;
+        Some(SubAgentSpawnParams {
+            parent_thread_id: parent_thread_id.to_string(),
+            agent_nickname: Some(agent_nickname.to_string()),
+            agent_role: Some("btw".to_string()),
+        })
+    }
+
     async fn btw_fork_source_thread_id(
         &self,
         request_handle: &AppServerRequestHandle,
     ) -> Result<Option<ThreadId>, String> {
-        let Some(thread_id) = self.chat_widget.thread_id() else {
+        let Some(thread_id) = self.current_displayed_thread_id() else {
             return Ok(None);
         };
 
@@ -434,46 +497,55 @@ fn btw_turn_input(prompt: &str) -> Vec<UserInput> {
     }]
 }
 
-fn btw_thread_start_params(app: &App, app_server: &AppServerSession) -> ThreadStartParams {
+pub(super) fn btw_thread_start_params(
+    app: &App,
+    app_server: &AppServerSession,
+    permissions: &BtwPermissions,
+    subagent_spawn: Option<&SubAgentSpawnParams>,
+) -> ThreadStartParams {
     ThreadStartParams {
         model: Some(app.chat_widget.current_model().to_string()),
         model_provider: (!app_server.is_remote()).then_some(app.config.model_provider_id.clone()),
         cwd: app.btw_thread_cwd(app_server),
-        approval_policy: Some(AskForApproval::Never.into()),
+        approval_policy: Some(permissions.approval_policy.into()),
         approvals_reviewer: Some(AppServerApprovalsReviewer::from(
-            app.config.approvals_reviewer,
+            permissions.approvals_reviewer,
         )),
-        sandbox: Some(SandboxMode::ReadOnly),
+        sandbox: sandbox_mode_from_policy(permissions.sandbox_policy.clone()),
         config: config_overrides(app.active_profile.as_deref()),
         developer_instructions: Some(merge_developer_instructions(
             app.config.developer_instructions.as_deref(),
         )),
         personality: app.config.personality,
         ephemeral: Some(true),
+        subagent_spawn: subagent_spawn.cloned(),
         persist_extended_history: true,
         ..ThreadStartParams::default()
     }
 }
 
-fn btw_thread_fork_params(
+pub(super) fn btw_thread_fork_params(
     app: &App,
     thread_id: ThreadId,
     app_server: &AppServerSession,
+    permissions: &BtwPermissions,
+    subagent_spawn: Option<&SubAgentSpawnParams>,
 ) -> ThreadForkParams {
     ThreadForkParams {
         thread_id: thread_id.to_string(),
         model: Some(app.chat_widget.current_model().to_string()),
         model_provider: (!app_server.is_remote()).then_some(app.config.model_provider_id.clone()),
         cwd: app.btw_thread_cwd(app_server),
-        approval_policy: Some(AskForApproval::Never.into()),
+        approval_policy: Some(permissions.approval_policy.into()),
         approvals_reviewer: Some(AppServerApprovalsReviewer::from(
-            app.config.approvals_reviewer,
+            permissions.approvals_reviewer,
         )),
-        sandbox: Some(SandboxMode::ReadOnly),
+        sandbox: sandbox_mode_from_policy(permissions.sandbox_policy.clone()),
         config: config_overrides(app.active_profile.as_deref()),
         developer_instructions: Some(merge_developer_instructions(
             app.config.developer_instructions.as_deref(),
         )),
+        subagent_spawn: subagent_spawn.cloned(),
         ephemeral: true,
         persist_extended_history: true,
         ..ThreadForkParams::default()
@@ -487,6 +559,15 @@ fn config_overrides(active_profile: Option<&str>) -> Option<HashMap<String, serd
             serde_json::Value::String(profile.to_string()),
         )])
     })
+}
+
+fn sandbox_mode_from_policy(policy: SandboxPolicy) -> Option<SandboxMode> {
+    match policy {
+        SandboxPolicy::DangerFullAccess => Some(SandboxMode::DangerFullAccess),
+        SandboxPolicy::ReadOnly { .. } => Some(SandboxMode::ReadOnly),
+        SandboxPolicy::WorkspaceWrite { .. } => Some(SandboxMode::WorkspaceWrite),
+        SandboxPolicy::ExternalSandbox { .. } => None,
+    }
 }
 
 fn btw_agent_nickname(prompt: &str) -> String {
@@ -608,30 +689,32 @@ fn btw_failure_message(error: &str, last_status: Option<&str>) -> String {
     message
 }
 
-fn btw_request_rejection_reason(request: &ServerRequest) -> String {
+fn btw_request_rejection_reason(request: &ServerRequest) -> Option<String> {
     match request {
         ServerRequest::ToolRequestUserInput { .. } => {
-            "the hidden temporary discussion asked for interactive user input. Run the prompt in the main thread instead.".to_string()
-        }
-        ServerRequest::CommandExecutionRequestApproval { .. } => {
-            "the hidden temporary discussion requested command approval, which `/btw` does not support.".to_string()
-        }
-        ServerRequest::FileChangeRequestApproval { .. } => {
-            "the hidden temporary discussion tried to change files, which `/btw` does not allow.".to_string()
-        }
-        ServerRequest::PermissionsRequestApproval { .. } => {
-            "the hidden temporary discussion requested extra permissions, which `/btw` does not allow.".to_string()
+            Some(
+                "the hidden temporary discussion asked for interactive user input. Run the prompt in the main thread instead.".to_string()
+            )
         }
         ServerRequest::McpServerElicitationRequest { .. } => {
-            "the hidden temporary discussion requested MCP interaction, which `/btw` cannot surface.".to_string()
+            Some(
+                "the hidden temporary discussion requested MCP interaction, which `/btw` cannot surface.".to_string()
+            )
         }
         ServerRequest::DynamicToolCall { .. } => {
-            "the hidden temporary discussion required an unsupported client-side tool call.".to_string()
+            Some(
+                "the hidden temporary discussion required an unsupported client-side tool call.".to_string()
+            )
         }
+        ServerRequest::CommandExecutionRequestApproval { .. }
+        | ServerRequest::FileChangeRequestApproval { .. }
+        | ServerRequest::PermissionsRequestApproval { .. } => None,
         ServerRequest::ChatgptAuthTokensRefresh { .. }
         | ServerRequest::ApplyPatchApproval { .. }
         | ServerRequest::ExecCommandApproval { .. } => {
-            "the hidden temporary discussion required an unsupported client-side request.".to_string()
+            Some(
+                "the hidden temporary discussion required an unsupported client-side request.".to_string()
+            )
         }
     }
 }

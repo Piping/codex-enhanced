@@ -34,6 +34,20 @@ pub enum ThreadStartSource {
     Clear,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SubAgentSpawnParams {
+    /// Loaded parent thread whose spawn tree should own the new child thread.
+    pub parent_thread_id: String,
+    /// Optional nickname shown in thread pickers for the spawned child thread.
+    #[ts(optional = nullable)]
+    pub agent_nickname: Option<String>,
+    /// Optional role shown in thread pickers for the spawned child thread.
+    #[ts(optional = nullable)]
+    pub agent_role: Option<String>,
+}
+
 #[derive(Serialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -134,6 +148,9 @@ pub struct ThreadStartParams {
     pub ephemeral: Option<bool>,
     #[ts(optional = nullable)]
     pub session_start_source: Option<ThreadStartSource>,
+    #[serde(rename = "subAgentSpawn")]
+    #[ts(rename = "subAgentSpawn", optional = nullable)]
+    pub subagent_spawn: Option<SubAgentSpawnParams>,
     /// Optional client-supplied analytics source classification for this thread.
     #[ts(optional = nullable)]
     pub thread_source: Option<ThreadSource>,
@@ -389,6 +406,9 @@ pub struct ThreadForkParams {
     pub base_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub developer_instructions: Option<String>,
+    #[serde(rename = "subAgentSpawn")]
+    #[ts(rename = "subAgentSpawn", optional = nullable)]
+    pub subagent_spawn: Option<SubAgentSpawnParams>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
     /// Optional client-supplied analytics source classification for this forked thread.
