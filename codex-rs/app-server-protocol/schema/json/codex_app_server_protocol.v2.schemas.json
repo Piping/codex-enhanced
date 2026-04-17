@@ -10453,6 +10453,32 @@
         }
       ]
     },
+    "SubAgentSpawnParams": {
+      "properties": {
+        "agentNickname": {
+          "description": "Optional nickname shown in thread pickers for the spawned child thread.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agentRole": {
+          "description": "Optional role shown in thread pickers for the spawned child thread.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parentThreadId": {
+          "description": "Loaded parent thread whose spawn tree should own the new child thread.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "parentThreadId"
+      ],
+      "type": "object"
+    },
     "TerminalInteractionNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -10821,6 +10847,16 @@
                   "type": "null"
                 }
               ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subAgentSpawn": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SubAgentSpawnParams"
             },
             {
               "type": "null"
@@ -12492,6 +12528,16 @@
           "anyOf": [
             {
               "$ref": "#/definitions/ThreadStartSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subAgentSpawn": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SubAgentSpawnParams"
             },
             {
               "type": "null"

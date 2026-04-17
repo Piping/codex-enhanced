@@ -598,7 +598,10 @@ async fn unified_exec_end_after_task_complete_is_suppressed() {
     );
     drain_insert_history(&mut rx);
 
-    chat.on_task_complete(/*last_agent_message*/ None, /*from_replay*/ false);
+    chat.on_task_complete(
+        /*last_agent_message*/ None, /*turn_duration_ms*/ None,
+        /*from_replay*/ false,
+    );
     end_exec(&mut chat, begin, "", "", /*exit_code*/ 0);
 
     let cells = drain_insert_history(&mut rx);
@@ -612,7 +615,10 @@ async fn unified_exec_end_after_task_complete_is_suppressed() {
 async fn unified_exec_interaction_after_task_complete_is_suppressed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.on_task_started();
-    chat.on_task_complete(/*last_agent_message*/ None, /*from_replay*/ false);
+    chat.on_task_complete(
+        /*last_agent_message*/ None, /*turn_duration_ms*/ None,
+        /*from_replay*/ false,
+    );
 
     chat.handle_codex_event(Event {
         id: "call-1".to_string(),

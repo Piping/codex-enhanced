@@ -73,6 +73,32 @@
         "flex"
       ],
       "type": "string"
+    },
+    "SubAgentSpawnParams": {
+      "properties": {
+        "agentNickname": {
+          "description": "Optional nickname shown in thread pickers for the spawned child thread.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agentRole": {
+          "description": "Optional role shown in thread pickers for the spawned child thread.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parentThreadId": {
+          "description": "Loaded parent thread whose spawn tree should own the new child thread.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "parentThreadId"
+      ],
+      "type": "object"
     }
   },
   "description": "There are two ways to fork a thread: 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread. 2. By path: load the thread from disk by path and fork it into a new thread.\n\nIf using path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
@@ -160,6 +186,16 @@
               "type": "null"
             }
           ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "subAgentSpawn": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/SubAgentSpawnParams"
         },
         {
           "type": "null"

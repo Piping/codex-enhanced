@@ -2272,6 +2272,7 @@ impl CodexMessageProcessor {
             personality,
             ephemeral,
             session_start_source,
+            subagent_spawn,
             persist_extended_history,
         } = params;
         let mut typesafe_overrides = self.build_thread_config_overrides(
@@ -2315,6 +2316,7 @@ impl CodexMessageProcessor {
                 typesafe_overrides,
                 dynamic_tools,
                 session_start_source,
+                subagent_spawn,
                 persist_extended_history,
                 service_name,
                 experimental_raw_events,
@@ -2391,6 +2393,7 @@ impl CodexMessageProcessor {
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
+        subagent_spawn: Option<codex_app_server_protocol::SubAgentSpawnParams>,
         persist_extended_history: bool,
         service_name: Option<String>,
         experimental_raw_events: bool,
@@ -2501,6 +2504,21 @@ impl CodexMessageProcessor {
         }
 
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
+        let session_source_override = match resolve_subagent_spawn_source(
+            &listener_task_context.thread_manager,
+            subagent_spawn,
+        )
+        .await
+        {
+            Ok(source) => source,
+            Err(error) => {
+                listener_task_context
+                    .outgoing
+                    .send_error(request_id, error)
+                    .await;
+                return;
+            }
+        };
         let dynamic_tools = dynamic_tools.unwrap_or_default();
         let core_dynamic_tools = if dynamic_tools.is_empty() {
             Vec::new()
@@ -2529,28 +2547,47 @@ impl CodexMessageProcessor {
         };
         let core_dynamic_tool_count = core_dynamic_tools.len();
 
-        match listener_task_context
-            .thread_manager
-            .start_thread_with_tools_and_service_name(
-                config,
-                match session_start_source
-                    .unwrap_or(codex_app_server_protocol::ThreadStartSource::Startup)
-                {
-                    codex_app_server_protocol::ThreadStartSource::Startup => InitialHistory::New,
-                    codex_app_server_protocol::ThreadStartSource::Clear => InitialHistory::Cleared,
-                },
-                core_dynamic_tools,
-                persist_extended_history,
-                service_name,
-                request_trace,
-            )
-            .instrument(tracing::info_span!(
-                "app_server.thread_start.create_thread",
-                otel.name = "app_server.thread_start.create_thread",
-                thread_start.dynamic_tool_count = core_dynamic_tool_count,
-                thread_start.persist_extended_history = persist_extended_history,
-            ))
-            .await
+        let initial_history = match session_start_source
+            .unwrap_or(codex_app_server_protocol::ThreadStartSource::Startup)
+        {
+            codex_app_server_protocol::ThreadStartSource::Startup => InitialHistory::New,
+            codex_app_server_protocol::ThreadStartSource::Clear => InitialHistory::Cleared,
+        };
+        match async {
+            if let Some(session_source) = session_source_override {
+                listener_task_context
+                    .thread_manager
+                    .start_thread_with_tools_and_service_name_for_source(
+                        config,
+                        initial_history,
+                        session_source,
+                        core_dynamic_tools,
+                        persist_extended_history,
+                        service_name,
+                        request_trace,
+                    )
+                    .await
+            } else {
+                listener_task_context
+                    .thread_manager
+                    .start_thread_with_tools_and_service_name(
+                        config,
+                        initial_history,
+                        core_dynamic_tools,
+                        persist_extended_history,
+                        service_name,
+                        request_trace,
+                    )
+                    .await
+            }
+        }
+        .instrument(tracing::info_span!(
+            "app_server.thread_start.create_thread",
+            otel.name = "app_server.thread_start.create_thread",
+            thread_start.dynamic_tool_count = core_dynamic_tool_count,
+            thread_start.persist_extended_history = persist_extended_history,
+        ))
+        .await
         {
             Ok(new_conv) => {
                 let NewThread {
@@ -4563,6 +4600,7 @@ impl CodexMessageProcessor {
             config: cli_overrides,
             base_instructions,
             developer_instructions,
+            subagent_spawn,
             ephemeral,
             persist_extended_history,
         } = params;
@@ -4673,23 +4711,42 @@ impl CodexMessageProcessor {
 
         let fallback_model_provider = config.model_provider_id.clone();
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
+        let session_source_override =
+            match resolve_subagent_spawn_source(&self.thread_manager, subagent_spawn).await {
+                Ok(source) => source,
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
 
         let NewThread {
             thread_id,
             thread: forked_thread,
             session_configured,
             ..
-        } = match self
-            .thread_manager
-            .fork_thread(
-                ForkSnapshot::Interrupted,
-                config,
-                rollout_path.clone(),
-                persist_extended_history,
-                self.request_trace_context(&request_id).await,
-            )
-            .await
-        {
+        } = match if let Some(session_source) = session_source_override {
+            self.thread_manager
+                .fork_thread_for_source(
+                    ForkSnapshot::Interrupted,
+                    config,
+                    rollout_path.clone(),
+                    session_source,
+                    persist_extended_history,
+                    self.request_trace_context(&request_id).await,
+                )
+                .await
+        } else {
+            self.thread_manager
+                .fork_thread(
+                    ForkSnapshot::Interrupted,
+                    config,
+                    rollout_path.clone(),
+                    persist_extended_history,
+                    self.request_trace_context(&request_id).await,
+                )
+                .await
+        } {
             Ok(thread) => thread,
             Err(err) => {
                 match err {
@@ -9576,6 +9633,49 @@ fn with_thread_spawn_agent_metadata(
         ),
         _ => source,
     }
+}
+
+async fn resolve_subagent_spawn_source(
+    thread_manager: &codex_core::ThreadManager,
+    subagent_spawn: Option<codex_app_server_protocol::SubAgentSpawnParams>,
+) -> Result<Option<codex_protocol::protocol::SessionSource>, JSONRPCErrorError> {
+    let Some(subagent_spawn) = subagent_spawn else {
+        return Ok(None);
+    };
+
+    let parent_thread_id =
+        ThreadId::from_string(&subagent_spawn.parent_thread_id).map_err(|err| {
+            JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("invalid subAgentSpawn.parentThreadId: {err}"),
+                data: None,
+            }
+        })?;
+    let parent_thread = thread_manager
+        .get_thread(parent_thread_id)
+        .await
+        .map_err(|err| JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            message: format!("subAgentSpawn.parentThreadId must reference a loaded thread: {err}"),
+            data: None,
+        })?;
+    let parent_snapshot = parent_thread.config_snapshot().await;
+    let depth = match parent_snapshot.session_source {
+        codex_protocol::protocol::SessionSource::SubAgent(
+            codex_protocol::protocol::SubAgentSource::ThreadSpawn { depth, .. },
+        ) => depth.saturating_add(1),
+        _ => 1,
+    };
+
+    Ok(Some(codex_protocol::protocol::SessionSource::SubAgent(
+        codex_protocol::protocol::SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth,
+            agent_path: None,
+            agent_nickname: subagent_spawn.agent_nickname,
+            agent_role: subagent_spawn.agent_role,
+        },
+    )))
 }
 
 fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {

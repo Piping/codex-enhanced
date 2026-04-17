@@ -1,4 +1,7 @@
 use super::*;
+use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
+use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::SubAgentSpawnParams;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -89,6 +92,117 @@ async fn start_btw_discussion_falls_back_to_fresh_thread_when_current_thread_can
     );
     assert!(app.thread_event_channels.contains_key(&btw_thread_id));
     Ok(())
+}
+
+#[tokio::test]
+async fn btw_thread_start_params_inherit_visible_thread_permissions() -> Result<()> {
+    let mut app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    let session = ThreadSessionState {
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        sandbox_policy: SandboxPolicy::DangerFullAccess,
+        ..test_thread_session(thread_id, test_path_buf("/tmp/project"))
+    };
+    app.primary_thread_id = Some(thread_id);
+    app.active_thread_id = Some(thread_id);
+    app.chat_widget.handle_thread_session(session.clone());
+    app.thread_event_channels.insert(
+        thread_id,
+        ThreadEventChannel::new_with_session(/*capacity*/ 1, session.clone(), Vec::new()),
+    );
+
+    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let permissions = app.btw_permissions().await;
+    let subagent_spawn = Some(SubAgentSpawnParams {
+        parent_thread_id: thread_id.to_string(),
+        agent_nickname: Some("Scout".to_string()),
+        agent_role: Some("btw".to_string()),
+    });
+    let params = crate::app::btw::btw_thread_start_params(
+        &app,
+        &app_server,
+        &permissions,
+        subagent_spawn.as_ref(),
+    );
+
+    assert_eq!(permissions.approval_policy, session.approval_policy);
+    assert_eq!(permissions.approvals_reviewer, session.approvals_reviewer);
+    assert_eq!(permissions.sandbox_policy, session.sandbox_policy);
+    assert_eq!(params.approval_policy, Some(session.approval_policy.into()));
+    assert_eq!(
+        params.approvals_reviewer,
+        Some(AppServerApprovalsReviewer::from(session.approvals_reviewer))
+    );
+    assert_eq!(params.sandbox, Some(SandboxMode::DangerFullAccess));
+    assert_eq!(params.subagent_spawn, subagent_spawn);
+    Ok(())
+}
+
+#[tokio::test]
+async fn btw_permissions_fall_back_to_config_when_thread_session_is_missing() -> Result<()> {
+    let mut app = make_test_app().await;
+    app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    app.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)?;
+    app.config
+        .permissions
+        .sandbox_policy
+        .set(SandboxPolicy::new_workspace_write_policy())?;
+
+    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let permissions = app.btw_permissions().await;
+    let params = crate::app::btw::btw_thread_start_params(
+        &app,
+        &app_server,
+        &permissions,
+        /*subagent_spawn*/ None,
+    );
+
+    assert_eq!(permissions.approval_policy, AskForApproval::OnRequest);
+    assert_eq!(
+        permissions.approvals_reviewer,
+        ApprovalsReviewer::GuardianSubagent
+    );
+    assert_eq!(
+        permissions.sandbox_policy,
+        SandboxPolicy::new_workspace_write_policy()
+    );
+    assert_eq!(
+        params.approval_policy,
+        Some(AskForApproval::OnRequest.into())
+    );
+    assert_eq!(
+        params.approvals_reviewer,
+        Some(AppServerApprovalsReviewer::GuardianSubagent)
+    );
+    assert_eq!(params.sandbox, Some(SandboxMode::WorkspaceWrite));
+    assert_eq!(params.subagent_spawn, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn btw_command_approval_uses_standard_request_flow() {
+    let mut app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    app.btw_session = Some(BtwSessionState {
+        thread_id,
+        final_message: None,
+        last_status: None,
+    });
+
+    let reason = app.reject_btw_request(
+        thread_id,
+        &exec_approval_request(thread_id, "turn-btw", "call-1", /*approval_id*/ None),
+    );
+
+    assert_eq!(reason, None);
 }
 
 #[tokio::test]

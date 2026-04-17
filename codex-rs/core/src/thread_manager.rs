@@ -41,6 +41,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::W3cTraceContext;
@@ -515,6 +516,37 @@ impl ThreadManager {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub async fn start_thread_with_tools_and_service_name_for_source(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        session_source: SessionSource,
+        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+        persist_extended_history: bool,
+        metrics_service_name: Option<String>,
+        parent_trace: Option<W3cTraceContext>,
+    ) -> CodexResult<NewThread> {
+        let (inherited_shell_snapshot, inherited_exec_policy) = self
+            .inherited_resources_for_source(&session_source, &config)
+            .await;
+        Box::pin(self.state.spawn_thread_with_source(
+            config,
+            initial_history,
+            Arc::clone(&self.state.auth_manager),
+            self.agent_control(),
+            session_source,
+            dynamic_tools,
+            persist_extended_history,
+            metrics_service_name,
+            inherited_shell_snapshot,
+            inherited_exec_policy,
+            parent_trace,
+            /*user_shell_override*/ None,
+        ))
+        .await
+    }
+
     pub async fn resume_thread_from_rollout(
         &self,
         config: Config,
@@ -704,6 +736,83 @@ impl ThreadManager {
         .await
     }
 
+    pub async fn fork_thread_for_source<S>(
+        &self,
+        snapshot: S,
+        config: Config,
+        path: PathBuf,
+        session_source: SessionSource,
+        persist_extended_history: bool,
+        parent_trace: Option<W3cTraceContext>,
+    ) -> CodexResult<NewThread>
+    where
+        S: Into<ForkSnapshot>,
+    {
+        let (inherited_shell_snapshot, inherited_exec_policy) = self
+            .inherited_resources_for_source(&session_source, &config)
+            .await;
+        let snapshot = snapshot.into();
+        let history = RolloutRecorder::get_rollout_history(&path).await?;
+        let snapshot_state = snapshot_turn_state(&history);
+        let history = match snapshot {
+            ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
+                truncate_before_nth_user_message(history, nth_user_message, &snapshot_state)
+            }
+            ForkSnapshot::Interrupted => {
+                let history = match history {
+                    InitialHistory::New => InitialHistory::New,
+                    InitialHistory::Cleared => InitialHistory::Cleared,
+                    InitialHistory::Forked(history) => InitialHistory::Forked(history),
+                    InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
+                };
+                if snapshot_state.ends_mid_turn {
+                    append_interrupted_boundary(history, snapshot_state.active_turn_id)
+                } else {
+                    history
+                }
+            }
+        };
+        Box::pin(self.state.fork_thread_with_source(
+            config,
+            history,
+            self.agent_control(),
+            session_source,
+            persist_extended_history,
+            inherited_shell_snapshot,
+            inherited_exec_policy,
+            parent_trace,
+        ))
+        .await
+    }
+
+    async fn inherited_resources_for_source(
+        &self,
+        session_source: &SessionSource,
+        child_config: &Config,
+    ) -> (
+        Option<Arc<ShellSnapshot>>,
+        Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+    ) {
+        let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        }) = session_source
+        else {
+            return (None, None);
+        };
+
+        let Ok(parent_thread) = self.state.get_thread(*parent_thread_id).await else {
+            return (None, None);
+        };
+
+        let inherited_shell_snapshot = parent_thread.codex.session.user_shell().shell_snapshot();
+        let parent_config = parent_thread.codex.session.get_config().await;
+        let inherited_exec_policy =
+            crate::exec_policy::child_uses_parent_exec_policy(&parent_config, child_config)
+                .then(|| Arc::clone(&parent_thread.codex.session.services.exec_policy));
+
+        (inherited_shell_snapshot, inherited_exec_policy)
+    }
+
     pub(crate) fn agent_control(&self) -> AgentControl {
         AgentControl::new(Arc::downgrade(&self.state))
     }
@@ -842,6 +951,7 @@ impl ThreadManagerState {
         persist_extended_history: bool,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -854,7 +964,7 @@ impl ThreadManagerState {
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
             inherited_exec_policy,
-            /*parent_trace*/ None,
+            parent_trace,
             /*user_shell_override*/ None,
         ))
         .await

@@ -12,6 +12,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionSource;
+use codex_app_server_protocol::SubAgentSpawnParams;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
@@ -28,6 +29,7 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -237,6 +239,90 @@ async fn thread_fork_emits_restored_token_usage_before_next_turn() -> Result<()>
     assert_eq!(notification.token_usage.total.reasoning_output_tokens, 10);
     assert_eq!(notification.token_usage.last.total_tokens, 90);
     assert_eq!(notification.token_usage.model_context_window, Some(200_000));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_fork_can_attach_subagent_thread_spawn_source() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let parent_request_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let parent_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(parent_request_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread: parent, .. } =
+        to_response::<ThreadStartResponse>(parent_response)?;
+
+    let turn_request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: parent.id.clone(),
+            input: vec![UserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_request_id)),
+    )
+    .await??;
+    let _: TurnStartResponse = to_response::<TurnStartResponse>(turn_response)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let fork_request_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: parent.id.clone(),
+            subagent_spawn: Some(SubAgentSpawnParams {
+                parent_thread_id: parent.id.clone(),
+                agent_nickname: Some("Scout".to_string()),
+                agent_role: Some("btw".to_string()),
+            }),
+            ..Default::default()
+        })
+        .await?;
+    let fork_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fork_request_id)),
+    )
+    .await??;
+    let ThreadForkResponse { thread: child, .. } =
+        to_response::<ThreadForkResponse>(fork_response)?;
+
+    assert_eq!(child.forked_from_id.as_deref(), Some(parent.id.as_str()));
+    assert_eq!(child.agent_nickname.as_deref(), Some("Scout"));
+    assert_eq!(child.agent_role.as_deref(), Some("btw"));
+    match child.source {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth,
+            agent_path,
+            agent_nickname,
+            agent_role,
+        }) => {
+            assert_eq!(parent_thread_id.to_string(), parent.id);
+            assert_eq!(depth, 1);
+            assert_eq!(agent_path, None);
+            assert_eq!(agent_nickname.as_deref(), Some("Scout"));
+            assert_eq!(agent_role.as_deref(), Some("btw"));
+        }
+        other => panic!("expected thread spawn source, got {other:?}"),
+    }
 
     Ok(())
 }

@@ -397,6 +397,7 @@ impl AgentControl {
                 /*persist_extended_history*/ false,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
+                /*parent_trace*/ None,
             )
             .await
     }

@@ -14,6 +14,8 @@ use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::SessionSource;
+use codex_app_server_protocol::SubAgentSpawnParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
@@ -27,6 +29,7 @@ use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -208,6 +211,66 @@ async fn thread_start_response_includes_loaded_instruction_sources() -> Result<(
     .collect::<Vec<_>>();
 
     assert_eq!(instruction_sources, expected_instruction_sources);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_can_attach_subagent_thread_spawn_source() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let parent_request_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let parent_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(parent_request_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread: parent, .. } =
+        to_response::<ThreadStartResponse>(parent_response)?;
+
+    let child_request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            subagent_spawn: Some(SubAgentSpawnParams {
+                parent_thread_id: parent.id.clone(),
+                agent_nickname: Some("Scout".to_string()),
+                agent_role: Some("btw".to_string()),
+            }),
+            ..Default::default()
+        })
+        .await?;
+    let child_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(child_request_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread: child, .. } =
+        to_response::<ThreadStartResponse>(child_response)?;
+
+    assert_eq!(child.agent_nickname.as_deref(), Some("Scout"));
+    assert_eq!(child.agent_role.as_deref(), Some("btw"));
+    match child.source {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth,
+            agent_path,
+            agent_nickname,
+            agent_role,
+        }) => {
+            assert_eq!(parent_thread_id.to_string(), parent.id);
+            assert_eq!(depth, 1);
+            assert_eq!(agent_path, None);
+            assert_eq!(agent_nickname.as_deref(), Some("Scout"));
+            assert_eq!(agent_role.as_deref(), Some("btw"));
+        }
+        other => panic!("expected thread spawn source, got {other:?}"),
+    }
 
     Ok(())
 }

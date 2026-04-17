@@ -73,6 +73,7 @@ use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::user_input::TextElement;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::format_env_display;
+use codex_utils_elapsed::format_duration;
 use image::DynamicImage;
 use image::ImageReader;
 use ratatui::prelude::*;
@@ -2883,6 +2884,7 @@ pub(crate) fn new_reasoning_raw_block(
 /// the timestamp and only show work-related labels.
 pub struct FinalMessageSeparator {
     timestamp_label: Option<String>,
+    turn_duration: Option<std::time::Duration>,
     elapsed_seconds: Option<u64>,
     runtime_metrics: Option<RuntimeMetricsSummary>,
 }
@@ -2890,11 +2892,13 @@ impl FinalMessageSeparator {
     /// Creates a separator; `elapsed_seconds` typically comes from the status indicator timer.
     pub(crate) fn new(
         timestamp_label: Option<String>,
+        turn_duration: Option<std::time::Duration>,
         elapsed_seconds: Option<u64>,
         runtime_metrics: Option<RuntimeMetricsSummary>,
     ) -> Self {
         Self {
             timestamp_label,
+            turn_duration,
             elapsed_seconds,
             runtime_metrics,
         }
@@ -2906,7 +2910,9 @@ impl HistoryCell for FinalMessageSeparator {
         if let Some(timestamp_label) = self.timestamp_label.as_ref() {
             label_parts.push(timestamp_label.clone());
         }
-        if let Some(elapsed_seconds) = self
+        if let Some(turn_duration) = self.turn_duration {
+            label_parts.push(format!("Worked for {}", format_duration(turn_duration)));
+        } else if let Some(elapsed_seconds) = self
             .elapsed_seconds
             .filter(|seconds| *seconds > 60)
             .map(super::status_indicator_widget::fmt_elapsed_compact)
@@ -3347,7 +3353,8 @@ mod tests {
             turn_ttft_ms: 0,
             turn_ttfm_ms: 0,
         };
-        let cell = FinalMessageSeparator::new(None, Some(12), Some(summary));
+        let cell =
+            FinalMessageSeparator::new(None, /*turn_duration*/ None, Some(12), Some(summary));
         let rendered = render_lines(&cell.display_lines(/*width*/ 600));
 
         assert_eq!(rendered.len(), 1);
@@ -3365,7 +3372,12 @@ mod tests {
 
     #[test]
     fn final_message_separator_includes_worked_label_after_one_minute() {
-        let cell = FinalMessageSeparator::new(None, Some(61), /*runtime_metrics*/ None);
+        let cell = FinalMessageSeparator::new(
+            None,
+            /*turn_duration*/ None,
+            Some(61),
+            /*runtime_metrics*/ None,
+        );
         let rendered = render_lines(&cell.display_lines(/*width*/ 200));
 
         assert_eq!(rendered.len(), 1);
@@ -3373,9 +3385,24 @@ mod tests {
     }
 
     #[test]
+    fn final_message_separator_includes_exact_turn_duration() {
+        let cell = FinalMessageSeparator::new(
+            None,
+            Some(std::time::Duration::from_millis(2_000)),
+            Some(61),
+            /*runtime_metrics*/ None,
+        );
+        let rendered = render_lines(&cell.display_lines(/*width*/ 200));
+
+        assert_eq!(rendered.len(), 1);
+        assert!(rendered[0].contains("Worked for 2.00s"));
+    }
+
+    #[test]
     fn final_message_separator_includes_timestamp_label() {
         let cell = FinalMessageSeparator::new(
             Some("2026-04-08 03:04:05 +08:00".to_string()),
+            /*turn_duration*/ None,
             /*elapsed_seconds*/ None,
             /*runtime_metrics*/ None,
         );

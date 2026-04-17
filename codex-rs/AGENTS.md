@@ -22,4 +22,5 @@ Detailed task history and validation logs live in [progress.md](codex-rs/progres
 - After Rust changes, keep the existing local validation chain: `just fmt`, `cargo build -p codex-cli`, the relevant crate tests, and scoped `just fix -p <crate>` when the change is large enough to justify it.
 - Before PTY verification with the local binary, sign it first:
   `sudo codesign --sign - --force --preserve-metadata=entitlements,requirements,flags,runtime codex-rs/target/debug/codex`
+- On the current local `nightly + cranelift` setup for macOS arm64, full `cargo test -p codex-tui` can still abort in CRC32-heavy paths with `llvm.aarch64.crc32b is not yet supported`; treat that as a backend limitation unless the failing stack clearly points at the change under review.
 - Treat long-running GitHub Actions release matrix jobs as normal unless logs or failed steps show otherwise; `gh run watch` alone is not enough to distinguish slow compile time from a real hang.

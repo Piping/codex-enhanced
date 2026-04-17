@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 1377
 expression: combined
 ---
 
@@ -8,4 +9,4 @@ expression: combined
 
 • Timestamp rendered.
 
-─ 2026-04-08 03:04:05 +08:00 ───────────────────────────────────────────────────
+─ 2026-04-08 03:04:05 +08:00 • Worked for 2.00s ────────────────────────────────

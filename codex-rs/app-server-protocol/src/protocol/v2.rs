@@ -443,6 +443,20 @@ pub enum ThreadStartSource {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct SubAgentSpawnParams {
+    /// Loaded parent thread whose spawn tree should own the new child thread.
+    pub parent_thread_id: String,
+    /// Optional nickname shown in thread pickers for the spawned child thread.
+    #[ts(optional = nullable)]
+    pub agent_nickname: Option<String>,
+    /// Optional role shown in thread pickers for the spawned child thread.
+    #[ts(optional = nullable)]
+    pub agent_role: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct HookOutputEntry {
     pub kind: HookOutputEntryKind,
     pub text: String,
@@ -2722,6 +2736,9 @@ pub struct ThreadStartParams {
     pub ephemeral: Option<bool>,
     #[ts(optional = nullable)]
     pub session_start_source: Option<ThreadStartSource>,
+    #[serde(rename = "subAgentSpawn")]
+    #[ts(rename = "subAgentSpawn", optional = nullable)]
+    pub subagent_spawn: Option<SubAgentSpawnParams>,
     #[experimental("thread/start.dynamicTools")]
     #[ts(optional = nullable)]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
@@ -2919,6 +2936,9 @@ pub struct ThreadForkParams {
     pub base_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub developer_instructions: Option<String>,
+    #[serde(rename = "subAgentSpawn")]
+    #[ts(rename = "subAgentSpawn", optional = nullable)]
+    pub subagent_spawn: Option<SubAgentSpawnParams>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
     /// If true, persist additional rollout EventMsg variants required to
