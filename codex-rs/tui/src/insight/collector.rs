@@ -3,10 +3,10 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::legacy_core::config::Config;
 use anyhow::Context;
 use chrono::DateTime;
 use chrono::Utc;
-use codex_core::config::Config;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::DynamicToolCallResponseEvent;
 use codex_protocol::protocol::EventMsg;
@@ -28,13 +28,16 @@ use super::types::CollectionResult;
 pub(crate) async fn collect_sessions(config: &Config) -> anyhow::Result<CollectionResult> {
     let mut rollout_paths = Vec::new();
     collect_rollout_paths(
-        config.codex_home.join(SESSIONS_SUBDIR),
+        config.codex_home.join(SESSIONS_SUBDIR).to_path_buf(),
         /*archived*/ false,
         &mut rollout_paths,
     )
     .await?;
     collect_rollout_paths(
-        config.codex_home.join(ARCHIVED_SESSIONS_SUBDIR),
+        config
+            .codex_home
+            .join(ARCHIVED_SESSIONS_SUBDIR)
+            .to_path_buf(),
         /*archived*/ true,
         &mut rollout_paths,
     )

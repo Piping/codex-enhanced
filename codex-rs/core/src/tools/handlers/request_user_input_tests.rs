@@ -5,6 +5,7 @@ use crate::tools::context::ToolPayload;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SubAgentSource;
+use codex_tools::REQUEST_USER_INPUT_TOOL_NAME;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::sync::Arc;

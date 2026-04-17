@@ -835,7 +835,7 @@ async fn capture_and_restore_thread_input_state_preserves_profile_fallback_retry
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            cwd: PathBuf::from("/home/user/project"),
+            cwd: PathBuf::from("/home/user/project").abs(),
             reasoning_effort: Some(ReasoningEffortConfig::default()),
             history_log_id: 0,
             history_entry_count: 0,

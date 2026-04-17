@@ -12,9 +12,7 @@ pub(crate) enum KeyChordState {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum KeyChordAction {
-    UndoLastUserMessage,
-    CopyLatestOutput,
-    RespawnCurrentSession,
+    SelectAgentSlot(u8),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,14 +56,9 @@ fn handle_ctrl_x_second_key(state: &mut KeyChordState, key_event: KeyEvent) -> K
     }
 
     let resolution = match (key_event.code, key_event.modifiers) {
-        (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
-            KeyChordResolution::Matched(KeyChordAction::UndoLastUserMessage)
-        }
-        (KeyCode::Char('y'), KeyModifiers::CONTROL) => {
-            KeyChordResolution::Matched(KeyChordAction::CopyLatestOutput)
-        }
-        (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
-            KeyChordResolution::Matched(KeyChordAction::RespawnCurrentSession)
+        (KeyCode::Char(slot @ '1'..='9'), KeyModifiers::NONE) => {
+            let slot = (slot as u8) - b'0';
+            KeyChordResolution::Matched(KeyChordAction::SelectAgentSlot(slot))
         }
         (KeyCode::Char('x'), KeyModifiers::CONTROL) => KeyChordResolution::AwaitingSecondKey,
         (KeyCode::Esc, _) => KeyChordResolution::Cancelled,
@@ -85,7 +78,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn ctrl_x_ctrl_u_matches_undo_last_user_message() {
+    fn ctrl_x_digit_matches_agent_slot() {
         let mut state = KeyChordState::default();
 
         assert_eq!(
@@ -93,38 +86,8 @@ mod tests {
             KeyChordResolution::AwaitingSecondKey
         );
         assert_eq!(
-            state.handle_key_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL)),
-            KeyChordResolution::Matched(KeyChordAction::UndoLastUserMessage)
-        );
-        assert_eq!(state, KeyChordState::Idle);
-    }
-
-    #[test]
-    fn ctrl_x_ctrl_y_matches_copy_latest_output() {
-        let mut state = KeyChordState::default();
-
-        assert_eq!(
-            state.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
-            KeyChordResolution::AwaitingSecondKey
-        );
-        assert_eq!(
-            state.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL)),
-            KeyChordResolution::Matched(KeyChordAction::CopyLatestOutput)
-        );
-        assert_eq!(state, KeyChordState::Idle);
-    }
-
-    #[test]
-    fn ctrl_x_ctrl_r_matches_respawn_current_session() {
-        let mut state = KeyChordState::default();
-
-        assert_eq!(
-            state.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
-            KeyChordResolution::AwaitingSecondKey
-        );
-        assert_eq!(
-            state.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL)),
-            KeyChordResolution::Matched(KeyChordAction::RespawnCurrentSession)
+            state.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE)),
+            KeyChordResolution::Matched(KeyChordAction::SelectAgentSlot(2))
         );
         assert_eq!(state, KeyChordState::Idle);
     }
@@ -140,6 +103,21 @@ mod tests {
         assert_eq!(
             state.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
             KeyChordResolution::Forward(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE))
+        );
+        assert_eq!(state, KeyChordState::Idle);
+    }
+
+    #[test]
+    fn ctrl_x_digit_with_ctrl_modifier_is_forwarded() {
+        let mut state = KeyChordState::default();
+
+        assert_eq!(
+            state.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
+            KeyChordResolution::AwaitingSecondKey
+        );
+        assert_eq!(
+            state.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::CONTROL)),
+            KeyChordResolution::Forward(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::CONTROL))
         );
         assert_eq!(state, KeyChordState::Idle);
     }

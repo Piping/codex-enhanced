@@ -457,10 +457,8 @@ async fn test_build_specs_gpt51_codex_default() {
 }
 
 #[tokio::test]
-async fn test_build_specs_gpt5_codex_unified_exec_web_search() {
-#[test]
-fn experimental_read_and_grep_tools_register_handlers() {
-    let config = test_config();
+async fn experimental_read_and_grep_tools_register_handlers() {
+    let config = test_config().await;
     let mut model_info = construct_model_info_offline("gpt-5-codex", &config);
     model_info.experimental_supported_tools =
         vec!["read_file".to_string(), "grep_files".to_string()];
@@ -470,6 +468,7 @@ fn experimental_read_and_grep_tools_register_handlers() {
         model_info: &model_info,
         available_models: &available_models,
         features: &features,
+        image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
@@ -486,8 +485,8 @@ fn experimental_read_and_grep_tools_register_handlers() {
 
     assert!(tools.iter().any(|tool| tool.name() == "read_file"));
     assert!(tools.iter().any(|tool| tool.name() == "grep_files"));
-    assert!(registry.has_handler("read_file", /*namespace*/ None));
-    assert!(registry.has_handler("grep_files", /*namespace*/ None));
+    assert!(registry.has_handler(&ToolName::plain("read_file")));
+    assert!(registry.has_handler(&ToolName::plain("grep_files")));
 }
 
 #[tokio::test]

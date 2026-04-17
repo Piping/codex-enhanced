@@ -181,6 +181,7 @@ async fn retries_on_stream_disconnected_before_completion() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await
         .unwrap();

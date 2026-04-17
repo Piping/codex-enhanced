@@ -1361,6 +1361,8 @@ async fn completed_turn_history_renders_timestamp_separator_snapshot() {
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             last_agent_message: Some("Timestamp rendered.".into()),
+            completed_at: Some(2),
+            duration_ms: Some(2_000),
         }),
     });
 
@@ -2093,7 +2095,7 @@ async fn hook_notifications_are_hidden_when_hook_output_preference_is_disabled()
                 handler_type: AppServerHookHandlerType::Command,
                 execution_mode: AppServerHookExecutionMode::Sync,
                 scope: AppServerHookScope::Turn,
-                source_path: PathBuf::from("/tmp/hooks.json"),
+                source_path: PathBuf::from("/tmp/hooks.json").abs(),
                 display_order: 0,
                 status: AppServerHookRunStatus::Running,
                 status_message: Some("warming the shell".to_string()),
@@ -2115,7 +2117,7 @@ async fn hook_notifications_are_hidden_when_hook_output_preference_is_disabled()
                 handler_type: AppServerHookHandlerType::Command,
                 execution_mode: AppServerHookExecutionMode::Sync,
                 scope: AppServerHookScope::Turn,
-                source_path: PathBuf::from("/tmp/hooks.json"),
+                source_path: PathBuf::from("/tmp/hooks.json").abs(),
                 display_order: 0,
                 status: AppServerHookRunStatus::Completed,
                 status_message: Some("warming the shell".to_string()),

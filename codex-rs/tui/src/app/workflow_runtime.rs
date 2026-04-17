@@ -13,6 +13,7 @@ use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
+use crate::legacy_core::config::Config;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::ClientRequest;
@@ -34,7 +35,6 @@ use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
-use codex_core::config::Config;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
@@ -323,7 +323,7 @@ impl WorkflowRuntimeClient for AppServerWorkflowRuntimeClient {
                     .insert(thread_id, sender);
                 return Ok(WorkflowThreadSession {
                     thread_id: response.thread.id,
-                    cwd: response.cwd,
+                    cwd: response.cwd.to_path_buf(),
                     notifications: Arc::new(tokio::sync::Mutex::new(receiver)),
                 });
             }
@@ -353,7 +353,7 @@ impl WorkflowRuntimeClient for AppServerWorkflowRuntimeClient {
                 .insert(thread_id, sender);
             Ok(WorkflowThreadSession {
                 thread_id: response.thread.id,
-                cwd: response.cwd,
+                cwd: response.cwd.to_path_buf(),
                 notifications: Arc::new(tokio::sync::Mutex::new(receiver)),
             })
         })
@@ -388,6 +388,7 @@ impl WorkflowRuntimeClient for AppServerWorkflowRuntimeClient {
                             self.config.permissions.sandbox_policy.get().clone().into(),
                         ),
                         model: self.config.model.clone(),
+                        responsesapi_client_metadata: None,
                         service_tier: None,
                         effort: self.config.model_reasoning_effort,
                         summary: self.config.model_reasoning_summary,
@@ -1590,8 +1591,8 @@ enum WorkflowRunError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::legacy_core::config::ConfigBuilder;
     use codex_app_server_protocol::TurnCompletedNotification;
-    use codex_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
     use std::collections::VecDeque;
     use std::sync::Mutex;
@@ -2143,6 +2144,9 @@ jobs:
                         items: Vec::new(),
                         error: None,
                         status: TurnStatus::Completed,
+                        started_at: None,
+                        completed_at: None,
+                        duration_ms: None,
                     },
                 },
             ))
@@ -2220,6 +2224,9 @@ jobs:
                         items: Vec::new(),
                         error: None,
                         status: TurnStatus::Completed,
+                        started_at: None,
+                        completed_at: None,
+                        duration_ms: None,
                     },
                 },
             ))

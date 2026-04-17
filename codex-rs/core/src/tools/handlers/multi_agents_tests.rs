@@ -675,7 +675,7 @@ async fn spawn_agent_applies_requested_cwd() {
         .expect("spawned agent thread should exist")
         .config_snapshot()
         .await;
-    assert_eq!(snapshot.cwd, child_workspace);
+    assert_eq!(snapshot.cwd, child_workspace.abs());
 }
 
 #[tokio::test]
@@ -988,7 +988,7 @@ async fn multi_agent_v2_spawn_applies_requested_cwd() {
         .expect("spawned agent thread should exist")
         .config_snapshot()
         .await;
-    assert_eq!(snapshot.cwd, child_workspace);
+    assert_eq!(snapshot.cwd, child_workspace.abs());
 }
 
 #[tokio::test]

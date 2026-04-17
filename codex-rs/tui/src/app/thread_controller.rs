@@ -61,8 +61,10 @@ impl ThreadController {
                             {
                                 Ok(()) => {
                                     if let Some(summary) = summary {
-                                        let mut lines: Vec<Line<'static>> =
-                                            vec![summary.usage_line.clone().into()];
+                                        let mut lines: Vec<Line<'static>> = Vec::new();
+                                        if let Some(usage_line) = summary.usage_line.clone() {
+                                            lines.push(usage_line.into());
+                                        }
                                         if let Some(command) = summary.resume_command {
                                             let spans = vec![
                                                 "To continue this session, run ".into(),

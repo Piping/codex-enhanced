@@ -651,7 +651,7 @@ impl App {
                 text: trimmed.clone(),
                 text_elements: Vec::new(),
             }],
-            cwd: session.cwd.clone(),
+            cwd: session.cwd.to_path_buf(),
             approval_policy: clawbot_approval_policy(session.approval_policy, turn_mode),
             approvals_reviewer: Some(session.approvals_reviewer),
             sandbox_policy: session.sandbox_policy.clone(),
@@ -672,7 +672,7 @@ impl App {
                     text: trimmed,
                     text_elements: Vec::new(),
                 }],
-                session.cwd,
+                session.cwd.to_path_buf(),
                 clawbot_approval_policy(session.approval_policy, turn_mode),
                 session.approvals_reviewer,
                 session.sandbox_policy,
@@ -1124,6 +1124,9 @@ mod tests {
                 },
             ],
             error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
         };
 
         assert_eq!(
@@ -1158,6 +1161,9 @@ mod tests {
                 },
             ],
             error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
         };
 
         assert_eq!(

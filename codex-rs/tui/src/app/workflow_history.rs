@@ -264,7 +264,7 @@ impl App {
         let session = self.primary_session_configured.as_ref();
         let cwd = session
             .map(|session| session.cwd.clone())
-            .unwrap_or_else(|| self.config.cwd.to_path_buf());
+            .unwrap_or_else(|| self.config.cwd.clone());
         let approval_policy = session
             .map(|session| session.approval_policy)
             .unwrap_or_else(|| self.config.permissions.approval_policy.value());
@@ -285,7 +285,7 @@ impl App {
                 text,
                 text_elements: Vec::new(),
             }],
-            cwd,
+            cwd: cwd.to_path_buf(),
             approval_policy,
             approvals_reviewer,
             sandbox_policy,

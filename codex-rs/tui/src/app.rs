@@ -57,8 +57,6 @@ use crate::model_migration::migration_copy_for_models;
 use crate::model_migration::run_model_migration_prompt;
 use crate::multi_agents::agent_picker_status_dot_spans;
 use crate::multi_agents::format_agent_picker_item_name;
-use crate::multi_agents::next_agent_shortcut_matches;
-use crate::multi_agents::previous_agent_shortcut_matches;
 use crate::pager_overlay::Overlay;
 use crate::read_session_model;
 use crate::render::highlight::highlight_bash_to_lines;
@@ -219,8 +217,6 @@ use self::workflow_scheduler::WorkflowSchedulerState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
-const PROFILE_SWITCH_THREAD_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
-
 #[derive(Clone, Copy)]
 enum ThreadLivenessRefreshMode {
     Picker,
@@ -1315,7 +1311,10 @@ impl App {
             self.display_preferences.sync_from_config(&self.config);
             self.chat_widget
                 .sync_config_for_profile_switch(&self.config);
-            tui.set_notification_method(self.config.tui_notification_method);
+            tui.set_notification_settings(
+                self.config.tui_notifications.method,
+                self.config.tui_notifications.condition,
+            );
             self.file_search
                 .update_search_dir(self.config.cwd.to_path_buf());
             return Ok(());
@@ -1352,7 +1351,10 @@ impl App {
         self.active_profile = next_config.active_profile.clone();
         self.config = next_config;
         self.display_preferences.sync_from_config(&self.config);
-        tui.set_notification_method(self.config.tui_notification_method);
+        tui.set_notification_settings(
+            self.config.tui_notifications.method,
+            self.config.tui_notifications.condition,
+        );
         self.file_search
             .update_search_dir(self.config.cwd.to_path_buf());
         self.replace_chat_widget_with_app_server_thread(tui, app_server, next_thread)
@@ -3573,6 +3575,12 @@ impl App {
             .await
         {
             Ok(thread) => {
+                if matches!(
+                    (&mode, &existing_entry, has_replay_channel),
+                    (ThreadLivenessRefreshMode::Selection, None, false)
+                ) {
+                    return true;
+                }
                 self.upsert_agent_picker_thread(
                     thread_id,
                     thread.agent_nickname.or_else(|| {
@@ -6660,16 +6668,13 @@ impl App {
             KeyChordResolution::Forward(forwarded_key_event) => Some(forwarded_key_event),
             KeyChordResolution::Matched(action) => {
                 match action {
-                    KeyChordAction::UndoLastUserMessage => {
-                        self.undo_last_user_message();
-                    }
-                    KeyChordAction::CopyLatestOutput => {
-                        self.chat_widget.copy_latest_output_to_clipboard();
-                    }
-                    KeyChordAction::RespawnCurrentSession => {
-                        if self.chat_widget.can_run_respawn_now() {
+                    KeyChordAction::SelectAgentSlot(slot) => {
+                        if let Some(thread_id) = self
+                            .agent_navigation
+                            .thread_id_for_slot(self.primary_thread_id, slot)
+                        {
                             self.app_event_tx
-                                .send(AppEvent::Exit(ExitMode::RespawnImmediate));
+                                .send(AppEvent::SelectAgentThread(thread_id));
                         }
                     }
                 }
@@ -6681,7 +6686,7 @@ impl App {
     async fn handle_key_event(
         &mut self,
         tui: &mut tui::Tui,
-        app_server: &mut AppServerSession,
+        _app_server: &mut AppServerSession,
         key_event: KeyEvent,
     ) {
         let mut key_event = key_event;
@@ -6695,44 +6700,6 @@ impl App {
             return;
         };
         key_event = forwarded_key_event;
-
-        // Some terminals, especially on macOS, encode Option+Left/Right as Option+b/f unless
-        // enhanced keyboard reporting is available. We only treat those word-motion fallbacks as
-        // agent-switch shortcuts when the composer is empty so we never steal the expected
-        // editing behavior for moving across words inside a draft.
-        let allow_agent_word_motion_fallback = !self.enhanced_keys_supported
-            && self.chat_widget.composer_text_with_pending().is_empty();
-        if self.overlay.is_none()
-            && self.chat_widget.no_modal_or_popup_active()
-            // Alt+Left/Right are also natural word-motion keys in the composer. Keep agent
-            // fast-switch available only once the draft is empty so editing behavior wins whenever
-            // there is text on screen.
-            && self.chat_widget.composer_text_with_pending().is_empty()
-            && previous_agent_shortcut_matches(key_event, allow_agent_word_motion_fallback)
-        {
-            if let Some(thread_id) = self
-                .adjacent_thread_id_with_backfill(app_server, AgentNavigationDirection::Previous)
-                .await
-            {
-                let _ = self.select_agent_thread(tui, app_server, thread_id).await;
-            }
-            return;
-        }
-        if self.overlay.is_none()
-            && self.chat_widget.no_modal_or_popup_active()
-            // Mirror the previous-agent rule above: empty drafts may use these keys for thread
-            // switching, but non-empty drafts keep them for expected word-wise cursor motion.
-            && self.chat_widget.composer_text_with_pending().is_empty()
-            && next_agent_shortcut_matches(key_event, allow_agent_word_motion_fallback)
-        {
-            if let Some(thread_id) = self
-                .adjacent_thread_id_with_backfill(app_server, AgentNavigationDirection::Next)
-                .await
-            {
-                let _ = self.select_agent_thread(tui, app_server, thread_id).await;
-            }
-            return;
-        }
 
         match key_event {
             KeyEvent {
@@ -7088,8 +7055,6 @@ mod tests {
 
     use crate::legacy_core::config::ConfigBuilder;
     use crate::legacy_core::config::ConfigOverrides;
-    use crate::app_event::ClawbotForwardingChannel;
-    use crate::render::renderable::Renderable;
     use codex_app_server_protocol::AdditionalFileSystemPermissions;
     use codex_app_server_protocol::AdditionalNetworkPermissions;
     use codex_app_server_protocol::AdditionalPermissionProfile;
@@ -11500,7 +11465,7 @@ jobs:
     async fn refresh_in_memory_config_from_disk_syncs_active_profile() -> Result<()> {
         let mut app = make_test_app().await;
         let codex_home = tempdir()?;
-        app.config.codex_home = codex_home.path().to_path_buf();
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
         app.active_profile = Some("stale".to_string());
 
         std::fs::write(
@@ -11895,50 +11860,26 @@ model = "gpt-5.2"
     }
 
     #[tokio::test]
-    async fn ctrl_x_ctrl_u_triggers_undo_last_user_message() {
-        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    async fn ctrl_x_digit_switches_to_agent_slot() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
 
-        let thread_id = ThreadId::new();
-        app.chat_widget.handle_codex_event(Event {
-            id: String::new(),
-            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id: thread_id,
-                forked_from_id: None,
-                thread_name: None,
-                model: "gpt-test".to_string(),
-                model_provider_id: "test-provider".to_string(),
-                service_tier: None,
-                approval_policy: AskForApproval::Never,
-                approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/home/user/project"),
-                reasoning_effort: None,
-                history_log_id: 0,
-                history_entry_count: 0,
-                initial_messages: None,
-                network_proxy: None,
-                rollout_path: Some(PathBuf::new()),
-            }),
-        });
-
-        app.transcript_cells = vec![
-            Arc::new(UserHistoryCell {
-                message: "first".to_string(),
-                text_elements: Vec::new(),
-                local_image_paths: Vec::new(),
-                remote_image_urls: Vec::new(),
-            }) as Arc<dyn HistoryCell>,
-            Arc::new(UserHistoryCell {
-                message: "latest".to_string(),
-                text_elements: vec![TextElement::new(
-                    codex_protocol::user_input::ByteRange { start: 0, end: 6 },
-                    Some("latest".to_string()),
-                )],
-                local_image_paths: Vec::new(),
-                remote_image_urls: Vec::new(),
-            }) as Arc<dyn HistoryCell>,
-        ];
-
+        let main_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000001").expect("valid thread");
+        let agent_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000002").expect("valid thread");
+        app.primary_thread_id = Some(main_thread_id);
+        app.upsert_agent_picker_thread(
+            main_thread_id,
+            Some("main".to_string()),
+            Some("default".to_string()),
+            /*is_closed*/ false,
+        );
+        app.upsert_agent_picker_thread(
+            agent_thread_id,
+            Some("btw".to_string()),
+            Some("btw".to_string()),
+            /*is_closed*/ false,
+        );
         assert_eq!(
             app.handle_key_chord_key_event(KeyEvent::new(
                 KeyCode::Char('x'),
@@ -11947,21 +11888,15 @@ model = "gpt-5.2"
             None
         );
         assert_eq!(
-            app.handle_key_chord_key_event(KeyEvent::new(
-                KeyCode::Char('u'),
-                KeyModifiers::CONTROL,
-            )),
+            app.handle_key_chord_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE,)),
             None
         );
-
-        let mut rollback_turns = None;
-        while let Ok(op) = op_rx.try_recv() {
-            if let Op::ThreadRollback { num_turns } = op {
-                rollback_turns = Some(num_turns);
-            }
-        }
-
-        assert_eq!(rollback_turns, Some(1));
+        assert_matches!(
+            app_event_rx.try_recv(),
+            Ok(AppEvent::SelectAgentThread(selected_thread_id))
+                if selected_thread_id == agent_thread_id
+        );
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "");
     }
 
     #[tokio::test]
@@ -11984,8 +11919,26 @@ model = "gpt-5.2"
     }
 
     #[tokio::test]
-    async fn ctrl_x_ctrl_y_runs_copy_action_without_inserting_y_into_the_composer() {
-        let mut app = make_test_app().await;
+    async fn ctrl_x_ctrl_digit_does_not_switch_threads() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        let main_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000001").expect("valid thread");
+        let agent_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000002").expect("valid thread");
+        app.primary_thread_id = Some(main_thread_id);
+        app.upsert_agent_picker_thread(
+            main_thread_id,
+            Some("main".to_string()),
+            Some("default".to_string()),
+            /*is_closed*/ false,
+        );
+        app.upsert_agent_picker_thread(
+            agent_thread_id,
+            Some("btw".to_string()),
+            Some("btw".to_string()),
+            /*is_closed*/ false,
+        );
 
         assert_eq!(
             app.handle_key_chord_key_event(KeyEvent::new(
@@ -11996,11 +11949,12 @@ model = "gpt-5.2"
         );
         assert_eq!(
             app.handle_key_chord_key_event(KeyEvent::new(
-                KeyCode::Char('y'),
+                KeyCode::Char('2'),
                 KeyModifiers::CONTROL,
             )),
-            None
+            Some(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::CONTROL))
         );
+        assert!(app_event_rx.try_recv().is_err());
         assert_eq!(app.chat_widget.composer_text_with_pending(), "");
     }
 

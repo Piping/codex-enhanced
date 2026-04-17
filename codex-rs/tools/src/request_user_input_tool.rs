@@ -66,7 +66,6 @@ fn create_interactive_question_tool(
         ),
     ]);
 
-<<<<<<< HEAD
     let options_schema = JsonSchema::array(
         JsonSchema::object(
             option_props,

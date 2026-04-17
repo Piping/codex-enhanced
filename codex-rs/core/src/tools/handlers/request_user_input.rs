@@ -49,8 +49,10 @@ impl ToolHandler for RequestUserInputHandler {
         }
 
         let mode = session.collaboration_mode().await.mode;
-        let unavailable_message = match tool_name.as_str() {
-            QUESTION_TOOL_NAME => question_unavailable_message(mode),
+        let unavailable_message = match tool_name.name.as_str() {
+            QUESTION_TOOL_NAME if tool_name.namespace.is_none() => {
+                question_unavailable_message(mode)
+            }
             _ => request_user_input_unavailable_message(mode, self.default_mode_request_user_input),
         };
         if let Some(message) = unavailable_message {
@@ -58,7 +60,7 @@ impl ToolHandler for RequestUserInputHandler {
         }
 
         let args: RequestUserInputArgs = parse_arguments(&arguments)?;
-        let args = normalize_request_user_input_args_for_tool(&tool_name, args)
+        let args = normalize_request_user_input_args_for_tool(&tool_name.name, args)
             .map_err(FunctionCallError::RespondToModel)?;
         let response = session
             .request_user_input(turn.as_ref(), call_id, args)

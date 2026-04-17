@@ -11,6 +11,8 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStatus;
@@ -29,6 +31,7 @@ use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::SideContentWidth;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+use codex_app_server_client::AppServerRequestHandle;
 
 const BTW_DEVELOPER_INSTRUCTIONS: &str = concat!(
     "This is a hidden `/btw` discussion thread. ",
@@ -56,14 +59,6 @@ impl App {
         app_server: &mut AppServerSession,
         prompt: String,
     ) {
-        if self.btw_session.is_some() {
-            self.chat_widget.add_info_message(
-                "A `/btw` discussion is already active.".to_string(),
-                Some("Finish or discard it before starting another one.".to_string()),
-            );
-            return;
-        }
-
         let trimmed_prompt = prompt.trim();
         if trimmed_prompt.is_empty() {
             self.chat_widget
@@ -71,20 +66,21 @@ impl App {
             return;
         }
 
-        self.open_btw_loading_popup(/*status_message*/ None);
-
         let thread_id = match self.start_btw_thread(app_server).await {
             Ok(thread_id) => thread_id,
             Err(err) => {
-                self.open_btw_failure_popup(&format!("Failed to start `/btw`: {err}"));
+                self.chat_widget
+                    .add_error_message(format!("Failed to start `/btw`: {err}"));
                 return;
             }
         };
-        self.btw_session = Some(BtwSessionState {
+        self.upsert_agent_picker_thread(
             thread_id,
-            final_message: None,
-            last_status: None,
-        });
+            Some(btw_agent_nickname(trimmed_prompt)),
+            Some("btw".to_string()),
+            /*is_closed*/ false,
+        );
+        self.prime_btw_thread_channel(app_server, thread_id).await;
 
         let turn_result = app_server
             .turn_start(
@@ -104,9 +100,13 @@ impl App {
             )
             .await;
         if let Err(err) = turn_result {
-            self.close_btw_session(app_server).await;
-            self.open_btw_failure_popup(&format!("Failed to submit `/btw`: {err}"));
+            self.chat_widget
+                .add_error_message(format!("Failed to submit `/btw`: {err}"));
+            return;
         }
+
+        self.app_event_tx
+            .send(AppEvent::SelectAgentThread(thread_id));
     }
 
     pub(crate) fn finish_btw_discussion(
@@ -296,7 +296,7 @@ impl App {
 
     async fn start_btw_thread(&self, app_server: &AppServerSession) -> Result<ThreadId, String> {
         let request_handle = app_server.request_handle();
-        if let Some(thread_id) = self.chat_widget.thread_id() {
+        if let Some(thread_id) = self.btw_fork_source_thread_id(&request_handle).await? {
             let response: ThreadForkResponse = request_handle
                 .request_typed(ClientRequest::ThreadFork {
                     request_id: request_id(),
@@ -316,6 +316,68 @@ impl App {
                 .map_err(|err| format!("failed to start temporary thread: {err}"))?;
             ThreadId::from_string(&response.thread.id)
                 .map_err(|err| format!("invalid `/btw` thread id: {err}"))
+        }
+    }
+
+    async fn btw_fork_source_thread_id(
+        &self,
+        request_handle: &AppServerRequestHandle,
+    ) -> Result<Option<ThreadId>, String> {
+        let Some(thread_id) = self.chat_widget.thread_id() else {
+            return Ok(None);
+        };
+
+        let response: ThreadReadResponse = match request_handle
+            .request_typed(ClientRequest::ThreadRead {
+                request_id: request_id(),
+                params: ThreadReadParams {
+                    thread_id: thread_id.to_string(),
+                    include_turns: false,
+                },
+            })
+            .await
+        {
+            Ok(response) => response,
+            Err(err) => {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    error = %err,
+                    "failed to inspect `/btw` source thread; starting a fresh temporary thread"
+                );
+                return Ok(None);
+            }
+        };
+
+        Ok(response
+            .thread
+            .path
+            .as_ref()
+            .is_some_and(|path| path.exists())
+            .then_some(thread_id))
+    }
+
+    async fn prime_btw_thread_channel(
+        &mut self,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+    ) {
+        self.ensure_thread_channel(thread_id);
+        match app_server
+            .resume_thread(self.config.clone(), thread_id)
+            .await
+        {
+            Ok(started) => {
+                let channel = self.ensure_thread_channel(thread_id);
+                let mut store = channel.store.lock().await;
+                store.set_session(started.session, started.turns);
+            }
+            Err(err) => {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    error = %err,
+                    "failed to prime `/btw` thread channel before switching"
+                );
+            }
         }
     }
 
@@ -425,6 +487,17 @@ fn config_overrides(active_profile: Option<&str>) -> Option<HashMap<String, serd
             serde_json::Value::String(profile.to_string()),
         )])
     })
+}
+
+fn btw_agent_nickname(prompt: &str) -> String {
+    let trimmed = prompt.trim();
+    let char_count = trimmed.chars().count();
+    if char_count <= 32 {
+        return trimmed.to_string();
+    }
+
+    let truncated: String = trimmed.chars().take(31).collect();
+    format!("{truncated}…")
 }
 
 fn merge_developer_instructions(existing: Option<&str>) -> String {

@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
-use codex_core::config::Config;
-use codex_core::config::edit::ConfigEdit;
+use crate::legacy_core::config::Config;
+use crate::legacy_core::config::edit::ConfigEdit;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DisplayPreferenceKey {
@@ -175,8 +175,8 @@ mod tests {
     use super::DisplayPreferences;
     use super::display_preference_edit;
     use super::set_display_preference_in_config;
-    use codex_core::config::ConfigBuilder;
-    use codex_core::config::edit::ConfigEdit;
+    use crate::legacy_core::config::ConfigBuilder;
+    use crate::legacy_core::config::edit::ConfigEdit;
 
     #[tokio::test]
     async fn startup_tooltips_follow_config_and_setters() {

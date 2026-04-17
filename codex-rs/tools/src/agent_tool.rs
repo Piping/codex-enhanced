@@ -540,12 +540,10 @@ fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<St
         ),
         (
             "cwd".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional working directory for the new agent. Defaults to inheriting the parent cwd. Relative paths resolve against the parent cwd."
-                        .to_string(),
-                ),
-            },
+            JsonSchema::string(Some(
+                "Optional working directory for the new agent. Defaults to inheriting the parent cwd. Relative paths resolve against the parent cwd."
+                    .to_string(),
+            )),
         ),
     ])
 }
@@ -583,12 +581,10 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
         ),
         (
             "cwd".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional working directory for the new agent. Defaults to inheriting the parent cwd. Relative paths resolve against the parent cwd."
-                        .to_string(),
-                ),
-            },
+            JsonSchema::string(Some(
+                "Optional working directory for the new agent. Defaults to inheriting the parent cwd. Relative paths resolve against the parent cwd."
+                    .to_string(),
+            )),
         ),
     ])
 }

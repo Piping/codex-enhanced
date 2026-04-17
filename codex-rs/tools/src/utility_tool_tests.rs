@@ -58,48 +58,40 @@ fn grep_files_tool_matches_expected_spec() {
                 .to_string(),
             strict: false,
             defer_loading: None,
-            parameters: JsonSchema::Object {
-                properties: BTreeMap::from([
+            parameters: JsonSchema::object(
+                BTreeMap::from([
                     (
                         "include".to_string(),
-                        JsonSchema::String {
-                            description: Some(
-                                "Optional glob that limits which files are searched (e.g. \"*.rs\" or \
-                                 \"*.{ts,tsx}\")."
-                                    .to_string(),
-                            ),
-                        },
+                        JsonSchema::string(Some(
+                            "Optional glob that limits which files are searched (e.g. \"*.rs\" or \
+                             \"*.{ts,tsx}\")."
+                                .to_string(),
+                        )),
                     ),
                     (
                         "limit".to_string(),
-                        JsonSchema::Number {
-                            description: Some(
-                                "Maximum number of file paths to return (defaults to 100)."
-                                    .to_string(),
-                            ),
-                        },
+                        JsonSchema::number(Some(
+                            "Maximum number of file paths to return (defaults to 100)."
+                                .to_string(),
+                        )),
                     ),
                     (
                         "path".to_string(),
-                        JsonSchema::String {
-                            description: Some(
-                                "Directory or file path to search. Defaults to the session's working directory."
-                                    .to_string(),
-                            ),
-                        },
+                        JsonSchema::string(Some(
+                            "Directory or file path to search. Defaults to the session's working directory."
+                                .to_string(),
+                        )),
                     ),
                     (
                         "pattern".to_string(),
-                        JsonSchema::String {
-                            description: Some(
-                                "Regular expression pattern to search for.".to_string(),
-                            ),
-                        },
+                        JsonSchema::string(Some(
+                            "Regular expression pattern to search for.".to_string(),
+                        )),
                     ),
                 ]),
-                required: Some(vec!["pattern".to_string()]),
-                additional_properties: Some(false.into()),
-            },
+                Some(vec!["pattern".to_string()]),
+                Some(false.into()),
+            ),
             output_schema: None,
         })
     );
@@ -116,99 +108,81 @@ fn read_file_tool_matches_expected_spec() {
                     .to_string(),
             strict: false,
             defer_loading: None,
-            parameters: JsonSchema::Object {
-                properties: BTreeMap::from([
+            parameters: JsonSchema::object(
+                BTreeMap::from([
                     (
                         "file_path".to_string(),
-                        JsonSchema::String {
-                            description: Some("Absolute path to the file".to_string()),
-                        },
+                        JsonSchema::string(Some("Absolute path to the file".to_string())),
                     ),
                     (
                         "indentation".to_string(),
-                        JsonSchema::Object {
-                            properties: BTreeMap::from([
+                        JsonSchema::object(
+                            BTreeMap::from([
                                 (
                                     "anchor_line".to_string(),
-                                    JsonSchema::Number {
-                                        description: Some(
-                                            "Anchor line to center the indentation lookup on (defaults to offset)."
-                                                .to_string(),
-                                        ),
-                                    },
+                                    JsonSchema::number(Some(
+                                        "Anchor line to center the indentation lookup on (defaults to offset)."
+                                            .to_string(),
+                                    )),
                                 ),
                                 (
                                     "include_header".to_string(),
-                                    JsonSchema::Boolean {
-                                        description: Some(
-                                            "Include doc comments or attributes directly above the selected block."
-                                                .to_string(),
-                                        ),
-                                    },
+                                    JsonSchema::boolean(Some(
+                                        "Include doc comments or attributes directly above the selected block."
+                                            .to_string(),
+                                    )),
                                 ),
                                 (
                                     "include_siblings".to_string(),
-                                    JsonSchema::Boolean {
-                                        description: Some(
-                                            "When true, include additional blocks that share the anchor indentation."
-                                                .to_string(),
-                                        ),
-                                    },
+                                    JsonSchema::boolean(Some(
+                                        "When true, include additional blocks that share the anchor indentation."
+                                            .to_string(),
+                                    )),
                                 ),
                                 (
                                     "max_levels".to_string(),
-                                    JsonSchema::Number {
-                                        description: Some(
-                                            "How many parent indentation levels (smaller indents) to include."
-                                                .to_string(),
-                                        ),
-                                    },
+                                    JsonSchema::number(Some(
+                                        "How many parent indentation levels (smaller indents) to include."
+                                            .to_string(),
+                                    )),
                                 ),
                                 (
                                     "max_lines".to_string(),
-                                    JsonSchema::Number {
-                                        description: Some(
-                                            "Hard cap on the number of lines returned when using indentation mode."
-                                                .to_string(),
-                                        ),
-                                    },
+                                    JsonSchema::number(Some(
+                                        "Hard cap on the number of lines returned when using indentation mode."
+                                            .to_string(),
+                                    )),
                                 ),
                             ]),
-                            required: None,
-                            additional_properties: Some(false.into()),
-                        },
+                            None,
+                            Some(false.into()),
+                        ),
                     ),
                     (
                         "limit".to_string(),
-                        JsonSchema::Number {
-                            description: Some(
-                                "The maximum number of lines to return.".to_string(),
-                            ),
-                        },
+                        JsonSchema::number(Some(
+                            "The maximum number of lines to return.".to_string(),
+                        )),
                     ),
                     (
                         "mode".to_string(),
-                        JsonSchema::String {
-                            description: Some(
-                                "Optional mode selector: \"slice\" for simple ranges (default) or \"indentation\" \
-                                 to expand around an anchor line."
-                                    .to_string(),
-                            ),
-                        },
+                        JsonSchema::string(Some(
+                            "Optional mode selector: \"slice\" for simple ranges (default) or \"indentation\" \
+                             to expand around an anchor line."
+                                .to_string(),
+                        )),
                     ),
                     (
                         "offset".to_string(),
-                        JsonSchema::Number {
-                            description: Some(
-                                "The line number to start reading from. Must be 1 or greater."
-                                    .to_string(),
-                            ),
-                        },
+                        JsonSchema::number(Some(
+                            "The line number to start reading from. Must be 1 or greater."
+                                .to_string(),
+                        )),
                     ),
                 ]),
-                required: Some(vec!["file_path".to_string()]),
-                additional_properties: Some(false.into()),
-            },
+                Some(vec!["file_path".to_string()]),
+                Some(false.into()),
+            ),
             output_schema: None,
         })
     );
