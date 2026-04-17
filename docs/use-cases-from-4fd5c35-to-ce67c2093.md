@@ -62,7 +62,7 @@ These are the main behavioral clusters visible in the commit range.
 ## Use Case Inventory
 
 | ID | Use case | Primary actor | Goal |
-| --- | --- | --- | --- |
+| ----- | ----- | --- | --- |
 | UC-1 | Keep Codex running across profiles and failures | Workspace user | Continue work despite rate limits, auth failures, or provider-specific outages. |
 | UC-2 | Resume and navigate long-running workspace sessions | Workspace user | Re-enter a saved thread and recover operational context quickly. |
 | UC-3 | Define and manage workspace-local workflows | Workspace user | Turn recurring work into runnable jobs and triggers stored in repo-local YAML. |

@@ -1,3 +1,31 @@
+[build]
+incremental = false
+
+[unstable]
+codegen-backend = true
+
+[profile.dev]
+debug = 0
+codegen-backend = "cranelift"
+
+[profile.dev.build-override]
+codegen-backend = "llvm"
+
+[profile.dev.package."codex-app-server-protocol"]
+codegen-backend = "llvm"
+
+[profile.dev.package."aws-lc-rs"]
+codegen-backend = "llvm"
+
+[profile.dev.package."aws-lc-sys"]
+codegen-backend = "llvm"
+
+[profile.dev.package."rcgen"]
+codegen-backend = "llvm"
+
+[profile.dev.package."x509-parser"]
+codegen-backend = "llvm"
+
 [target.'cfg(all(windows, target_env = "msvc"))']
 rustflags = ["-C", "link-arg=/STACK:8388608"]
 

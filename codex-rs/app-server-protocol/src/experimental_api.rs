@@ -19,11 +19,19 @@ pub struct ExperimentalField {
     pub reason: &'static str,
 }
 
+#[cfg(feature = "schema-export")]
 inventory::collect!(ExperimentalField);
 
 /// Returns all experimental fields registered across the protocol types.
+#[cfg(feature = "schema-export")]
 pub fn experimental_fields() -> Vec<&'static ExperimentalField> {
     inventory::iter::<ExperimentalField>.into_iter().collect()
+}
+
+/// Returns all experimental fields registered across the protocol types.
+#[cfg(not(feature = "schema-export"))]
+pub fn experimental_fields() -> Vec<&'static ExperimentalField> {
+    Vec::new()
 }
 
 /// Constructs a consistent error message for experimental gating.
