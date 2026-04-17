@@ -55,6 +55,7 @@ fn derive_for_struct(input: &DeriveInput, data: &DataStruct) -> TokenStream {
                             }
                         });
                         registrations.push(quote! {
+                            #[cfg(feature = "schema-export")]
                             ::inventory::submit! {
                                 crate::experimental_api::ExperimentalField {
                                     type_name: #type_name_lit,
@@ -101,6 +102,7 @@ fn derive_for_struct(input: &DeriveInput, data: &DataStruct) -> TokenStream {
                         }
                     });
                     registrations.push(quote! {
+                        #[cfg(feature = "schema-export")]
                         ::inventory::submit! {
                             crate::experimental_api::ExperimentalField {
                                 type_name: #type_name_lit,

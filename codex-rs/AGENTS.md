@@ -1,0 +1,25 @@
+# codex-rs Agent Notes
+
+This file keeps durable, repo-specific guidance for future Codex work in `codex-rs`.
+
+Detailed task history and validation logs live in [progress.md](codex-rs/progress.md).
+
+## Working Agreement
+
+- Keep `AGENTS.md` focused on stable rules, recurring traps, and reusable checklists.
+- Record task-by-task execution details, temporary findings, and validation transcripts in `progress.md`.
+- When a progress entry reveals a recurring pattern, promote the durable part back into this file.
+
+## Release And CI Notes
+
+- Before creating or pushing a `codex-enhanced` release tag, confirm the tag version matches `sdk/python-runtime-enhanced/pyproject.toml`.
+- The `pypi-release` workflow uses concurrency on `github.ref_name || inputs.release_tag` with `cancel-in-progress: true`.
+- A manual `workflow_dispatch` for the same release tag cancels an in-progress tag-triggered run; treat that as expected behavior, not a separate failure.
+- If a release rerun only needs publish or GitHub Release recovery, check whether `artifact_run_id` can reuse a prior successful artifact build instead of rebuilding every platform.
+
+## Validation Reminders
+
+- After Rust changes, keep the existing local validation chain: `just fmt`, `cargo build -p codex-cli`, the relevant crate tests, and scoped `just fix -p <crate>` when the change is large enough to justify it.
+- Before PTY verification with the local binary, sign it first:
+  `sudo codesign --sign - --force --preserve-metadata=entitlements,requirements,flags,runtime codex-rs/target/debug/codex`
+- Treat long-running GitHub Actions release matrix jobs as normal unless logs or failed steps show otherwise; `gh run watch` alone is not enough to distinguish slow compile time from a real hang.

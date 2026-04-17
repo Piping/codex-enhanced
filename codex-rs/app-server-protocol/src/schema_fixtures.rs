@@ -196,7 +196,7 @@ fn canonicalize_json(value: &Value) -> Value {
         }
         Value::Object(map) => {
             let mut entries: Vec<_> = map.iter().collect();
-            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            entries.sort_by_key(|(left, _)| *left);
             let mut sorted = Map::with_capacity(map.len());
             for (key, child) in entries {
                 sorted.insert(key.clone(), canonicalize_json(child));
@@ -334,7 +334,7 @@ impl TypeVisitor for TypeScriptFixtureCollector<'_> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "schema-export"))]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;

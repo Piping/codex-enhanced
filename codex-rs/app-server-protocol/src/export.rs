@@ -73,6 +73,20 @@ impl GeneratedSchema {
 }
 
 type JsonSchemaEmitter = fn(&Path) -> Result<GeneratedSchema>;
+
+fn ensure_stable_schema_export_registry() -> Result<()> {
+    #[cfg(feature = "schema-export")]
+    {
+        Ok(())
+    }
+    #[cfg(not(feature = "schema-export"))]
+    {
+        Err(anyhow!(
+            "stable app-server schema export requires codex-app-server-protocol feature `schema-export`"
+        ))
+    }
+}
+
 pub fn generate_types(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     generate_ts(out_dir, prettier)?;
     generate_json(out_dir)?;
@@ -107,6 +121,10 @@ pub fn generate_ts_with_options(
     prettier: Option<&Path>,
     options: GenerateTsOptions,
 ) -> Result<()> {
+    if !options.experimental_api {
+        ensure_stable_schema_export_registry()?;
+    }
+
     let v2_out_dir = out_dir.join("v2");
     ensure_dir(out_dir)?;
     ensure_dir(&v2_out_dir)?;
@@ -190,6 +208,10 @@ pub fn generate_internal_json_schema(out_dir: &Path) -> Result<()> {
 }
 
 pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -> Result<()> {
+    if !experimental_api {
+        ensure_stable_schema_export_registry()?;
+    }
+
     ensure_dir(out_dir)?;
     let envelope_emitters: Vec<JsonSchemaEmitter> = vec![
         |d| write_json_schema_with_return::<crate::RequestId>(d, "RequestId"),
@@ -254,6 +276,7 @@ fn filter_experimental_ts(out_dir: &Path) -> Result<()> {
 }
 
 pub(crate) fn filter_experimental_ts_tree(tree: &mut BTreeMap<PathBuf, String>) -> Result<()> {
+    ensure_stable_schema_export_registry()?;
     let registered_fields = experimental_fields();
     let experimental_method_types = experimental_method_types();
     if let Some(content) = tree.get_mut(Path::new("ClientRequest.ts")) {
@@ -948,10 +971,8 @@ impl ScanState {
             '(' => self.depth.paren += 1,
             ')' => self.depth.paren = (self.depth.paren - 1).max(0),
             '<' => self.depth.angle += 1,
-            '>' => {
-                if self.depth.angle > 0 {
-                    self.depth.angle -= 1;
-                }
+            '>' if self.depth.angle > 0 => {
+                self.depth.angle -= 1;
             }
             _ => {}
         }
@@ -2086,7 +2107,7 @@ fn index_ts_entries(paths: &[&Path], has_v2_ts: bool) -> String {
     entries
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "schema-export"))]
 mod tests {
     use super::*;
     use crate::protocol::v2;
