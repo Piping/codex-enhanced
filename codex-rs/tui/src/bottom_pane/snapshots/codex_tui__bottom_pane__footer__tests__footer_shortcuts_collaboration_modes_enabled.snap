@@ -2,11 +2,12 @@
 source: tui/src/bottom_pane/footer.rs
 expression: terminal.backend()
 ---
-"  / for commands                             ! for shell commands               "
-"  ctrl + j for newline                       tab to queue message               "
-"  @ for file paths                           ctrl + v to paste images           "
-"  ctrl + g to edit in external editor        esc esc to edit previous message   "
-"  ctrl + r search history                    ctrl + x then 1-9 to switch agent t"
-"  ctrl + o to copy last output               ctrl + c to exit                   "
+"  / for commands                                   ! for shell commands         "
+"  ctrl + j for newline                             tab to queue message         "
+"  @ for file paths                                 ctrl + v to paste images     "
+"  ctrl + g to edit in external editor              esc esc to edit previous mess"
+"  ctrl + r search history                          ctrl + x then ctrl + u undo l"
+"  ctrl + x then 1-9 to switch agent threads        ctrl + o copy markdown       "
+"  ctrl + x then ctrl + y copy plain text           ctrl + c to exit             "
 "  shift + tab to change mode                                                    "
 "  ctrl + t to view transcript                                                   "

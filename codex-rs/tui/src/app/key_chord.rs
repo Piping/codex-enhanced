@@ -14,6 +14,8 @@ pub(crate) enum KeyChordState {
 pub(crate) enum KeyChordAction {
     SelectAgentSlot(u8),
     RespawnCodex,
+    UndoLastUserMessage,
+    CopyLatestOutputPlainText,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,6 +66,12 @@ fn handle_ctrl_x_second_key(state: &mut KeyChordState, key_event: KeyEvent) -> K
         (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
             KeyChordResolution::Matched(KeyChordAction::RespawnCodex)
         }
+        (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+            KeyChordResolution::Matched(KeyChordAction::UndoLastUserMessage)
+        }
+        (KeyCode::Char('y'), KeyModifiers::CONTROL) => {
+            KeyChordResolution::Matched(KeyChordAction::CopyLatestOutputPlainText)
+        }
         (KeyCode::Char('x'), KeyModifiers::CONTROL) => KeyChordResolution::AwaitingSecondKey,
         (KeyCode::Esc, _) => KeyChordResolution::Cancelled,
         _ => KeyChordResolution::Forward(key_event),
@@ -107,6 +115,36 @@ mod tests {
         assert_eq!(
             state.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL)),
             KeyChordResolution::Matched(KeyChordAction::RespawnCodex)
+        );
+        assert_eq!(state, KeyChordState::Idle);
+    }
+
+    #[test]
+    fn ctrl_x_ctrl_u_matches_undo_last_user_message() {
+        let mut state = KeyChordState::default();
+
+        assert_eq!(
+            state.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
+            KeyChordResolution::AwaitingSecondKey
+        );
+        assert_eq!(
+            state.handle_key_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL)),
+            KeyChordResolution::Matched(KeyChordAction::UndoLastUserMessage)
+        );
+        assert_eq!(state, KeyChordState::Idle);
+    }
+
+    #[test]
+    fn ctrl_x_ctrl_y_matches_copy_latest_output_plain_text() {
+        let mut state = KeyChordState::default();
+
+        assert_eq!(
+            state.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
+            KeyChordResolution::AwaitingSecondKey
+        );
+        assert_eq!(
+            state.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL)),
+            KeyChordResolution::Matched(KeyChordAction::CopyLatestOutputPlainText)
         );
         assert_eq!(state, KeyChordState::Idle);
     }
