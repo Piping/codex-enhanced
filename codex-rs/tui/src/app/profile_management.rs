@@ -4,7 +4,6 @@ use std::time::Duration;
 use toml::Value as TomlValue;
 
 use super::App;
-use super::PROFILE_SWITCH_THREAD_CLOSE_TIMEOUT;
 use super::editor_helpers::ExternalEditorErrorTarget;
 use crate::app_event::AppEvent;
 use crate::app_event::RuntimeProfileTarget;
@@ -12,6 +11,7 @@ use crate::app_server_session::AppServerSession;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+use crate::legacy_core::config::Config;
 use crate::profile_router::DefaultProfileRouter;
 use crate::profile_router::PROFILE_ROUTER_STATE_RELATIVE_PATH;
 use crate::profile_router::ProfileFallbackAction;
@@ -19,9 +19,6 @@ use crate::profile_router::ProfileRouteEntry;
 use crate::profile_router::ProfileRouterState;
 use crate::profile_router::ProfileRouterStore;
 use crate::tui;
-use codex_app_server_client::AppServerEvent;
-use codex_app_server_protocol::ServerNotification;
-use codex_core::config::Config;
 use codex_protocol::ThreadId;
 
 const PROFILE_MANAGEMENT_VIEW_ID: &str = "profile-management";
@@ -76,7 +73,7 @@ struct DefaultProfileSummary {
 
 impl App {
     pub(super) fn profile_router_store(&self) -> ProfileRouterStore {
-        ProfileRouterStore::new(self.config.codex_home.clone())
+        ProfileRouterStore::new(self.config.codex_home.to_path_buf())
     }
 
     pub(super) fn routed_profile_runtime_changed(
@@ -268,44 +265,6 @@ impl App {
             .map_err(|err| {
                 format!("Failed to unload current session before switching profiles: {err}")
             })?;
-
-        let close_wait = async {
-            loop {
-                match app_server.next_event().await {
-                    Some(AppServerEvent::ServerNotification(ServerNotification::ThreadClosed(
-                        notification,
-                    ))) if notification.thread_id == thread_id.to_string() => {
-                        break Ok(());
-                    }
-                    Some(AppServerEvent::Disconnected { message }) => {
-                        self.chat_widget.add_error_message(message.clone());
-                        self.app_event_tx
-                            .send(AppEvent::FatalExitRequest(message.clone()));
-                        break Err(format!(
-                            "App-server disconnected while closing current session: {message}"
-                        ));
-                    }
-                    Some(event) => {
-                        self.handle_app_server_event(app_server, event).await;
-                    }
-                    None => {
-                        break Err(
-                            "App-server event stream closed while closing current session."
-                                .to_string(),
-                        );
-                    }
-                }
-            }
-        };
-
-        tokio::time::timeout(PROFILE_SWITCH_THREAD_CLOSE_TIMEOUT, close_wait)
-            .await
-            .map_err(|_| {
-                format!(
-                    "Timed out waiting for current session `{thread_id}` to close before switching profiles."
-                )
-            })??;
-
         self.clear_active_thread().await;
         self.abort_thread_event_listener(thread_id);
         Ok(())

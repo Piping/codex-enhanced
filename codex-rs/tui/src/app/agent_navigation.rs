@@ -20,10 +20,7 @@
 
 use crate::multi_agents::AgentPickerThreadEntry;
 use crate::multi_agents::format_agent_picker_item_name;
-use crate::multi_agents::next_agent_shortcut;
-use crate::multi_agents::previous_agent_shortcut;
 use codex_protocol::ThreadId;
-use ratatui::text::Span;
 use std::collections::HashMap;
 
 /// Small state container for multi-agent picker ordering and labeling.
@@ -196,6 +193,27 @@ impl AgentNavigationState {
         Some(ordered_threads[next_idx].0)
     }
 
+    /// Returns the thread id assigned to a direct-access slot.
+    ///
+    /// Slot `1` is always the primary thread. Slots `2..=9` map to non-primary tracked threads in
+    /// first-seen order.
+    pub(crate) fn thread_id_for_slot(
+        &self,
+        primary_thread_id: Option<ThreadId>,
+        slot: u8,
+    ) -> Option<ThreadId> {
+        match slot {
+            1 => primary_thread_id,
+            2..=9 => self
+                .ordered_threads()
+                .into_iter()
+                .map(|(thread_id, _)| thread_id)
+                .filter(|thread_id| Some(*thread_id) != primary_thread_id)
+                .nth((slot - 2) as usize),
+            _ => None,
+        }
+    }
+
     /// Derives the contextual footer label for the currently displayed thread.
     ///
     /// This intentionally returns `None` until there is more than one tracked thread so
@@ -236,12 +254,7 @@ impl AgentNavigationState {
     /// Keeping this text derived from the actual shortcut helpers prevents the picker copy from
     /// drifting if the bindings ever change on one platform.
     pub(crate) fn picker_subtitle() -> String {
-        let previous: Span<'static> = previous_agent_shortcut().into();
-        let next: Span<'static> = next_agent_shortcut().into();
-        format!(
-            "Select an agent to watch. {} previous, {} next.",
-            previous.content, next.content
-        )
+        "Select an agent to watch. Use Ctrl+X then 1-9 to jump directly.".to_string()
     }
 
     #[cfg(test)]
@@ -330,12 +343,10 @@ mod tests {
 
     #[test]
     fn picker_subtitle_mentions_shortcuts() {
-        let previous: Span<'static> = previous_agent_shortcut().into();
-        let next: Span<'static> = next_agent_shortcut().into();
         let subtitle = AgentNavigationState::picker_subtitle();
 
-        assert!(subtitle.contains(previous.content.as_ref()));
-        assert!(subtitle.contains(next.content.as_ref()));
+        assert!(subtitle.contains("Ctrl+X"));
+        assert!(subtitle.contains("1-9"));
     }
 
     #[test]
@@ -350,5 +361,24 @@ mod tests {
             state.active_agent_label(Some(main_thread_id), Some(main_thread_id)),
             Some("Main [default]".to_string())
         );
+    }
+
+    #[test]
+    fn thread_id_for_slot_maps_primary_then_spawn_ordered_subagents() {
+        let (state, main_thread_id, first_agent_id, second_agent_id) = populated_state();
+
+        assert_eq!(
+            state.thread_id_for_slot(Some(main_thread_id), 1),
+            Some(main_thread_id)
+        );
+        assert_eq!(
+            state.thread_id_for_slot(Some(main_thread_id), 2),
+            Some(first_agent_id)
+        );
+        assert_eq!(
+            state.thread_id_for_slot(Some(main_thread_id), 3),
+            Some(second_agent_id)
+        );
+        assert_eq!(state.thread_id_for_slot(Some(main_thread_id), 4), None);
     }
 }

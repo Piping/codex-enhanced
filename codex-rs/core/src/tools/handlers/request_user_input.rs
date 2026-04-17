@@ -56,6 +56,9 @@ impl ToolHandler for RequestUserInputHandler {
 
         let mode = session.collaboration_mode().await.mode;
         let unavailable_message = match tool_name.name.as_str() {
+            QUESTION_TOOL_NAME if tool_name.namespace.is_none() => {
+                question_unavailable_message(mode)
+            }
             QUESTION_TOOL_NAME => question_unavailable_message(mode),
             _ => request_user_input_unavailable_message(mode, &self.available_modes),
         };

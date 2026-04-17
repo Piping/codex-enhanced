@@ -5,8 +5,8 @@ mod types;
 
 use std::path::Path;
 
+use crate::legacy_core::config::Config;
 use chrono::Utc;
-use codex_core::config::Config;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -52,7 +52,7 @@ async fn generate_report(config: Config) -> anyhow::Result<InsightReportData> {
     let report_path = report_path(config.codex_home.as_path(), generated_at);
     let data = InsightReportData {
         generated_at,
-        codex_home: config.codex_home.clone(),
+        codex_home: config.codex_home.to_path_buf(),
         report_path,
         overview: aggregated.overview,
         roots: aggregated.roots,
@@ -77,8 +77,8 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
+    use crate::legacy_core::config::ConfigBuilder;
     use chrono::Utc;
-    use codex_core::config::ConfigBuilder;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::ExecCommandEndEvent;
@@ -94,6 +94,7 @@ mod tests {
     use codex_protocol::protocol::TokenUsageInfo;
     use codex_protocol::protocol::TurnCompleteEvent;
     use codex_protocol::protocol::UserMessageEvent;
+    use codex_utils_absolute_path::test_support::PathBufExt;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
@@ -160,7 +161,7 @@ mod tests {
                 process_id: None,
                 turn_id: "turn-1".to_string(),
                 command: vec!["rg".to_string(), "todo".to_string()],
-                cwd: PathBuf::from("/repo"),
+                cwd: PathBuf::from("/repo").abs(),
                 parsed_cmd: Vec::new(),
                 source: ExecCommandSource::Agent,
                 interaction_input: None,
@@ -178,6 +179,8 @@ mod tests {
             item: RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-1".to_string(),
                 last_agent_message: Some("done".to_string()),
+                completed_at: Some(2),
+                duration_ms: Some(2_000),
             })),
         };
 

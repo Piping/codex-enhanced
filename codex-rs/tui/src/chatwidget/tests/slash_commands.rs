@@ -1480,17 +1480,17 @@ async fn slash_copy_state_clears_on_thread_rollback() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "turn-1".to_string(),
-            last_agent_message: Some("Reply that will be rolled back".to_string()),
-        }),
+        msg: EventMsg::TurnComplete(turn_complete_event(
+            "turn-1",
+            Some("Reply that will be rolled back"),
+        )),
     });
     chat.handle_codex_event(Event {
         id: "rollback-1".into(),
         msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
     });
 
-    assert_eq!(chat.last_copyable_output, None);
+    assert_eq!(chat.last_agent_markdown_text(), None);
 }
 
 #[tokio::test]
@@ -1500,7 +1500,7 @@ async fn slash_insight_generates_report_and_announces_path() {
     let codex_home = temp_home.path().to_path_buf();
     let sessions_dir = codex_home.join("sessions");
     std::fs::create_dir_all(&sessions_dir).unwrap();
-    chat.config.codex_home = codex_home.clone();
+    chat.config.codex_home = codex_home.clone().abs();
     chat.config.sqlite_home = codex_home.clone();
 
     let thread_id = ThreadId::new();
@@ -1572,7 +1572,7 @@ async fn slash_insight_generates_report_and_announces_path() {
                     process_id: None,
                     turn_id: "turn-1".to_string(),
                     command: vec!["rg".to_string(), "insight".to_string()],
-                    cwd: PathBuf::from("/repo"),
+                    cwd: PathBuf::from("/repo").abs(),
                     parsed_cmd: Vec::new(),
                     source: ExecCommandSource::Agent,
                     interaction_input: None,

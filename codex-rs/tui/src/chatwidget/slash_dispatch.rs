@@ -154,6 +154,12 @@ impl ChatWidget {
             SlashCommand::Fork => {
                 self.app_event_tx.send(AppEvent::ForkCurrentSession);
             }
+            SlashCommand::Thread => {
+                self.app_event_tx.send(AppEvent::OpenThreadPanel);
+            }
+            SlashCommand::Profile => {
+                self.app_event_tx.send(AppEvent::OpenProfileManagementPanel);
+            }
             SlashCommand::Init => {
                 let init_target = self.config.cwd.join(DEFAULT_AGENTS_MD_FILENAME);
                 if init_target.exists() {
@@ -201,7 +207,10 @@ impl ChatWidget {
                 if !self.realtime_audio_device_selection_enabled() {
                     return;
                 }
-                self.open_realtime_audio_popup();
+                self.open_settings_popup();
+            }
+            SlashCommand::Clawbot => {
+                self.app_event_tx.send(AppEvent::OpenClawbotManagement);
             }
             SlashCommand::Personality => {
                 self.open_personality_popup();
@@ -381,6 +390,13 @@ impl ChatWidget {
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
             }
+            SlashCommand::Insight => {
+                self.add_info_message(crate::insight::start_message(), /*hint*/ None);
+                crate::insight::spawn_report_generation(
+                    self.config.clone(),
+                    self.app_event_tx.clone(),
+                );
+            }
             SlashCommand::Title => {
                 self.open_terminal_title_setup();
             }
@@ -410,6 +426,12 @@ impl ChatWidget {
             }
             SlashCommand::Plugins => {
                 self.add_plugins_output();
+            }
+            SlashCommand::Workflow => {
+                self.app_event_tx.send(AppEvent::OpenWorkflowControls);
+            }
+            SlashCommand::Btw => {
+                self.add_error_message("Usage: /btw <temporary discussion prompt>".to_string());
             }
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {
@@ -771,6 +793,18 @@ impl ChatWidget {
             SlashCommand::Resume if !trimmed.is_empty() => {
                 self.app_event_tx
                     .send(AppEvent::ResumeSessionByIdOrName(args));
+            }
+            SlashCommand::Btw if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
+                else {
+                    return;
+                };
+                self.app_event_tx.send(AppEvent::StartBtwDiscussion {
+                    prompt: prepared_args,
+                });
+                self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
                 self.app_event_tx

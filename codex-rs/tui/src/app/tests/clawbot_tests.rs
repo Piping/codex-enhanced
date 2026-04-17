@@ -463,20 +463,19 @@ async fn clawbot_sync_ignores_binding_owned_by_another_app_instance() -> Result<
         .expect("queue unread");
 
     other_app.sync_clawbot_workspace(&mut app_server).await;
-    assert_eq!(other_app.clawbot.pending_turns.get(&thread_id), None);
-    assert_eq!(other_app.clawbot.outbound_reactions, Vec::new());
+    assert_eq!(other_app.clawbot_pending_turns.get(&thread_id), None);
+    assert_eq!(other_app.clawbot_outbound_reactions, Vec::new());
 
     owner_app.sync_clawbot_workspace(&mut app_server).await;
     assert_eq!(
         owner_app
-            .clawbot
-            .pending_turns
+            .clawbot_pending_turns
             .get(&thread_id)
             .map(std::collections::VecDeque::len),
         Some(1)
     );
     assert_eq!(
-        owner_app.clawbot.outbound_reactions,
+        owner_app.clawbot_outbound_reactions,
         vec![ProviderOutboundReaction {
             target: ProviderMessageRef::new(ClawbotProviderKind::Feishu, "chat_owner", "msg_1"),
             emoji_type: "TONGUE".to_string(),
@@ -714,13 +713,9 @@ async fn clawbot_manual_bind_allows_undiscovered_chat_id_with_configured_feishu(
         }))
         .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
 
-    app.bind_clawbot_session_to_current_thread(
-        &mut app_server,
-        "chat_manual_only".to_string(),
-        ClawbotSessionBindSource::ManualSessionId,
-    )
-    .await
-    .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
+    app.bind_clawbot_session_to_current_thread(&mut app_server, "chat_manual_only".to_string())
+        .await
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;
 
     let runtime = ClawbotRuntime::load(app.config.cwd.to_path_buf())
         .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?;

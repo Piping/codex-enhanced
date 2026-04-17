@@ -235,7 +235,7 @@ pub fn build_tool_registry_plan(
         plan.register_handler("js_repl_reset", ToolHandlerKind::JsReplReset);
     }
 
-    if config.request_user_input {
+    if !config.agent_jobs_worker_tools {
         plan.push_spec(
             create_question_tool(question_tool_description(
                 config.default_mode_request_user_input,
@@ -351,12 +351,11 @@ pub fn build_tool_registry_plan(
         plan.register_handler("read_file", ToolHandlerKind::ReadFile);
     }
 
-    if config
-        .has_environment
+    if config.has_environment
         && config
-        .experimental_supported_tools
-        .iter()
-        .any(|tool| tool == "list_dir")
+            .experimental_supported_tools
+            .iter()
+            .any(|tool| tool == "list_dir")
     {
         plan.push_spec(
             create_list_dir_tool(),

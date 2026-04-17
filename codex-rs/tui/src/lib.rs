@@ -687,7 +687,7 @@ fn app_server_thread_matches_cwd(thread: &AppServerThread, cwd_filter: &Path) ->
     ) {
         return thread_cwd == filter_cwd;
     }
-    thread.cwd == cwd_filter
+    thread.cwd.as_path() == cwd_filter
 }
 
 fn config_cwd_for_app_server_target(
