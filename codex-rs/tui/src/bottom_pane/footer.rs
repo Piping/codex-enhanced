@@ -894,8 +894,10 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut external_editor = Line::from("");
     let mut edit_previous = Line::from("");
     let mut history_search = Line::from("");
+    let mut undo_last_user_message = Line::from("");
     let mut switch_agent_thread = Line::from("");
     let mut copy_latest_output = Line::from("");
+    let mut copy_latest_output_plain_text = Line::from("");
     let mut quit = Line::from("");
     let mut show_transcript = Line::from("");
     let mut change_mode = Line::from("");
@@ -914,8 +916,10 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::ExternalEditor => external_editor = text,
                 ShortcutId::EditPrevious => edit_previous = text,
                 ShortcutId::HistorySearch => history_search = text,
+                ShortcutId::UndoLastUserMessage => undo_last_user_message = text,
                 ShortcutId::SwitchAgentThread => switch_agent_thread = text,
                 ShortcutId::CopyLatestOutput => copy_latest_output = text,
+                ShortcutId::CopyLatestOutputPlainText => copy_latest_output_plain_text = text,
                 ShortcutId::Quit => quit = text,
                 ShortcutId::ShowTranscript => show_transcript = text,
                 ShortcutId::ChangeMode => change_mode = text,
@@ -935,8 +939,10 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         external_editor,
         edit_previous,
         history_search,
+        undo_last_user_message,
         switch_agent_thread,
         copy_latest_output,
+        copy_latest_output_plain_text,
         quit,
         reasoning_down,
         reasoning_up,
@@ -1027,8 +1033,10 @@ enum ShortcutId {
     ExternalEditor,
     EditPrevious,
     HistorySearch,
+    UndoLastUserMessage,
     SwitchAgentThread,
     CopyLatestOutput,
+    CopyLatestOutputPlainText,
     Quit,
     ShowTranscript,
     ChangeMode,
@@ -1229,6 +1237,16 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         label: " search history",
     },
     ShortcutDescriptor {
+        id: ShortcutId::UndoLastUserMessage,
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl(KeyCode::Char('x')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        display_label: Some("ctrl + x then ctrl + u"),
+        label: " undo last turn",
+    },
+    ShortcutDescriptor {
         id: ShortcutId::SwitchAgentThread,
         bindings: &[ShortcutBinding {
             key: key_hint::ctrl(KeyCode::Char('x')),
@@ -1246,7 +1264,17 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         display_label: None,
-        label: " to copy last output",
+        label: " copy markdown",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::CopyLatestOutputPlainText,
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl(KeyCode::Char('x')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        display_label: Some("ctrl + x then ctrl + y"),
+        label: " copy plain text",
     },
     ShortcutDescriptor {
         id: ShortcutId::Quit,

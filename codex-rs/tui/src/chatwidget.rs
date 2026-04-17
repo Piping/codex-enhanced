@@ -311,6 +311,9 @@ use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::ChatKeymap;
 use crate::keymap::RuntimeKeymap;
+#[cfg(test)]
+use crate::markdown::append_markdown;
+use crate::markdown_plain_text::markdown_to_plain_text;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::FlexRenderable;
@@ -6011,6 +6014,9 @@ impl ChatWidget {
                 );
             }
         }
+    /// Copy the last agent response as plain text to the system clipboard.
+    pub(crate) fn copy_last_agent_plain_text(&mut self) {
+        self.copy_last_agent_plain_text_with(crate::clipboard_copy::copy_to_clipboard);
     }
 
     /// Inner implementation with an injectable clipboard backend for testing.
@@ -6035,6 +6041,35 @@ impl ChatWidget {
                 self.add_to_history(history_cell::new_error_event(format!(
                     "Cannot copy that response after rewinding. Only the most recent {MAX_AGENT_COPY_HISTORY} responses are available to /copy."
                 )));
+            }
+            _ => self.add_to_history(history_cell::new_error_event(
+                "No agent response to copy".into(),
+            )),
+        }
+        self.request_redraw();
+    }
+
+    /// Inner implementation with an injectable clipboard backend for testing.
+    fn copy_last_agent_plain_text_with(
+        &mut self,
+        copy_fn: impl FnOnce(&str) -> Result<Option<crate::clipboard_copy::ClipboardLease>, String>,
+    ) {
+        match self.last_agent_markdown.clone() {
+            Some(markdown) if !markdown.is_empty() => {
+                let plain_text = markdown_to_plain_text(&markdown);
+
+                match copy_fn(&plain_text) {
+                    Ok(lease) => {
+                        self.clipboard_lease = lease;
+                        self.add_to_history(history_cell::new_info_event(
+                            "Copied last message as plain text".into(),
+                            /*hint*/ None,
+                        ));
+                    }
+                    Err(error) => self.add_to_history(history_cell::new_error_event(format!(
+                        "Copy failed: {error}"
+                    ))),
+                }
             }
             _ => self.add_to_history(history_cell::new_error_event(
                 "No agent response to copy".into(),

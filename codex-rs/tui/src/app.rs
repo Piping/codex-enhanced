@@ -6662,6 +6662,12 @@ See the Codex keymap documentation for supported actions and examples."
                         self.app_event_tx
                             .send(AppEvent::Exit(ExitMode::RespawnImmediate));
                     }
+                    KeyChordAction::UndoLastUserMessage => {
+                        self.app_event_tx.send(AppEvent::UndoLastUserMessage);
+                    }
+                    KeyChordAction::CopyLatestOutputPlainText => {
+                        self.chat_widget.copy_last_agent_plain_text();
+                    }
                 }
                 None
             }
@@ -11971,6 +11977,27 @@ model = "gpt-5.2"
             app_event_rx.try_recv(),
             Ok(AppEvent::Exit(ExitMode::RespawnImmediate))
         );
+    }
+
+    #[tokio::test]
+    async fn ctrl_x_ctrl_u_requests_undo_last_user_message() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('x'),
+                KeyModifiers::CONTROL,
+            )),
+            None
+        );
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('u'),
+                KeyModifiers::CONTROL,
+            )),
+            None
+        );
+        assert_matches!(app_event_rx.try_recv(), Ok(AppEvent::UndoLastUserMessage));
     }
 
     #[tokio::test]

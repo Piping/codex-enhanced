@@ -1464,6 +1464,30 @@ async fn slash_copy_stores_clipboard_lease_and_preserves_it_on_failure() {
 }
 
 #[tokio::test]
+async fn copy_last_agent_plain_text_strips_markdown_formatting() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.last_agent_markdown =
+        Some("# Title\n\n- item with **bold** text\n- [docs](https://example.com)\n".to_string());
+
+    chat.copy_last_agent_plain_text_with(|plain_text| {
+        assert_eq!(
+            plain_text,
+            "Title\n\n• item with bold text\n• docs (https://example.com)"
+        );
+        Ok(Some(crate::clipboard_copy::ClipboardLease::test()))
+    });
+
+    assert!(chat.clipboard_lease.is_some());
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one success message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Copied last message as plain text"),
+        "expected success message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
 async fn slash_copy_state_is_preserved_during_running_task() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

@@ -141,6 +141,7 @@ pub(crate) mod live_wrap;
 pub use live_wrap::RowBuilder;
 mod local_chatgpt_auth;
 mod markdown;
+mod markdown_plain_text;
 mod markdown_render;
 mod markdown_stream;
 mod mention_codec;
