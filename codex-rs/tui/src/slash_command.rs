@@ -49,6 +49,7 @@ pub enum SlashCommand {
     Apps,
     Plugins,
     Workflow,
+    Respawn,
     Btw,
     Logout,
     Quit,
@@ -125,6 +126,7 @@ impl SlashCommand {
             SlashCommand::Apps => "manage apps",
             SlashCommand::Plugins => "browse plugins",
             SlashCommand::Workflow => "inspect and trigger workspace workflows",
+            SlashCommand::Respawn => "restart Codex and resume this session",
             SlashCommand::Btw => "run a hidden read-only temporary discussion",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
@@ -172,7 +174,6 @@ impl SlashCommand {
             | SlashCommand::Memories
             | SlashCommand::Review
             | SlashCommand::Plan
-            | SlashCommand::Btw
             | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
@@ -191,8 +192,10 @@ impl SlashCommand {
             | SlashCommand::Apps
             | SlashCommand::Plugins
             | SlashCommand::Workflow
+            | SlashCommand::Respawn
             | SlashCommand::Thread
             | SlashCommand::Profile
+            | SlashCommand::Btw
             | SlashCommand::Feedback
             | SlashCommand::Quit
             | SlashCommand::Exit => true,

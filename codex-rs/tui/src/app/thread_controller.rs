@@ -46,6 +46,7 @@ impl ThreadController {
                     app.chat_widget.token_usage(),
                     app.chat_widget.thread_id(),
                     app.chat_widget.thread_name(),
+                    app.chat_widget.rollout_path().as_deref(),
                 );
                 app.chat_widget
                     .add_plain_history_lines(vec!["/fork".magenta().into()]);

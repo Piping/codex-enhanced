@@ -243,6 +243,9 @@ impl ChatWidget {
             SlashCommand::Quit | SlashCommand::Exit => {
                 self.request_quit_without_confirmation();
             }
+            SlashCommand::Respawn => {
+                self.request_respawn();
+            }
             SlashCommand::Logout => {
                 if let Err(e) = codex_login::logout(
                     &self.config.codex_home,

@@ -2171,7 +2171,8 @@ mod tests {
         state.update_view_rows(/*rows*/ 3);
 
         state.relative_time_reference = Some(now);
-        let metrics = calculate_column_metrics(&state.filtered_rows, /*include_cwd*/ true, now);
+        let metrics =
+            calculate_column_metrics(&state.filtered_rows, /*include_cwd*/ true, now);
 
         let width: u16 = 80;
         let height: u16 = 6;
@@ -2478,7 +2479,8 @@ mod tests {
         state.update_thread_names().await;
 
         state.relative_time_reference = Some(now);
-        let metrics = calculate_column_metrics(&state.filtered_rows, /*include_cwd*/ true, now);
+        let metrics =
+            calculate_column_metrics(&state.filtered_rows, /*include_cwd*/ true, now);
 
         let width: u16 = 80;
         let height: u16 = 5;

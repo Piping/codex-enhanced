@@ -102,6 +102,7 @@ pub(crate) enum ClawbotForwardingChannel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ClawbotSessionBindSource {
     DiscoveredSession,
+    #[cfg(test)]
     ManualSessionId,
 }
 
@@ -567,9 +568,6 @@ pub(crate) enum AppEvent {
     },
 
     BindClawbotSessionAndPreempt {
-        session_id: String,
-    },
-    SaveClawbotManualBindSessionId {
         session_id: String,
     },
 

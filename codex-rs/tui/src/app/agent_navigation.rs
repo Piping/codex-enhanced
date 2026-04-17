@@ -41,6 +41,7 @@ pub(crate) struct AgentNavigationState {
 }
 
 /// Direction of keyboard traversal through the stable picker order.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AgentNavigationDirection {
     /// Move toward the entry that was seen earlier in spawn order, wrapping at the front.
@@ -166,6 +167,7 @@ impl AgentNavigationState {
     /// just whichever thread bookkeeping most recently marked active. If the wrong current thread
     /// is supplied, next/previous navigation will jump in a way that feels nondeterministic even
     /// though the cache itself is correct.
+    #[cfg(test)]
     pub(crate) fn adjacent_thread_id(
         &self,
         current_displayed_thread_id: Option<ThreadId>,

@@ -87,7 +87,10 @@ impl FeishuCoordinationConfig {
     }
 
     pub fn heartbeat_ttl(&self) -> Duration {
-        Duration::from_secs(self.heartbeat_ttl_secs.max(self.heartbeat_interval_secs.max(1) * 2))
+        Duration::from_secs(
+            self.heartbeat_ttl_secs
+                .max(self.heartbeat_interval_secs.max(1) * 2),
+        )
     }
 }
 

@@ -59,7 +59,6 @@ impl FeatureRoute {
             | AppEvent::SaveClawbotFeishuConfigValue { .. }
             | AppEvent::BindClawbotDiscoveredSession { .. }
             | AppEvent::BindClawbotSessionAndPreempt { .. }
-            | AppEvent::SaveClawbotManualBindSessionId { .. }
             | AppEvent::ClawbotSetTurnMode { .. }
             | AppEvent::ClawbotSetThreadForwarding { .. }
             | AppEvent::ScanClawbotFeishuSessions

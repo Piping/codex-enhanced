@@ -219,6 +219,7 @@ impl App {
         let view = CustomPromptView::new(
             field.title().to_string(),
             field.prompt_placeholder().to_string(),
+            field.current_value(config.as_ref()).unwrap_or_default(),
             Some(field.prompt_context_label(config.as_ref())),
             Box::new(move |value| {
                 tx.send(AppEvent::SaveClawbotFeishuConfigValue { field, value });
@@ -311,6 +312,7 @@ impl App {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) async fn bind_clawbot_session_to_current_thread(
         &mut self,
         app_server: &mut AppServerSession,
@@ -1509,7 +1511,7 @@ fn clawbot_session_item(
         })]
     } else {
         vec![Box::new(move |tx: &AppEventSender| {
-            tx.send(AppEvent::SaveClawbotManualBindSessionId {
+            tx.send(AppEvent::BindClawbotDiscoveredSession {
                 session_id: session_id.clone(),
             });
         })]

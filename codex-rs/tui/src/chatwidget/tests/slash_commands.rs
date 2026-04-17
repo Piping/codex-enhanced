@@ -292,12 +292,44 @@ async fn slash_btw_dispatches_start_event() {
 }
 
 #[tokio::test]
+async fn slash_btw_dispatches_start_event_while_task_running() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+
+    chat.bottom_pane.set_composer_text(
+        "/btw compare against prior context".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    match rx.try_recv() {
+        Ok(AppEvent::StartBtwDiscussion { prompt }) => {
+            assert_eq!(prompt, "compare against prior context");
+        }
+        other => panic!("expected StartBtwDiscussion event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn slash_quit_requests_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.dispatch_command(SlashCommand::Quit);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+}
+
+#[tokio::test]
+async fn slash_respawn_requests_respawn_exit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Respawn);
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::Exit(ExitMode::RespawnImmediate))
+    );
 }
 
 #[tokio::test]

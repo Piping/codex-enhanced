@@ -202,7 +202,6 @@ pub(crate) mod workflow_runtime;
 mod workflow_scheduler;
 mod workflow_yaml;
 
-use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
 use self::btw::BtwSessionState;
@@ -4049,39 +4048,6 @@ impl App {
         !had_read_error
     }
 
-    /// Returns the adjacent thread id for keyboard navigation, backfilling from the server if the
-    /// local cache has no neighbor.
-    ///
-    /// Tries the fast path first: ask `AgentNavigationState` directly. If it returns `None` (no
-    /// adjacent entry exists, typically because the cache was never populated with remote
-    /// subagents), performs a full `backfill_loaded_subagent_threads` and retries. This ensures the
-    /// first next/previous keypress in a resumed remote session discovers subagents on demand
-    /// without requiring the user to wait for a proactive fetch.
-    async fn adjacent_thread_id_with_backfill(
-        &mut self,
-        app_server: &mut AppServerSession,
-        direction: AgentNavigationDirection,
-    ) -> Option<ThreadId> {
-        let current_thread = self.current_displayed_thread_id();
-        if let Some(thread_id) = self
-            .agent_navigation
-            .adjacent_thread_id(current_thread, direction)
-        {
-            return Some(thread_id);
-        }
-
-        let primary_thread_id = self.primary_thread_id?;
-        if self.last_subagent_backfill_attempt == Some(primary_thread_id) {
-            return None;
-        }
-
-        if self.backfill_loaded_subagent_threads(app_server).await {
-            self.last_subagent_backfill_attempt = Some(primary_thread_id);
-        }
-        self.agent_navigation
-            .adjacent_thread_id(self.current_displayed_thread_id(), direction)
-    }
-
     fn fresh_session_config(&self) -> Config {
         let mut config = self.config.clone();
         config.service_tier = self.chat_widget.current_service_tier();
@@ -6676,6 +6642,10 @@ impl App {
                             self.app_event_tx
                                 .send(AppEvent::SelectAgentThread(thread_id));
                         }
+                    }
+                    KeyChordAction::RespawnCodex => {
+                        self.app_event_tx
+                            .send(AppEvent::Exit(ExitMode::RespawnImmediate));
                     }
                 }
                 None
@@ -11956,6 +11926,30 @@ model = "gpt-5.2"
         );
         assert!(app_event_rx.try_recv().is_err());
         assert_eq!(app.chat_widget.composer_text_with_pending(), "");
+    }
+
+    #[tokio::test]
+    async fn ctrl_x_ctrl_r_requests_respawn_exit() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('x'),
+                KeyModifiers::CONTROL,
+            )),
+            None
+        );
+        assert_eq!(
+            app.handle_key_chord_key_event(KeyEvent::new(
+                KeyCode::Char('r'),
+                KeyModifiers::CONTROL,
+            )),
+            None
+        );
+        assert_matches!(
+            app_event_rx.try_recv(),
+            Ok(AppEvent::Exit(ExitMode::RespawnImmediate))
+        );
     }
 
     #[tokio::test]
