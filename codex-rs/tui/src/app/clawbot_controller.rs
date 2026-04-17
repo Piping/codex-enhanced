@@ -64,15 +64,6 @@ impl ClawbotController {
                     ));
                 }
             }
-            AppEvent::SaveClawbotManualBindSessionId { session_id } => {
-                if let Err(err) = app
-                    .bind_clawbot_session_to_current_thread(app_server, session_id)
-                    .await
-                {
-                    app.chat_widget
-                        .add_error_message(format!("Failed to bind Clawbot session: {err}"));
-                }
-            }
             AppEvent::ClawbotSetTurnMode { mode } => {
                 if let Err(err) = app.save_clawbot_turn_mode(mode) {
                     app.chat_widget

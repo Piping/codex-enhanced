@@ -1104,6 +1104,9 @@ async fn run_sampling_request(
         }
         if retries < max_retries {
             retries += 1;
+            if super::should_rotate_prompt_cache_key_for_stream_retry(&err) {
+                client_session.rotate_prompt_cache_key_for_retry();
+            }
             let delay = match &err {
                 CodexErr::Stream(_, requested_delay) => {
                     requested_delay.unwrap_or_else(|| backoff(retries))

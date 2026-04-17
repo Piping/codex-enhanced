@@ -277,18 +277,23 @@ impl FeishuBaseClient {
         let existing = self
             .find_force_record_by_key(&tables.force_table_id, &key)
             .await?;
-        let force_until_ms = if force_connect { now_ms + ttl_ms } else { now_ms };
+        let force_until_ms = if force_connect {
+            now_ms + ttl_ms
+        } else {
+            now_ms
+        };
         let should_write = force_connect
             || existing.as_ref().is_some_and(|record| {
-                record.target_instance_id == target_instance_id
-                    && record.force_until_ms > now_ms
+                record.target_instance_id == target_instance_id && record.force_until_ms > now_ms
             });
         if !should_write {
             return Ok(());
         }
 
         let fields = ForceIntentRecord {
-            record_id: existing.as_ref().and_then(|record| record.record_id.clone()),
+            record_id: existing
+                .as_ref()
+                .and_then(|record| record.record_id.clone()),
             key,
             app_id: app_id.to_string(),
             target_instance_id: target_instance_id.to_string(),
@@ -470,7 +475,9 @@ impl FeishuBaseClient {
             if let Some(token) = page_token.clone() {
                 request = request.query("page_token", token);
             }
-            let response = self.request_json("list Feishu Base tables", request).await?;
+            let response = self
+                .request_json("list Feishu Base tables", request)
+                .await?;
             let payload = paged_payload(
                 response
                     .data
@@ -507,8 +514,8 @@ impl FeishuBaseClient {
     }
 
     async fn create_table(&self, table_name: &str) -> Result<()> {
-        let request: ApiRequest<Value> = ApiRequest::post(tables_url(&self.base_token))
-            .json_body(&serde_json::json!({
+        let request: ApiRequest<Value> =
+            ApiRequest::post(tables_url(&self.base_token)).json_body(&serde_json::json!({
                 "table": {
                     "name": table_name,
                     "fields": [{
@@ -526,13 +533,16 @@ impl FeishuBaseClient {
         let mut page_token = None;
         let mut fields = Vec::new();
         loop {
-            let mut request: ApiRequest<Value> = ApiRequest::get(fields_url(&self.base_token, table_id))
-                .query("page_size", "100");
+            let mut request: ApiRequest<Value> =
+                ApiRequest::get(fields_url(&self.base_token, table_id)).query("page_size", "100");
             if let Some(token) = page_token.clone() {
                 request = request.query("page_token", token);
             }
             let response = self
-                .request_json(&format!("list Feishu Base fields for table {table_id}"), request)
+                .request_json(
+                    &format!("list Feishu Base fields for table {table_id}"),
+                    request,
+                )
                 .await?;
             let payload = paged_payload(
                 response
@@ -596,7 +606,10 @@ impl FeishuBaseClient {
                 request = request.query("page_token", token);
             }
             let response = self
-                .request_json(&format!("list Feishu Base records for table {table_id}"), request)
+                .request_json(
+                    &format!("list Feishu Base records for table {table_id}"),
+                    request,
+                )
                 .await?;
             let payload = paged_payload(
                 response
@@ -667,7 +680,11 @@ impl FeishuBaseClient {
         if response.is_success() {
             Ok(response)
         } else {
-            Err(classify_feishu_api_error(operation, &self.base_token, &response))
+            Err(classify_feishu_api_error(
+                operation,
+                &self.base_token,
+                &response,
+            ))
         }
     }
 }
@@ -863,24 +880,24 @@ fn select_leader(
             .then(left.instance_id.cmp(&right.instance_id))
             .then(left.session_id.cmp(&right.session_id))
     });
-    let leader = if let Some(force_intent) = force_intent.filter(|intent| intent.is_active(now_ms)) {
-        if let Some(forced_lease) = active
-            .iter()
-            .find(|lease| lease.instance_id == force_intent.target_instance_id)
-        {
-            forced_lease.clone()
+    let leader =
+        if let Some(force_intent) = force_intent.filter(|intent| intent.is_active(now_ms)) {
+            if let Some(forced_lease) = active
+                .iter()
+                .find(|lease| lease.instance_id == force_intent.target_instance_id)
+            {
+                forced_lease.clone()
+            } else {
+                active.first().cloned().ok_or_else(|| {
+                    anyhow!("no active Feishu Base coordination heartbeat rows found")
+                })?
+            }
         } else {
             active
                 .first()
                 .cloned()
                 .ok_or_else(|| anyhow!("no active Feishu Base coordination heartbeat rows found"))?
-        }
-    } else {
-        active
-            .first()
-            .cloned()
-            .ok_or_else(|| anyhow!("no active Feishu Base coordination heartbeat rows found"))?
-    };
+        };
     Ok(LeadershipSnapshot {
         is_leader: leader.instance_id == current_instance_id,
         leader_instance_id: leader.instance_id,
@@ -1017,12 +1034,12 @@ fn unix_timestamp_ms_now() -> Result<i64> {
 mod tests {
     use pretty_assertions::assert_eq;
 
+    use super::BaseTable;
     use super::FORCE_FIELDS;
     use super::ForceIntentRecord;
     use super::HEARTBEAT_FIELDS;
     use super::HeartbeatLease;
     use super::RequiredField;
-    use super::BaseTable;
     use super::choose_named_table;
     use super::classify_feishu_api_error;
     use super::select_leader;
@@ -1123,14 +1140,17 @@ mod tests {
             },
         ];
 
-        let chosen = choose_named_table(&tables, "clawbot_coordination_heartbeat")
-            .expect("named table");
+        let chosen =
+            choose_named_table(&tables, "clawbot_coordination_heartbeat").expect("named table");
         assert_eq!(chosen.table_id, "tbl_a");
     }
 
     #[test]
     fn required_field_sets_match_expected_shape() {
-        assert_eq!(HEARTBEAT_FIELDS.first(), Some(&RequiredField::new("key", 1)));
+        assert_eq!(
+            HEARTBEAT_FIELDS.first(),
+            Some(&RequiredField::new("key", 1))
+        );
         assert_eq!(FORCE_FIELDS.first(), Some(&RequiredField::new("key", 1)));
     }
 

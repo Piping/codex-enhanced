@@ -38,7 +38,8 @@ pub(super) async fn run_with_reconnect(
     }
 
     if let Some(coordination) = FeishuBaseCoordinator::new(workspace_root.as_path(), &config)? {
-        return run_with_coordination(workspace_root, config, provider_event_tx, coordination).await;
+        return run_with_coordination(workspace_root, config, provider_event_tx, coordination)
+            .await;
     }
 
     let mut reconnect_delay = INITIAL_RECONNECT_DELAY;
@@ -79,7 +80,9 @@ async fn run_with_coordination(
     let mut last_standby_message = None::<String>;
 
     loop {
-        if let Some(handle) = websocket_task.as_ref() && handle.is_finished() {
+        if let Some(handle) = websocket_task.as_ref()
+            && handle.is_finished()
+        {
             let result = websocket_task
                 .take()
                 .expect("finished websocket task should still be present")
@@ -248,7 +251,9 @@ fn spawn_websocket_task(
     config: FeishuConfig,
     provider_event_tx: mpsc::UnboundedSender<ProviderEvent>,
 ) -> JoinHandle<Result<()>> {
-    tokio::spawn(async move { run_once(workspace_root.as_path(), &config, &provider_event_tx).await })
+    tokio::spawn(
+        async move { run_once(workspace_root.as_path(), &config, &provider_event_tx).await },
+    )
 }
 
 fn emit_reconnect_state(

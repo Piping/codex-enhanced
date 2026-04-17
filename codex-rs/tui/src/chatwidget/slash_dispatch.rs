@@ -324,6 +324,9 @@ impl ChatWidget {
             SlashCommand::Quit | SlashCommand::Exit => {
                 self.request_quit_without_confirmation();
             }
+            SlashCommand::Respawn => {
+                self.request_respawn();
+            }
             SlashCommand::Logout => {
                 self.app_event_tx.send(AppEvent::Logout);
             }

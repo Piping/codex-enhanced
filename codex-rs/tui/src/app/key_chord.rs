@@ -13,6 +13,7 @@ pub(crate) enum KeyChordState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum KeyChordAction {
     SelectAgentSlot(u8),
+    RespawnCodex,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -60,6 +61,9 @@ fn handle_ctrl_x_second_key(state: &mut KeyChordState, key_event: KeyEvent) -> K
             let slot = (slot as u8) - b'0';
             KeyChordResolution::Matched(KeyChordAction::SelectAgentSlot(slot))
         }
+        (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
+            KeyChordResolution::Matched(KeyChordAction::RespawnCodex)
+        }
         (KeyCode::Char('x'), KeyModifiers::CONTROL) => KeyChordResolution::AwaitingSecondKey,
         (KeyCode::Esc, _) => KeyChordResolution::Cancelled,
         _ => KeyChordResolution::Forward(key_event),
@@ -88,6 +92,21 @@ mod tests {
         assert_eq!(
             state.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE)),
             KeyChordResolution::Matched(KeyChordAction::SelectAgentSlot(2))
+        );
+        assert_eq!(state, KeyChordState::Idle);
+    }
+
+    #[test]
+    fn ctrl_x_ctrl_r_matches_respawn() {
+        let mut state = KeyChordState::default();
+
+        assert_eq!(
+            state.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
+            KeyChordResolution::AwaitingSecondKey
+        );
+        assert_eq!(
+            state.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL)),
+            KeyChordResolution::Matched(KeyChordAction::RespawnCodex)
         );
         assert_eq!(state, KeyChordState::Idle);
     }

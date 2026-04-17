@@ -14,11 +14,23 @@ use codex_app_server_protocol::CollabAgentToolCallStatus;
 use codex_app_server_protocol::ThreadItem;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::AgentStatus;
+use codex_protocol::protocol::CollabAgentInteractionEndEvent;
+use codex_protocol::protocol::CollabAgentRef;
+use codex_protocol::protocol::CollabAgentSpawnEndEvent;
+use codex_protocol::protocol::CollabAgentStatusEntry;
+use codex_protocol::protocol::CollabCloseEndEvent;
+use codex_protocol::protocol::CollabResumeBeginEvent;
+use codex_protocol::protocol::CollabResumeEndEvent;
+use codex_protocol::protocol::CollabWaitingBeginEvent;
+use codex_protocol::protocol::CollabWaitingEndEvent;
+#[cfg(test)]
 use crossterm::event::KeyCode;
+#[cfg(test)]
 use crossterm::event::KeyEvent;
-#[cfg(target_os = "macos")]
+#[cfg(all(test, target_os = "macos"))]
 use crossterm::event::KeyEventKind;
-#[cfg(target_os = "macos")]
+#[cfg(all(test, target_os = "macos"))]
 use crossterm::event::KeyModifiers;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -90,16 +102,19 @@ pub(crate) fn format_agent_picker_item_name(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn previous_agent_shortcut() -> crate::key_hint::KeyBinding {
     crate::key_hint::alt(KeyCode::Left)
 }
 
+#[cfg(test)]
 pub(crate) fn next_agent_shortcut() -> crate::key_hint::KeyBinding {
     crate::key_hint::alt(KeyCode::Right)
 }
 
 /// Matches the canonical "previous agent" binding plus platform-specific fallbacks that keep agent
 /// navigation working when enhanced key reporting is unavailable.
+#[cfg(test)]
 pub(crate) fn previous_agent_shortcut_matches(
     key_event: KeyEvent,
     allow_word_motion_fallback: bool,
@@ -110,6 +125,7 @@ pub(crate) fn previous_agent_shortcut_matches(
 
 /// Matches the canonical "next agent" binding plus platform-specific fallbacks that keep agent
 /// navigation working when enhanced key reporting is unavailable.
+#[cfg(test)]
 pub(crate) fn next_agent_shortcut_matches(
     key_event: KeyEvent,
     allow_word_motion_fallback: bool,
@@ -118,7 +134,7 @@ pub(crate) fn next_agent_shortcut_matches(
         || next_agent_word_motion_fallback(key_event, allow_word_motion_fallback)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(test, target_os = "macos"))]
 fn previous_agent_word_motion_fallback(
     key_event: KeyEvent,
     allow_word_motion_fallback: bool,
@@ -139,7 +155,7 @@ fn previous_agent_word_motion_fallback(
         )
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(test, not(target_os = "macos")))]
 fn previous_agent_word_motion_fallback(
     _key_event: KeyEvent,
     _allow_word_motion_fallback: bool,
@@ -147,7 +163,7 @@ fn previous_agent_word_motion_fallback(
     false
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(test, target_os = "macos"))]
 fn next_agent_word_motion_fallback(key_event: KeyEvent, allow_word_motion_fallback: bool) -> bool {
     // Some terminals, especially on macOS, send Option+b/f as word-motion keys instead of
     // Option+arrow events unless enhanced keyboard reporting is enabled. Callers should only
@@ -165,7 +181,7 @@ fn next_agent_word_motion_fallback(key_event: KeyEvent, allow_word_motion_fallba
         )
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(test, not(target_os = "macos")))]
 fn next_agent_word_motion_fallback(
     _key_event: KeyEvent,
     _allow_word_motion_fallback: bool,
