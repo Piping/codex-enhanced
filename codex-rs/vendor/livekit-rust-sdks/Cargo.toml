@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = [
+    "livekit-protocol",
+    "livekit-runtime",
+    "libwebrtc",
+    "webrtc-sys",
+    "webrtc-sys/build",
+]
+
+[workspace.package]
+edition = "2021"
+repository = "https://github.com/livekit/rust-sdks"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+anyhow = "1.0"
+env_logger = "0.11"
+futures = "0.3"
+futures-util = { version = "0.3", default-features = false }
+lazy_static = "1.4"
+livekit-protocol = { version = "0.7.1", path = "livekit-protocol" }
+livekit-runtime = { version = "0.4.0", path = "livekit-runtime" }
+log = "0.4"
+parking_lot = "0.12"
+serde = "1"
+serde_json = "1.0"
+thiserror = "1"
+tokio = { version = "1", default-features = false }
+webrtc-sys = { version = "0.3.24", path = "webrtc-sys" }
+webrtc-sys-build = { version = "0.3.13", path = "webrtc-sys/build" }
