@@ -9,6 +9,10 @@ Detailed task history and validation logs live in [progress.md](codex-rs/progres
 - Keep `AGENTS.md` focused on stable rules, recurring traps, and reusable checklists.
 - Record task-by-task execution details, temporary findings, and validation transcripts in `progress.md`.
 - When a progress entry reveals a recurring pattern, promote the durable part back into this file.
+- For newly added code, do not introduce ad hoc top-level files into an existing module tree.
+- New functionality should either:
+  - live in a dedicated crate, or
+  - live under the owning module's `enhanced/` subtree, for example `codex-rs/tui/src/enhanced/...`.
 
 ## Release And CI Notes
 
