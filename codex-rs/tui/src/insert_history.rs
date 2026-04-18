@@ -51,6 +51,14 @@ impl InsertHistoryMode {
     }
 }
 
+/// Controls whether history insertion should pre-wrap logical lines before writing them into
+/// terminal scrollback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollbackWrapMode {
+    Adaptive,
+    PreserveLines,
+}
+
 /// Insert `lines` above the viewport using the terminal's backend writer
 /// (avoids direct stdout references).
 pub fn insert_history_lines<B>(
@@ -79,6 +87,20 @@ pub fn insert_history_lines_with_mode<B>(
 where
     B: Backend + Write,
 {
+    insert_history_lines_with_mode_and_wrap(terminal, lines, mode, ScrollbackWrapMode::Adaptive)
+}
+
+/// Insert `lines` above the viewport while controlling whether logical lines are pre-wrapped
+/// before entering terminal scrollback.
+pub fn insert_history_lines_with_mode_and_wrap<B>(
+    terminal: &mut crate::custom_terminal::Terminal<B>,
+    lines: Vec<Line>,
+    mode: InsertHistoryMode,
+    wrap_mode: ScrollbackWrapMode,
+) -> io::Result<()>
+where
+    B: Backend + Write,
+{
     let screen_size = terminal.backend().size().unwrap_or(Size::new(0, 0));
 
     let mut area = terminal.viewport_area;
@@ -102,12 +124,16 @@ where
     let mut wrapped_rows = 0usize;
 
     for line in &lines {
-        let line_wrapped =
-            if line_contains_url_like(line) && !line_has_mixed_url_and_non_url_tokens(line) {
-                vec![line.clone()]
-            } else {
-                adaptive_wrap_line(line, RtOptions::new(wrap_width))
-            };
+        let line_wrapped = match wrap_mode {
+            ScrollbackWrapMode::PreserveLines => vec![line.clone()],
+            ScrollbackWrapMode::Adaptive => {
+                if line_contains_url_like(line) && !line_has_mixed_url_and_non_url_tokens(line) {
+                    vec![line.clone()]
+                } else {
+                    adaptive_wrap_line(line, RtOptions::new(wrap_width))
+                }
+            }
+        };
         wrapped_rows += line_wrapped
             .iter()
             .map(|wrapped_line| wrapped_line.width().max(1).div_ceil(wrap_width))
@@ -820,5 +846,36 @@ mod tests {
         );
         assert_eq!(term.viewport_area, Rect::new(0, 5, width, 2));
         assert_eq!(term.visible_history_rows(), 1);
+    }
+
+    #[test]
+    fn vt100_preserve_lines_mode_does_not_pre_wrap_plain_text() {
+        let width: u16 = 12;
+        let height: u16 = 8;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        let viewport = Rect::new(0, height - 1, width, 1);
+        term.set_viewport_area(viewport);
+
+        let line: Line<'static> = Line::from("plain text that would otherwise pre-wrap");
+        insert_history_lines_with_mode_and_wrap(
+            &mut term,
+            vec![line],
+            InsertHistoryMode::Standard,
+            ScrollbackWrapMode::PreserveLines,
+        )
+        .expect("insert preserved history");
+
+        let rows: Vec<String> = term.backend().vt100().screen().rows(0, width).collect();
+        let populated_rows = rows.iter().filter(|row| !row.trim_end().is_empty()).count();
+
+        assert!(
+            populated_rows >= 1,
+            "expected at least one populated row, rows: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|row| row.contains("otherwise")),
+            "expected no pre-wrapped continuation row to contain later words, rows: {rows:?}"
+        );
     }
 }

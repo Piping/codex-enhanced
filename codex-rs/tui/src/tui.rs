@@ -12,6 +12,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use crate::insert_history::ScrollbackWrapMode;
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
 use crossterm::event::DisableBracketedPaste;
@@ -282,7 +283,7 @@ pub struct Tui {
     draw_tx: broadcast::Sender<()>,
     event_broker: Arc<EventBroker>,
     pub(crate) terminal: Terminal,
-    pending_history_lines: Vec<Line<'static>>,
+    pending_history_lines: Vec<PendingHistoryBlock>,
     alt_saved_viewport: Option<ratatui::layout::Rect>,
     #[cfg(unix)]
     suspend_context: SuspendContext,
@@ -296,6 +297,12 @@ pub struct Tui {
     is_zellij: bool,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
+}
+
+#[derive(Clone)]
+struct PendingHistoryBlock {
+    lines: Vec<Line<'static>>,
+    wrap_mode: ScrollbackWrapMode,
 }
 
 impl Tui {
@@ -494,7 +501,16 @@ impl Tui {
     }
 
     pub fn insert_history_lines(&mut self, lines: Vec<Line<'static>>) {
-        self.pending_history_lines.extend(lines);
+        self.insert_history_lines_with_wrap_mode(lines, ScrollbackWrapMode::Adaptive);
+    }
+
+    pub fn insert_history_lines_with_wrap_mode(
+        &mut self,
+        lines: Vec<Line<'static>>,
+        wrap_mode: ScrollbackWrapMode,
+    ) {
+        self.pending_history_lines
+            .push(PendingHistoryBlock { lines, wrap_mode });
         self.frame_requester().schedule_frame();
     }
 
@@ -562,18 +578,21 @@ impl Tui {
     /// invalidate the diff buffer for a full repaint.
     fn flush_pending_history_lines(
         terminal: &mut Terminal,
-        pending_history_lines: &mut Vec<Line<'static>>,
+        pending_history_lines: &mut Vec<PendingHistoryBlock>,
         is_zellij: bool,
     ) -> Result<bool> {
         if pending_history_lines.is_empty() {
             return Ok(false);
         }
-
-        crate::insert_history::insert_history_lines_with_mode(
-            terminal,
-            pending_history_lines.clone(),
-            crate::insert_history::InsertHistoryMode::new(is_zellij),
-        )?;
+        let mode = crate::insert_history::InsertHistoryMode::new(is_zellij);
+        for block in pending_history_lines.iter() {
+            crate::insert_history::insert_history_lines_with_mode_and_wrap(
+                terminal,
+                block.lines.clone(),
+                mode,
+                block.wrap_mode,
+            )?;
+        }
         pending_history_lines.clear();
         Ok(is_zellij)
     }

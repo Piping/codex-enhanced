@@ -1,6 +1,7 @@
 use super::App;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
+use crate::insert_history::ScrollbackWrapMode;
 use crate::tui;
 
 pub(super) struct WorkflowController;
@@ -125,7 +126,8 @@ impl WorkflowController {
                         tui.terminal.last_known_screen_size.width,
                     );
                     if app.overlay.is_some() {
-                        app.deferred_history_lines.extend(lines);
+                        app.deferred_history_lines
+                            .push((lines, ScrollbackWrapMode::Adaptive));
                     } else if !lines.is_empty() {
                         tui.insert_history_lines(lines);
                     }
