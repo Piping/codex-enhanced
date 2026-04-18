@@ -4494,11 +4494,12 @@ impl ChatWidget {
                 // Reset the flag even if we don't show separator (no work was done)
                 self.needs_final_message_separator = false;
             }
-            self.stream_controller = Some(StreamController::new(
-                self.current_stream_width(/*reserved_cols*/ 2),
-                &self.config.cwd,
-                self.history_render_mode(),
-            ));
+            self.stream_controller =
+                Some(StreamController::new(
+                    self.current_stream_width(/*reserved_cols*/ 2),
+                    &self.config.cwd,
+                    self.history_render_mode(),
+                ));
         }
         if let Some(controller) = self.stream_controller.as_mut()
             && controller.push(&delta)

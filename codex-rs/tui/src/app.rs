@@ -48,6 +48,8 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::UpdateAvailableHistoryCell;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::RuntimeKeymap;
+use crate::insert_history::ScrollbackWrapMode;
+use crate::legacy_core::append_message_history_entry;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
@@ -999,7 +1001,7 @@ pub(crate) struct App {
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
-    pub(crate) deferred_history_lines: Vec<Line<'static>>,
+    pub(crate) deferred_history_lines: Vec<(Vec<Line<'static>>, ScrollbackWrapMode)>,
     has_emitted_history_lines: bool,
     transcript_reflow: TranscriptReflowState,
     initial_history_replay_buffer: Option<InitialHistoryReplayBuffer>,
@@ -1873,6 +1875,7 @@ impl App {
         }
         self.transcript_cells.push(cell.clone());
         let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+        let wrap_mode = cell.scrollback_wrap_mode();
         if display.is_empty() {
             return;
         }
@@ -1884,9 +1887,9 @@ impl App {
             }
         }
         if self.overlay.is_some() {
-            self.deferred_history_lines.extend(display);
+            self.deferred_history_lines.push((display, wrap_mode));
         } else {
-            tui.insert_history_lines(display);
+            tui.insert_history_lines_with_wrap_mode(display, wrap_mode);
         }
     }
 
@@ -12362,7 +12365,10 @@ model = "gpt-5.2"
             )) as Arc<dyn HistoryCell>,
         ];
         app.overlay = Some(Overlay::new_transcript(app.transcript_cells.clone()));
-        app.deferred_history_lines = vec![Line::from("stale buffered line")];
+        app.deferred_history_lines = vec![(
+            vec![Line::from("stale buffered line")],
+            ScrollbackWrapMode::Adaptive,
+        )];
         app.backtrack.overlay_preview_active = true;
         app.backtrack.nth_user_message = 1;
 
@@ -13336,7 +13342,10 @@ model = "gpt-5.2"
             remote_image_urls: Vec::new(),
         }) as Arc<dyn HistoryCell>];
         app.overlay = Some(Overlay::new_transcript(app.transcript_cells.clone()));
-        app.deferred_history_lines = vec![Line::from("stale buffered line")];
+        app.deferred_history_lines = vec![(
+            vec![Line::from("stale buffered line")],
+            ScrollbackWrapMode::Adaptive,
+        )];
         app.has_emitted_history_lines = true;
         app.backtrack.primed = true;
         app.backtrack.overlay_preview_active = true;

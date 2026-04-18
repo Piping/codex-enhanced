@@ -20,6 +20,7 @@ use crate::exec_cell::TOOL_CALL_MAX_LINES;
 use crate::exec_cell::output_lines;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::insert_history::ScrollbackWrapMode;
 use crate::legacy_core::config::Config;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
@@ -169,6 +170,24 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
         }
     }
 
+    /// Whether ratatui should soft-wrap this cell to the viewport width.
+    ///
+    /// Most cells keep viewport wrapping enabled so long content remains visible. Main assistant
+    /// message cells opt out so copying from the terminal preserves the original line structure.
+    fn viewport_wrap(&self) -> bool {
+        true
+    }
+
+    /// Whether transcript overlay measurement should soft-wrap this cell.
+    fn transcript_viewport_wrap(&self) -> bool {
+        self.viewport_wrap()
+    }
+
+    /// Controls whether this cell should be pre-wrapped when written into terminal scrollback.
+    fn scrollback_wrap_mode(&self) -> ScrollbackWrapMode {
+        ScrollbackWrapMode::Adaptive
+    }
+
     /// Returns the number of viewport rows needed to render this cell.
     ///
     /// The default delegates to `Paragraph::line_count` with
@@ -181,11 +200,13 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     }
 
     fn desired_height_for_mode(&self, width: u16, mode: HistoryRenderMode) -> u16 {
-        Paragraph::new(Text::from(self.display_lines_for_mode(width, mode)))
-            .wrap(Wrap { trim: false })
-            .line_count(width)
-            .try_into()
-            .unwrap_or(0)
+        let paragraph = Paragraph::new(Text::from(self.display_lines_for_mode(width, mode)));
+        let paragraph = match mode {
+            HistoryRenderMode::Rich if self.viewport_wrap() => paragraph.wrap(Wrap { trim: false }),
+            HistoryRenderMode::Rich => paragraph,
+            HistoryRenderMode::Raw => paragraph.wrap(Wrap { trim: false }),
+        };
+        paragraph.line_count(width).try_into().unwrap_or(0)
     }
 
     /// Returns lines for the transcript overlay (`Ctrl+T`).
@@ -215,11 +236,13 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
             return 1;
         }
 
-        Paragraph::new(Text::from(lines))
-            .wrap(Wrap { trim: false })
-            .line_count(width)
-            .try_into()
-            .unwrap_or(0)
+        let paragraph = Paragraph::new(Text::from(lines));
+        let paragraph = if self.transcript_viewport_wrap() {
+            paragraph.wrap(Wrap { trim: false })
+        } else {
+            paragraph
+        };
+        paragraph.line_count(width).try_into().unwrap_or(0)
     }
 
     fn is_stream_continuation(&self) -> bool {
@@ -244,7 +267,12 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
 impl Renderable for Box<dyn HistoryCell> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let lines = self.display_lines(area.width);
-        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+        let paragraph = Paragraph::new(Text::from(lines));
+        let paragraph = if self.viewport_wrap() {
+            paragraph.wrap(Wrap { trim: false })
+        } else {
+            paragraph
+        };
         let y = if area.height == 0 {
             0
         } else {
@@ -583,21 +611,32 @@ impl AgentMessageCell {
 }
 
 impl HistoryCell for AgentMessageCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        adaptive_wrap_lines(
-            &self.lines,
-            RtOptions::new(width as usize)
-                .initial_indent(if self.is_first_line {
-                    "• ".dim().into()
-                } else {
-                    "  ".into()
-                })
-                .subsequent_indent("  ".into()),
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        prefix_lines(
+            self.lines.clone(),
+            if self.is_first_line {
+                "• ".dim()
+            } else {
+                "  ".into()
+            },
+            "  ".into(),
         )
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         plain_lines(self.lines.clone())
+    }
+
+    fn viewport_wrap(&self) -> bool {
+        false
+    }
+
+    fn transcript_viewport_wrap(&self) -> bool {
+        false
+    }
+
+    fn scrollback_wrap_mode(&self) -> ScrollbackWrapMode {
+        ScrollbackWrapMode::PreserveLines
     }
 
     fn is_stream_continuation(&self) -> bool {
@@ -4562,6 +4601,21 @@ mod tests {
         let cell = AgentMessageCell::new(vec![Line::default()], /*is_first_line*/ false);
         assert_eq!(cell.transcript_lines(/*width*/ 80), vec![Line::from("  ")]);
         assert_eq!(cell.desired_transcript_height(/*width*/ 80), 1);
+    }
+
+    #[test]
+    fn agent_message_cell_does_not_soft_wrap_to_viewport_width() {
+        let cell = AgentMessageCell::new(
+            vec![Line::from("this is a long assistant line")],
+            /*is_first_line*/ true,
+        );
+
+        assert_eq!(
+            render_lines(&cell.display_lines(/*width*/ 10)),
+            vec!["• this is a long assistant line".to_string()]
+        );
+        assert_eq!(cell.desired_height(/*width*/ 10), 1);
+        assert_eq!(cell.desired_transcript_height(/*width*/ 10), 1);
     }
 
     #[test]

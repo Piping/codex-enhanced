@@ -99,7 +99,8 @@ impl App {
             return;
         }
         if self.overlay.is_some() {
-            self.deferred_history_lines.extend(display);
+            self.deferred_history_lines
+                .push((display, cell.scrollback_wrap_mode()));
         } else {
             tui.insert_history_lines_with_wrap_policy(display, self.history_line_wrap_policy());
         }
@@ -188,7 +189,8 @@ impl App {
             if let Some(max_rows) = max_rows {
                 Self::buffer_initial_history_replay_display_lines(buffer, display, max_rows);
             } else if self.overlay.is_some() {
-                self.deferred_history_lines.extend(display);
+                self.deferred_history_lines
+                    .push((display, cell.scrollback_wrap_mode()));
             } else {
                 tui.insert_history_lines_with_wrap_policy(display, self.history_line_wrap_policy());
             }
