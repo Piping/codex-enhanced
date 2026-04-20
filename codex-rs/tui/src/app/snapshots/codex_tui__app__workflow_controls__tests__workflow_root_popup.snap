@@ -14,5 +14,6 @@ expression: popup
   director - trigger - review_backlog  Manual · Enabled
   director - trigger - triage          Manual · Disabled
   director - trigger - pulse           Interval (30m) · Enabled
+  director - trigger - followup        After Turn (Success Only) · Enabled
 
   Press enter to confirm or esc to go back

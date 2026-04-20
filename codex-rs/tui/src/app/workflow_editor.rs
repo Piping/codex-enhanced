@@ -120,6 +120,7 @@ pub(crate) fn set_trigger_type(
 ) -> Result<String, String> {
     mutate_trigger(workflow_path, trigger_id, |trigger| {
         let current_parameter = trigger_parameter_seed_from_mapping(trigger);
+        let current_parameter_key = trigger_parameter_key_from_mapping(trigger);
         clear_trigger_type_fields(trigger);
         trigger.insert(
             string_key("type"),
@@ -129,7 +130,11 @@ pub(crate) fn set_trigger_type(
         {
             trigger.insert(
                 string_key(parameter_key),
-                YamlValue::String(current_parameter.unwrap_or_else(|| default_value.to_string())),
+                YamlValue::String(
+                    current_parameter
+                        .filter(|_| current_parameter_key == Some(parameter_key))
+                        .unwrap_or_else(|| default_value.to_string()),
+                ),
             );
         }
         Ok(trigger_id.to_string())
@@ -478,7 +483,7 @@ fn serialize_yaml_fragment(value: &impl serde::Serialize) -> Result<String, Stri
 }
 
 fn clear_trigger_type_fields(trigger: &mut Mapping) {
-    for key in ["type", "after", "every", "cron"] {
+    for key in ["type", "condition", "after", "every", "cron"] {
         trigger.remove(string_key(key));
     }
 }
@@ -499,12 +504,12 @@ fn trigger_type_parameter_defaults(
     trigger_type: WorkflowTriggerType,
 ) -> Option<(&'static str, &'static str)> {
     match trigger_type {
+        WorkflowTriggerType::AfterTurn => Some(("condition", "turn_succeeded")),
         WorkflowTriggerType::Idle => Some(("after", "5m")),
         WorkflowTriggerType::Interval => Some(("every", "5m")),
         WorkflowTriggerType::Cron => Some(("cron", "0 * * * *")),
         WorkflowTriggerType::Manual
         | WorkflowTriggerType::BeforeTurn
-        | WorkflowTriggerType::AfterTurn
         | WorkflowTriggerType::FileWatch => None,
     }
 }
@@ -515,15 +520,38 @@ fn trigger_parameter_seed_from_mapping(trigger: &Mapping) -> Option<String> {
         .get(string_key(parameter_key))
         .and_then(YamlValue::as_str)
         .map(ToString::to_string)
+        .or_else(|| {
+            let trigger_type = trigger
+                .get(string_key("type"))
+                .and_then(YamlValue::as_str)
+                .and_then(trigger_type_from_key)?;
+            trigger_type_parameter_defaults(trigger_type)
+                .filter(|(default_parameter_key, _)| *default_parameter_key == parameter_key)
+                .map(|(_, default_value)| default_value.to_string())
+        })
 }
 
 fn trigger_parameter_key_from_mapping(trigger: &Mapping) -> Option<&'static str> {
     match trigger.get(string_key("type")).and_then(YamlValue::as_str) {
+        Some("after_turn") => Some("condition"),
         Some("idle") => Some("after"),
         Some("interval") => Some("every"),
         Some("cron") => Some("cron"),
-        Some("manual" | "before_turn" | "after_turn" | "file_watch") | None => None,
+        Some("manual" | "before_turn" | "file_watch") | None => None,
         Some(_) => None,
+    }
+}
+
+fn trigger_type_from_key(trigger_type: &str) -> Option<WorkflowTriggerType> {
+    match trigger_type {
+        "manual" => Some(WorkflowTriggerType::Manual),
+        "before_turn" => Some(WorkflowTriggerType::BeforeTurn),
+        "after_turn" => Some(WorkflowTriggerType::AfterTurn),
+        "file_watch" => Some(WorkflowTriggerType::FileWatch),
+        "idle" => Some(WorkflowTriggerType::Idle),
+        "interval" => Some(WorkflowTriggerType::Interval),
+        "cron" => Some(WorkflowTriggerType::Cron),
+        _ => None,
     }
 }
 
@@ -546,6 +574,10 @@ mod tests {
 triggers:
   - type: manual
     id: review
+    jobs: [notify]
+  - type: after_turn
+    id: followup
+    condition: turn_finished
     jobs: [notify]
   - type: interval
     id: pulse
@@ -681,6 +713,10 @@ jobs:
             trigger_field_seed(&path, "pulse", WorkflowTriggerEditableField::Parameter).unwrap(),
             "30m"
         );
+        assert_eq!(
+            trigger_field_seed(&path, "followup", WorkflowTriggerEditableField::Parameter).unwrap(),
+            "turn_finished"
+        );
 
         let next_trigger_id = write_trigger_field(
             &path,
@@ -716,5 +752,39 @@ jobs:
         let file_watch_text = fs::read_to_string(&path).unwrap();
         assert!(file_watch_text.contains("type: file_watch"));
         assert!(!file_watch_text.contains("cron:"));
+
+        set_trigger_type(&path, "pulse", WorkflowTriggerType::AfterTurn).unwrap();
+        let after_turn_text = fs::read_to_string(&path).unwrap();
+        assert!(after_turn_text.contains("type: after_turn"));
+        assert!(after_turn_text.contains("condition: turn_succeeded"));
+    }
+
+    #[test]
+    fn trigger_field_seed_uses_default_after_turn_condition_when_yaml_omits_it() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".codex/workflows/workflow.yaml");
+        fs::create_dir_all(path.parent().expect("parent")).unwrap();
+        fs::write(
+            &path,
+            r#"name: director
+
+triggers:
+  - type: after_turn
+    id: followup
+    jobs: [notify]
+
+jobs:
+  notify:
+    steps:
+      - prompt: |
+          send an update
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            trigger_field_seed(&path, "followup", WorkflowTriggerEditableField::Parameter).unwrap(),
+            "turn_succeeded"
+        );
     }
 }

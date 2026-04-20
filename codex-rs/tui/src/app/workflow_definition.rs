@@ -1,3 +1,4 @@
+use codex_app_server_protocol::TurnStatus;
 use indexmap::IndexMap;
 use serde::Deserialize;
 use serde::Serialize;
@@ -45,6 +46,24 @@ pub(crate) enum WorkflowResponseMode {
     #[default]
     Assistant,
     User,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WorkflowAfterTurnCondition {
+    TurnFinished,
+    #[default]
+    TurnSucceeded,
+}
+
+impl WorkflowAfterTurnCondition {
+    pub(crate) fn matches_turn_status(self, status: &TurnStatus) -> bool {
+        match (self, status) {
+            (Self::TurnFinished, TurnStatus::Completed | TurnStatus::Failed) => true,
+            (Self::TurnSucceeded, TurnStatus::Completed) => true,
+            (Self::TurnFinished | Self::TurnSucceeded, _) => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -126,11 +145,20 @@ struct WorkflowTriggerConfig {
 pub(crate) enum WorkflowTriggerKind {
     Manual,
     BeforeTurn,
-    AfterTurn,
+    AfterTurn {
+        #[serde(default)]
+        condition: WorkflowAfterTurnCondition,
+    },
     FileWatch,
-    Idle { after: String },
-    Interval { every: String },
-    Cron { cron: String },
+    Idle {
+        after: String,
+    },
+    Interval {
+        every: String,
+    },
+    Cron {
+        cron: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -420,6 +448,7 @@ fn pop_next_job(ready: &mut VecDeque<String>, registry: &LoadedWorkflowRegistry)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
     #[test]
@@ -467,6 +496,69 @@ jobs:
         assert!(
             message.contains("invalid step timeout `not-a-duration`"),
             "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn load_workflow_registry_defaults_after_turn_condition_to_turn_succeeded() {
+        let dir = tempdir().unwrap();
+        let workflows_dir = dir.path().join(".codex/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        fs::write(
+            workflows_dir.join("workflow.yaml"),
+            r#"name: director
+
+triggers:
+  - type: after_turn
+    id: followup
+    jobs: [notify]
+
+jobs:
+  notify:
+    steps:
+      - prompt: summarize the changes
+"#,
+        )
+        .unwrap();
+
+        let registry = load_workflow_registry(dir.path()).unwrap();
+        assert_eq!(
+            registry.files[0].triggers[0].kind,
+            WorkflowTriggerKind::AfterTurn {
+                condition: WorkflowAfterTurnCondition::TurnSucceeded,
+            }
+        );
+    }
+
+    #[test]
+    fn load_workflow_registry_parses_after_turn_condition() {
+        let dir = tempdir().unwrap();
+        let workflows_dir = dir.path().join(".codex/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        fs::write(
+            workflows_dir.join("workflow.yaml"),
+            r#"name: director
+
+triggers:
+  - type: after_turn
+    id: followup
+    condition: turn_succeeded
+    jobs: [notify]
+
+jobs:
+  notify:
+    steps:
+      - prompt: summarize the changes
+"#,
+        )
+        .unwrap();
+
+        let registry = load_workflow_registry(dir.path()).unwrap();
+        assert_eq!(
+            registry.files[0].triggers[0].kind,
+            WorkflowTriggerKind::AfterTurn {
+                condition: WorkflowAfterTurnCondition::TurnSucceeded,
+            }
         );
     }
 }

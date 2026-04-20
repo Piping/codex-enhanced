@@ -13,6 +13,6 @@ expression: popup
   director - job - notify              Workflow job
   director - trigger - review_backlog  Manual · Enabled
   director - trigger - triage          Manual · Enabled
-  director - trigger - followup        After Turn · Enabled
+  director - trigger - followup        After Turn (Success Only) · Enabled
 
   Press enter to confirm or esc to go back

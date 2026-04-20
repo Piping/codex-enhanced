@@ -212,7 +212,7 @@ impl App {
                 if let Err(err) = result {
                     tracing::warn!("failed to enqueue app-server notification: {err}");
                 } else if self.active_thread_id != Some(thread_id)
-                    && let Some(last_agent_message) = super::workflow_after_turn_last_agent_message(
+                    && let Some(after_turn) = super::workflow_after_turn_last_agent_message(
                         self.primary_thread_id,
                         thread_id,
                         &notification,
@@ -221,7 +221,7 @@ impl App {
                     let _ = self
                         .handle_primary_thread_turn_complete_for_workflows(
                             app_server_client,
-                            last_agent_message,
+                            after_turn,
                         )
                         .await;
                 }

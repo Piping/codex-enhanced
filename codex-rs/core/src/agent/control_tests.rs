@@ -1690,6 +1690,87 @@ async fn resume_agent_from_rollout_reads_archived_rollout_path() {
 }
 
 #[tokio::test]
+async fn resume_agent_from_rollout_restores_spawned_child_without_manual_persist() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+
+    let child_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("hello child"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })),
+        )
+        .await
+        .expect("child spawn should succeed");
+
+    wait_for_live_thread_spawn_children(&harness.control, parent_thread_id, &[child_thread_id])
+        .await;
+
+    let parent_rollout_path = parent_thread
+        .rollout_path()
+        .expect("parent thread should have rollout path");
+    assert!(
+        tokio::fs::try_exists(&parent_rollout_path)
+            .await
+            .expect("parent rollout path should be readable"),
+        "parent rollout should exist before shutdown"
+    );
+
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should exist");
+    let child_rollout_path = child_thread
+        .rollout_path()
+        .expect("child thread should have rollout path");
+    assert!(
+        tokio::fs::try_exists(&child_rollout_path)
+            .await
+            .expect("child rollout path should be readable"),
+        "child rollout should exist before shutdown"
+    );
+
+    let report = harness
+        .manager
+        .shutdown_all_threads_bounded(Duration::from_secs(5))
+        .await;
+    assert_eq!(report.submit_failed, Vec::<ThreadId>::new());
+    assert_eq!(report.timed_out, Vec::<ThreadId>::new());
+
+    let resumed_parent_thread_id = harness
+        .control
+        .resume_agent_from_rollout(
+            harness.config.clone(),
+            parent_thread_id,
+            SessionSource::Exec,
+        )
+        .await
+        .expect("parent resume should succeed");
+    assert_eq!(resumed_parent_thread_id, parent_thread_id);
+    wait_for_live_thread_spawn_children(&harness.control, parent_thread_id, &[child_thread_id])
+        .await;
+
+    let _ = harness
+        .control
+        .shutdown_live_agent(child_thread_id)
+        .await
+        .expect("resumed child shutdown should succeed");
+    let _ = harness
+        .control
+        .shutdown_live_agent(parent_thread_id)
+        .await
+        .expect("resumed parent shutdown should succeed");
+}
+
+#[tokio::test]
 async fn list_agent_subtree_thread_ids_includes_anonymous_and_closed_descendants() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, _parent_thread) = harness.start_thread().await;

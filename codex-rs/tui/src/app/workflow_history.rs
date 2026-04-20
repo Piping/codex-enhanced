@@ -1,3 +1,4 @@
+use super::AfterTurnContext;
 use super::App;
 use super::workflow_runtime::WorkflowOutputDelivery;
 use super::workflow_runtime::WorkflowPhaseContext;
@@ -302,7 +303,7 @@ impl App {
     pub(crate) async fn handle_primary_thread_turn_complete_for_workflows(
         &mut self,
         app_server: &AppServerSession,
-        last_agent_message: Option<String>,
+        after_turn: AfterTurnContext,
     ) -> Vec<Arc<dyn HistoryCell>> {
         let Some(primary_thread_id) = self.primary_thread_id else {
             return Vec::new();
@@ -321,11 +322,14 @@ impl App {
         let mut visible_cells = Vec::new();
         let phase_context = WorkflowPhaseContext {
             current_user_turn: None,
-            last_assistant_message: last_agent_message.as_deref(),
+            last_assistant_message: after_turn.last_agent_message.as_deref(),
         };
         for workflow in &registry.files {
             for trigger in &workflow.triggers {
-                if !trigger.enabled || !matches!(trigger.kind, WorkflowTriggerKind::AfterTurn) {
+                let WorkflowTriggerKind::AfterTurn { condition } = &trigger.kind else {
+                    continue;
+                };
+                if !trigger.enabled || !condition.matches_turn_status(&after_turn.status) {
                     continue;
                 }
 

@@ -1085,6 +1085,9 @@ impl ThreadManagerState {
             session_configured.rollout_path.clone(),
             watch_registration,
         ));
+        // Freshly spawned non-ephemeral threads must be file-backed before returning so
+        // restart/respawn flows can recover them even if no turn has completed yet.
+        thread.ensure_rollout_materialized().await;
         let mut threads = self.threads.write().await;
         threads.insert(thread_id, thread.clone());
 
