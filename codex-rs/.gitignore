@@ -11,3 +11,5 @@
 progress.md
 install_local.sh
 *.bkp
+
+target/

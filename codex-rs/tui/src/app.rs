@@ -123,9 +123,12 @@ use codex_app_server_protocol::SkillErrorInfo;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadMemoryMode;
 use codex_app_server_protocol::ThreadRollbackResponse;
+use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
+use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
@@ -297,7 +300,7 @@ fn workflow_after_turn_last_agent_message(
     primary_thread_id: Option<ThreadId>,
     thread_id: ThreadId,
     notification: &ServerNotification,
-) -> Option<Option<String>> {
+) -> Option<AfterTurnContext> {
     if primary_thread_id != Some(thread_id) {
         return None;
     }
@@ -310,7 +313,10 @@ fn workflow_after_turn_last_agent_message(
     ) {
         return None;
     }
-    Some(last_agent_message_for_turn(&notification.turn))
+    Some(AfterTurnContext {
+        last_agent_message: last_agent_message_for_turn(&notification.turn),
+        status: notification.turn.status.clone(),
+    })
 }
 
 fn last_agent_message_for_turn(turn: &Turn) -> Option<String> {
@@ -321,6 +327,12 @@ fn last_agent_message_for_turn(turn: &Turn) -> Option<String> {
         }
         _ => None,
     })
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct AfterTurnContext {
+    last_agent_message: Option<String>,
+    status: TurnStatus,
 }
 
 fn default_exec_approval_decisions(
@@ -2108,12 +2120,22 @@ impl App {
 
     /// Returns the thread whose transcript is currently on screen.
     ///
-    /// `active_thread_id` is the source of truth during steady state, but the widget can briefly
-    /// lag behind thread bookkeeping during transitions. The footer label and adjacent-thread
-    /// navigation both follow what the user is actually looking at, not whichever thread most
-    /// recently began switching.
+    /// The widget owns the transcript currently on screen, while `active_thread_id` can briefly
+    /// trail behind after a thread switch. Follow the visible widget first so actions like
+    /// `/respawn` operate on what the user is actually viewing.
     fn current_displayed_thread_id(&self) -> Option<ThreadId> {
-        self.active_thread_id.or(self.chat_widget.thread_id())
+        self.chat_widget.thread_id().or(self.active_thread_id)
+    }
+
+    async fn current_displayed_thread_respawn_target(&self) -> Option<String> {
+        if let Some(thread_id) = self.current_displayed_thread_id() {
+            return Some(thread_id.to_string());
+        }
+
+        self.chat_widget
+            .thread_name()
+            .as_deref()
+            .and_then(crate::legacy_core::util::normalize_thread_name)
     }
 
     fn ignore_same_thread_resume(
@@ -3904,22 +3926,34 @@ impl App {
         self.reset_thread_event_state();
         let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
-        self.enqueue_primary_thread_session(started.session, started.turns)
+        self.restore_started_thread_state(app_server, started)
             .await?;
-        self.backfill_loaded_subagent_threads(app_server).await;
         self.sync_clawbot_workspace(app_server).await;
         Ok(())
     }
 
-    /// Fetches all loaded threads from the app server and registers descendants of the primary
-    /// thread in the navigation cache and chat widget metadata.
+    async fn restore_started_thread_state(
+        &mut self,
+        app_server: &mut AppServerSession,
+        started: AppServerStartedThread,
+    ) -> Result<()> {
+        self.enqueue_primary_thread_session(started.session, started.turns)
+            .await?;
+        self.backfill_loaded_subagent_threads(app_server).await;
+        Ok(())
+    }
+
+    /// Fetches loaded and stored spawned threads from the app server and registers descendants of
+    /// the primary thread in the navigation cache and chat widget metadata.
     ///
     /// Called after `replace_chat_widget_with_app_server_thread` during resume, fork, and new
     /// thread creation so that the `/agent` picker and keyboard navigation are pre-populated even
     /// if the TUI did not witness the original spawn events.
     ///
-    /// The loaded-thread list is fetched in full (no pagination) and the spawn tree is walked
-    /// by `find_loaded_subagent_threads_for_primary`. Each discovered subagent is registered via
+    /// The app server may only have the primary thread loaded after restart, so we merge the
+    /// in-memory loaded-thread list with stored `thread/list` results for persistent
+    /// `SubAgentThreadSpawn` sessions before walking the spawn tree via
+    /// `find_loaded_subagent_threads_for_primary`. Each discovered subagent is registered via
     /// `upsert_agent_picker_thread`, which writes to both `AgentNavigationState` and the
     /// `ChatWidget` metadata map.
     async fn backfill_loaded_subagent_threads(
@@ -3930,6 +3964,7 @@ impl App {
             return false;
         };
 
+        let mut threads_by_id = HashMap::new();
         let loaded_thread_ids = match app_server
             .thread_loaded_list(ThreadLoadedListParams {
                 cursor: None,
@@ -3944,7 +3979,6 @@ impl App {
             }
         };
 
-        let mut threads = Vec::new();
         let mut had_read_error = false;
         for thread_id in loaded_thread_ids {
             let Ok(thread_id) = ThreadId::from_string(&thread_id) else {
@@ -3960,7 +3994,9 @@ impl App {
                 .thread_read(thread_id, /*include_turns*/ false)
                 .await
             {
-                Ok(thread) => threads.push(thread),
+                Ok(thread) => {
+                    threads_by_id.insert(thread_id, thread);
+                }
                 Err(err) => {
                     had_read_error = true;
                     tracing::warn!(thread_id = %thread_id, %err, "failed to read loaded thread");
@@ -3968,6 +4004,62 @@ impl App {
             }
         }
 
+        let mut next_cursor = None;
+        loop {
+            let model_provider_id = self
+                .primary_session_configured
+                .as_ref()
+                .map(|session| session.model_provider_id.clone())
+                .unwrap_or_else(|| self.config.model_provider_id.clone());
+            let cwd = self
+                .primary_session_configured
+                .as_ref()
+                .map(|session| session.cwd.as_path())
+                .unwrap_or(self.config.cwd.as_path());
+            let thread_list = app_server
+                .thread_list(ThreadListParams {
+                    cursor: next_cursor.clone(),
+                    limit: Some(100),
+                    sort_key: Some(AppServerThreadSortKey::UpdatedAt),
+                    model_providers: if app_server.is_remote() {
+                        None
+                    } else {
+                        Some(vec![model_provider_id])
+                    },
+                    source_kinds: Some(vec![ThreadSourceKind::SubAgentThreadSpawn]),
+                    archived: Some(false),
+                    cwd: (!app_server.is_remote()).then(|| cwd.to_string_lossy().to_string()),
+                    search_term: None,
+                })
+                .await;
+            let response = match thread_list {
+                Ok(response) => response,
+                Err(err) => {
+                    tracing::warn!(%err, "failed to list stored subagent threads for backfill");
+                    return false;
+                }
+            };
+
+            for thread in response.data {
+                let Ok(thread_id) = ThreadId::from_string(&thread.id) else {
+                    tracing::warn!(
+                        "ignoring stored subagent thread with invalid id during backfill"
+                    );
+                    continue;
+                };
+                if thread_id == primary_thread_id {
+                    continue;
+                }
+                threads_by_id.entry(thread_id).or_insert(thread);
+            }
+
+            let Some(cursor) = response.next_cursor else {
+                break;
+            };
+            next_cursor = Some(cursor);
+        }
+
+        let threads: Vec<_> = threads_by_id.into_values().collect();
         for thread in find_loaded_subagent_threads_for_primary(threads, primary_thread_id) {
             self.upsert_agent_picker_thread(
                 thread.thread_id,
@@ -4012,11 +4104,10 @@ impl App {
                                 _ => None,
                             });
                     self.handle_thread_event_now(event);
-                    if let Some(last_agent_message) = after_turn {
+                    if let Some(after_turn) = after_turn {
                         for cell in self
                             .handle_primary_thread_turn_complete_for_workflows(
-                                app_server,
-                                last_agent_message,
+                                app_server, after_turn,
                             )
                             .await
                         {
@@ -4469,7 +4560,7 @@ See the Codex keymap documentation for supported actions and examples."
         }
         if let Some(started) = initial_started_thread {
             let thread_id = started.session.thread_id;
-            app.enqueue_primary_thread_session(started.session, started.turns)
+            app.restore_started_thread_state(&mut app_server, started)
                 .await?;
             if should_prompt_for_paused_goal_after_startup_resume {
                 app.maybe_prompt_resume_paused_goal_after_resume(&mut app_server, thread_id)
@@ -4639,10 +4730,7 @@ See the Codex keymap documentation for supported actions and examples."
             app.chat_widget.thread_name(),
             app.chat_widget.rollout_path().as_deref(),
         );
-        let respawn_target = app.chat_widget.thread_name().or_else(|| {
-            app.current_displayed_thread_id()
-                .map(|thread_id| thread_id.to_string())
-        });
+        let respawn_target = app.current_displayed_thread_respawn_target().await;
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
             thread_id: resumable_thread.as_ref().map(|thread| thread.thread_id),
@@ -6402,7 +6490,17 @@ See the Codex keymap documentation for supported actions and examples."
     }
 
     fn active_btw_thread_id_for_respawn(&self) -> Option<ThreadId> {
-        self.btw_session.as_ref().map(|session| session.thread_id)
+        let displayed_thread_id = self.current_displayed_thread_id()?;
+        self.btw_session
+            .as_ref()
+            .map(|session| session.thread_id)
+            .filter(|thread_id| *thread_id == displayed_thread_id)
+            .or_else(|| {
+                self.agent_navigation
+                    .get(&displayed_thread_id)
+                    .filter(|entry| entry.agent_role.as_deref() == Some("btw"))
+                    .map(|_| displayed_thread_id)
+            })
     }
 
     fn handle_skills_list_response(&mut self, response: SkillsListResponse) {
@@ -6569,9 +6667,9 @@ See the Codex keymap documentation for supported actions and examples."
                 _ => None,
             });
         self.handle_thread_event_now(event);
-        if let Some(last_agent_message) = after_turn {
+        if let Some(after_turn) = after_turn {
             for cell in self
-                .handle_primary_thread_turn_complete_for_workflows(app_server, last_agent_message)
+                .handle_primary_thread_turn_complete_for_workflows(app_server, after_turn)
                 .await
             {
                 self.insert_visible_history_cell(tui, cell);
@@ -10451,16 +10549,27 @@ jobs:
     }
 
     fn write_test_after_turn_workflow(workspace_cwd: &Path) -> Result<()> {
+        write_test_after_turn_workflow_with_condition(workspace_cwd, None)
+    }
+
+    fn write_test_after_turn_workflow_with_condition(
+        workspace_cwd: &Path,
+        condition: Option<&str>,
+    ) -> Result<()> {
         let workflows_dir = workspace_cwd.join(".codex/workflows");
         std::fs::create_dir_all(&workflows_dir)?;
+        let condition = condition
+            .map(|condition| format!("    condition: {condition}\n"))
+            .unwrap_or_default();
         std::fs::write(
             workflows_dir.join("after_turn.yaml"),
-            r#"name: director
+            format!(
+                r#"name: director
 
 triggers:
   - type: after_turn
     id: followup
-    jobs: [followup]
+{condition}    jobs: [followup]
 
 jobs:
   followup:
@@ -10469,6 +10578,7 @@ jobs:
       - prompt: |
           follow up from workflow
 "#,
+            ),
         )?;
         Ok(())
     }
@@ -12740,7 +12850,10 @@ model = "gpt-5.2"
         let visible_cells = app
             .handle_primary_thread_turn_complete_for_workflows(
                 &app_server,
-                Some("final reply".to_string()),
+                AfterTurnContext {
+                    last_agent_message: Some("final reply".to_string()),
+                    status: TurnStatus::Completed,
+                },
             )
             .await;
         assert_eq!(visible_cells.len(), 1);
@@ -12795,6 +12908,84 @@ model = "gpt-5.2"
             }
             other => panic!("expected workflow follow-up submission, got {other:?}"),
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_primary_turn_skips_after_turn_by_default() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+        write_test_after_turn_workflow(app.config.cwd.as_path())?;
+
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start thread");
+        let thread_id = started.session.thread_id;
+        app.enqueue_primary_thread_session(started.session, Vec::new())
+            .await?;
+        app.active_thread_id = Some(ThreadId::new());
+        while app_event_rx.try_recv().is_ok() {}
+
+        app.handle_app_server_event(
+            &app_server,
+            AppServerEvent::ServerNotification(turn_completed_notification_with_agent_message(
+                thread_id,
+                "turn-failed",
+                TurnStatus::Failed,
+                "failed reply",
+            )),
+        )
+        .await;
+
+        assert!(app.background_workflow_labels().is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_primary_turn_runs_after_turn_when_condition_allows_any_result() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+        write_test_after_turn_workflow_with_condition(
+            app.config.cwd.as_path(),
+            Some("turn_finished"),
+        )?;
+
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start thread");
+        let thread_id = started.session.thread_id;
+        app.enqueue_primary_thread_session(started.session, Vec::new())
+            .await?;
+        app.active_thread_id = Some(ThreadId::new());
+        while app_event_rx.try_recv().is_ok() {}
+
+        app.handle_app_server_event(
+            &app_server,
+            AppServerEvent::ServerNotification(turn_completed_notification_with_agent_message(
+                thread_id,
+                "turn-failed",
+                TurnStatus::Failed,
+                "failed reply",
+            )),
+        )
+        .await;
+
+        assert_eq!(
+            app.background_workflow_labels(),
+            vec!["director · followup".to_string()]
+        );
         Ok(())
     }
 
@@ -13301,7 +13492,7 @@ model = "gpt-5.2"
     }
 
     #[tokio::test]
-    async fn active_btw_thread_id_for_respawn_prefers_btw_session() {
+    async fn active_btw_thread_id_for_respawn_only_reattaches_visible_btw_thread() {
         let mut app = make_test_app().await;
         let main_thread_id = ThreadId::new();
         let btw_thread_id = ThreadId::new();
@@ -13313,12 +13504,19 @@ model = "gpt-5.2"
         });
         assert_eq!(app.active_btw_thread_id_for_respawn(), Some(btw_thread_id));
 
+        app.chat_widget.handle_thread_session(test_thread_session(
+            main_thread_id,
+            test_path_buf("/tmp/main"),
+        ));
         app.active_thread_id = Some(main_thread_id);
-        assert_eq!(app.active_btw_thread_id_for_respawn(), Some(btw_thread_id));
+        assert_eq!(app.active_btw_thread_id_for_respawn(), None);
+
+        app.active_thread_id = Some(btw_thread_id);
+        assert_eq!(app.active_btw_thread_id_for_respawn(), None);
     }
 
     #[tokio::test]
-    async fn active_btw_thread_id_for_respawn_uses_hidden_btw_thread_when_no_visible_thread() {
+    async fn active_btw_thread_id_for_respawn_skips_hidden_btw_thread_without_visible_context() {
         let mut app = make_test_app().await;
         let btw_thread_id = ThreadId::new();
 
@@ -13326,7 +13524,143 @@ model = "gpt-5.2"
             thread_id: btw_thread_id,
         });
 
+        assert_eq!(app.active_btw_thread_id_for_respawn(), None);
+    }
+
+    #[tokio::test]
+    async fn active_btw_thread_id_for_respawn_uses_visible_btw_role_after_restore() {
+        let mut app = make_test_app().await;
+        let main_thread_id = ThreadId::new();
+        let btw_thread_id = ThreadId::new();
+
+        app.primary_thread_id = Some(main_thread_id);
+        app.upsert_agent_picker_thread(
+            main_thread_id,
+            Some("main".to_string()),
+            Some("default".to_string()),
+            /*is_closed*/ false,
+        );
+        app.upsert_agent_picker_thread(
+            btw_thread_id,
+            Some("btw scratch".to_string()),
+            Some("btw".to_string()),
+            /*is_closed*/ false,
+        );
+        app.active_thread_id = Some(btw_thread_id);
+        app.chat_widget.handle_thread_session(test_thread_session(
+            btw_thread_id,
+            test_path_buf("/tmp/btw"),
+        ));
+
+        assert_eq!(app.btw_session, None);
         assert_eq!(app.active_btw_thread_id_for_respawn(), Some(btw_thread_id));
+    }
+
+    #[tokio::test]
+    async fn current_displayed_thread_respawn_target_ignores_stale_btw_name() {
+        let mut app = make_test_app().await;
+        let main_thread_id = ThreadId::new();
+        let btw_thread_id = ThreadId::new();
+
+        let main_session = test_thread_session(main_thread_id, test_path_buf("/tmp/main"));
+        let stale_name_main_session = ThreadSessionState {
+            thread_name: Some("btw scratch".to_string()),
+            ..main_session.clone()
+        };
+        let btw_session = ThreadSessionState {
+            thread_name: Some("btw scratch".to_string()),
+            ..test_thread_session(btw_thread_id, test_path_buf("/tmp/btw"))
+        };
+
+        app.thread_event_channels.insert(
+            main_thread_id,
+            ThreadEventChannel::new_with_session(
+                THREAD_EVENT_CHANNEL_CAPACITY,
+                main_session,
+                Vec::new(),
+            ),
+        );
+        app.thread_event_channels.insert(
+            btw_thread_id,
+            ThreadEventChannel::new_with_session(
+                THREAD_EVENT_CHANNEL_CAPACITY,
+                btw_session.clone(),
+                Vec::new(),
+            ),
+        );
+        app.active_thread_id = Some(main_thread_id);
+        app.chat_widget
+            .handle_thread_session(stale_name_main_session);
+
+        assert_eq!(
+            app.chat_widget.thread_name().as_deref(),
+            Some("btw scratch")
+        );
+        assert_eq!(
+            app.current_displayed_thread_respawn_target().await,
+            Some(main_thread_id.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn current_displayed_thread_respawn_target_uses_visible_btw_thread_name() {
+        let mut app = make_test_app().await;
+        let btw_thread_id = ThreadId::new();
+        let btw_session = ThreadSessionState {
+            thread_name: Some("btw scratch".to_string()),
+            ..test_thread_session(btw_thread_id, test_path_buf("/tmp/btw"))
+        };
+
+        app.thread_event_channels.insert(
+            btw_thread_id,
+            ThreadEventChannel::new_with_session(
+                THREAD_EVENT_CHANNEL_CAPACITY,
+                btw_session.clone(),
+                Vec::new(),
+            ),
+        );
+        app.active_thread_id = Some(btw_thread_id);
+        app.chat_widget.handle_thread_session(btw_session);
+
+        assert_eq!(
+            app.current_displayed_thread_respawn_target().await,
+            Some(btw_thread_id.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn current_displayed_thread_respawn_target_prefers_thread_id_over_stale_visible_name() {
+        let mut app = make_test_app().await;
+        let main_thread_id = ThreadId::new();
+        let stale_name_session = ThreadSessionState {
+            thread_name: Some("btw scratch".to_string()),
+            ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
+        };
+
+        app.chat_widget.handle_thread_session(stale_name_session);
+
+        assert_eq!(
+            app.current_displayed_thread_respawn_target().await,
+            Some(main_thread_id.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn current_displayed_thread_respawn_target_prefers_visible_thread_over_stale_active_id() {
+        let mut app = make_test_app().await;
+        let main_thread_id = ThreadId::new();
+        let btw_thread_id = ThreadId::new();
+
+        app.active_thread_id = Some(btw_thread_id);
+        app.chat_widget.handle_thread_session(test_thread_session(
+            main_thread_id,
+            test_path_buf("/tmp/main"),
+        ));
+
+        assert_eq!(
+            app.current_displayed_thread_respawn_target().await,
+            Some(main_thread_id.to_string())
+        );
     }
 
     #[tokio::test]

@@ -21,6 +21,7 @@ use super::editor_helpers::ExternalEditorErrorTarget;
 use super::workflow_definition::LoadedWorkflowFile;
 use super::workflow_definition::LoadedWorkflowJob;
 use super::workflow_definition::LoadedWorkflowRegistry;
+use super::workflow_definition::WorkflowAfterTurnCondition;
 use super::workflow_definition::WorkflowContextMode;
 use super::workflow_definition::WorkflowResponseMode;
 use super::workflow_definition::WorkflowTriggerKind;
@@ -1641,7 +1642,12 @@ fn workflow_trigger_kind_display(kind: &WorkflowTriggerKind) -> String {
     match kind {
         WorkflowTriggerKind::Manual => "Manual".to_string(),
         WorkflowTriggerKind::BeforeTurn => "Before Turn".to_string(),
-        WorkflowTriggerKind::AfterTurn => "After Turn".to_string(),
+        WorkflowTriggerKind::AfterTurn { condition } => {
+            format!(
+                "After Turn ({})",
+                workflow_after_turn_condition_label(*condition)
+            )
+        }
         WorkflowTriggerKind::FileWatch => "File Watch".to_string(),
         WorkflowTriggerKind::Idle { after } => format!("Idle ({after})"),
         WorkflowTriggerKind::Interval { every } => format!("Interval ({every})"),
@@ -1653,7 +1659,9 @@ fn workflow_trigger_type_description(trigger_type: WorkflowTriggerType) -> &'sta
     match trigger_type {
         WorkflowTriggerType::Manual => "Run only when triggered from the workflow menu.",
         WorkflowTriggerType::BeforeTurn => "Run automatically before the next user turn.",
-        WorkflowTriggerType::AfterTurn => "Run automatically after the current turn finishes.",
+        WorkflowTriggerType::AfterTurn => {
+            "Run automatically after the current turn finishes. Use `condition` to require success."
+        }
         WorkflowTriggerType::FileWatch => {
             "Run automatically when workspace files change. Overlapping runs are skipped."
         }
@@ -1675,7 +1683,7 @@ fn workflow_trigger_matches_type(
                 WorkflowTriggerType::BeforeTurn
             )
             | (
-                &WorkflowTriggerKind::AfterTurn,
+                &WorkflowTriggerKind::AfterTurn { .. },
                 WorkflowTriggerType::AfterTurn
             )
             | (
@@ -1695,6 +1703,13 @@ fn workflow_trigger_parameter_metadata(
     kind: &WorkflowTriggerKind,
 ) -> Option<(&'static str, String)> {
     match kind {
+        WorkflowTriggerKind::AfterTurn { condition } => Some((
+            "Run Condition",
+            format!(
+                "Current `condition`: `{}`.",
+                workflow_after_turn_condition_key(*condition)
+            ),
+        )),
         WorkflowTriggerKind::Idle { after } => {
             Some(("Idle Delay", format!("Current `after`: `{after}`.")))
         }
@@ -1706,8 +1721,21 @@ fn workflow_trigger_parameter_metadata(
         }
         WorkflowTriggerKind::Manual
         | WorkflowTriggerKind::BeforeTurn
-        | WorkflowTriggerKind::AfterTurn
         | WorkflowTriggerKind::FileWatch => None,
+    }
+}
+
+fn workflow_after_turn_condition_label(condition: WorkflowAfterTurnCondition) -> &'static str {
+    match condition {
+        WorkflowAfterTurnCondition::TurnFinished => "Any Result",
+        WorkflowAfterTurnCondition::TurnSucceeded => "Success Only",
+    }
+}
+
+fn workflow_after_turn_condition_key(condition: WorkflowAfterTurnCondition) -> &'static str {
+    match condition {
+        WorkflowAfterTurnCondition::TurnFinished => "turn_finished",
+        WorkflowAfterTurnCondition::TurnSucceeded => "turn_succeeded",
     }
 }
 
@@ -1776,6 +1804,10 @@ triggers:
     id: pulse
     every: 30m
     jobs: [summarize]
+  - type: after_turn
+    id: followup
+    condition: turn_succeeded
+    jobs: [notify]
 
 jobs:
   summarize:
@@ -1955,6 +1987,26 @@ jobs:
         });
         let popup = render_bottom_popup(&app.chat_widget, /*width*/ 100);
         insta::assert_snapshot!("workflow_manual_trigger_popup", popup);
+    }
+
+    #[tokio::test]
+    async fn workflow_after_turn_trigger_popup_snapshot() {
+        let mut app = super::super::tests::make_test_app().await;
+        let dir = tempdir().unwrap();
+        app.config.cwd = dir.path().to_path_buf().abs();
+        write_test_manual_workflow(app.config.cwd.as_path());
+        let workflow_path = app
+            .config
+            .cwd
+            .as_path()
+            .join(".codex/workflows/manual.yaml");
+
+        app.open_workflow_control_view(WorkflowControlsDestination::ManualTrigger {
+            workflow_path,
+            trigger_id: "followup".to_string(),
+        });
+        let popup = render_bottom_popup(&app.chat_widget, /*width*/ 100);
+        insta::assert_snapshot!("workflow_after_turn_trigger_popup", popup);
     }
 
     #[tokio::test]

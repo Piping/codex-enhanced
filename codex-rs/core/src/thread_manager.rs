@@ -1328,26 +1328,28 @@ impl ThreadManagerState {
             }
         };
 
-        {
-            let mut threads = self.threads.write().await;
-            if let std::collections::hash_map::Entry::Vacant(e) = threads.entry(thread_id) {
-                let thread = Arc::new(CodexThread::new(
-                    codex,
-                    session_configured.clone(),
-                    session_configured.rollout_path.clone(),
-                    session_source,
-                    watch_registration,
-                ));
-                e.insert(thread.clone());
-                return Ok(NewThread {
-                    thread_id,
-                    thread,
-                    session_configured,
-                });
-            }
+        let thread = Arc::new(CodexThread::new(
+            codex,
+            session_configured.clone(),
+            session_configured.rollout_path.clone(),
+            session_source,
+            watch_registration,
+        ));
+        // Freshly spawned non-ephemeral threads must be file-backed before returning so
+        // restart/respawn flows can recover them even if no turn has completed yet.
+        thread.ensure_rollout_materialized().await;
+        let mut threads = self.threads.write().await;
+        if let std::collections::hash_map::Entry::Vacant(e) = threads.entry(thread_id) {
+            e.insert(thread.clone());
+            return Ok(NewThread {
+                thread_id,
+                thread,
+                session_configured,
+            });
         }
+        drop(threads);
 
-        if let Err(err) = codex.shutdown_and_wait().await {
+        if let Err(err) = thread.shutdown_and_wait().await {
             warn!("failed to shut down duplicate thread {thread_id}: {err}");
         }
         Err(CodexErr::InvalidRequest(format!(

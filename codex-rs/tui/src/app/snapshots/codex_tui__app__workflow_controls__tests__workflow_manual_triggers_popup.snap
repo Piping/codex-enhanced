@@ -11,5 +11,6 @@ expression: popup
   review_backlog      Manual · Enabled · Ready
   triage              Manual · Disabled · Ready
   pulse               Interval (30m) · Enabled · Ready
+  followup            After Turn (Success Only) · Enabled · Ready
 
   Press enter to confirm or esc to go back

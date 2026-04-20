@@ -9,7 +9,8 @@ expression: popup
 › Back         Return to the previous workflow menu.
   Manual       Run only when triggered from the workflow menu.
   Before Turn  Run automatically before the next user turn.
-  After Turn   Run automatically after the current turn finishes.
+  After Turn   Run automatically after the current turn finishes. Use `condition` to require
+               success.
   File Watch   Run automatically when workspace files change. Overlapping runs are skipped.
   Idle         Run after the workspace has been idle for a duration.
   Interval     Current type

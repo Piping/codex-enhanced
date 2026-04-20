@@ -70,6 +70,7 @@ Behavior notes:
 - `Run Now` is available for any enabled trigger type, not only `manual`.
 - If a trigger resolves only to disabled or otherwise unrunnable jobs, the run fails visibly instead of silently doing nothing.
 - `After Turn` runs are dispatched as background workflow tasks after the turn finishes, so the main thread stays responsive and the transcript shows workflow start/completion cells separately.
+- `After Turn` defaults to `condition: turn_succeeded`, which means the previous turn must finish successfully before the trigger runs. Set `condition: turn_finished` when follow-up work should also run after failed turns.
 - `response: user` follow-ups can recursively re-trigger `after_turn`. The chain naturally stops when the workflow returns an empty reply, because no follow-up turn is queued.
 - Workflow steps default to a 30s timeout. Override this per step with `timeout`, for example `timeout: 5m`.
 - Timeout failures participate in workflow step retry behavior, including one automatic timeout retry.
@@ -88,14 +89,16 @@ The `Type` picker supports:
 
 Changing the type updates the structured trigger fields in YAML:
 
+- `After Turn` uses `condition` with values `turn_finished` or `turn_succeeded`
 - `File Watch` watches the current workspace recursively and fires when a regular file or a directory changes
 - `Idle` uses `after`
 - `Interval` uses `every`
 - `Cron` uses `cron`
-- `Manual`, `Before Turn`, `After Turn`, and `File Watch` do not require an extra schedule parameter
+- `Manual`, `Before Turn`, and `File Watch` do not require an extra trigger parameter
 
 When the current type has a parameter, the trigger page exposes a matching action:
 
+- `Edit Run Condition`
 - `Edit Idle Delay`
 - `Edit Interval`
 - `Edit Cron Schedule`
