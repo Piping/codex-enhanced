@@ -172,7 +172,6 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::io::Write;
 use std::path::Path;
@@ -435,6 +434,7 @@ pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub thread_id: Option<ThreadId>,
     pub thread_name: Option<String>,
+    pub respawn_target: Option<String>,
     pub update_action: Option<UpdateAction>,
     pub respawn_with_yolo: bool,
     pub exit_reason: ExitReason,
@@ -446,6 +446,7 @@ impl AppExitInfo {
             token_usage: TokenUsage::default(),
             thread_id: None,
             thread_name: None,
+            respawn_target: None,
             update_action: None,
             respawn_with_yolo: false,
             exit_reason: ExitReason::Fatal(message.into()),
@@ -969,6 +970,7 @@ async fn handle_model_migration_prompt_if_needed(
                     token_usage: TokenUsage::default(),
                     thread_id: None,
                     thread_name: None,
+                    respawn_target: None,
                     update_action: None,
                     respawn_with_yolo: false,
                     exit_reason: ExitReason::UserRequested,
@@ -1068,7 +1070,6 @@ pub(crate) struct App {
     workflow_scheduler: WorkflowSchedulerState,
     workflow_history: WorkflowHistoryState,
     btw_session: Option<BtwSessionState>,
-    btw_closing_thread_ids: HashSet<ThreadId>,
     clawbot_controls_destination: ClawbotControlsDestination,
     clawbot_workspace_root: Option<PathBuf>,
     clawbot_provider_task: Option<JoinHandle<()>>,
@@ -4447,7 +4448,6 @@ See the Codex keymap documentation for supported actions and examples."
             workflow_scheduler: WorkflowSchedulerState::default(),
             workflow_history: WorkflowHistoryState::default(),
             btw_session: None,
-            btw_closing_thread_ids: HashSet::new(),
             clawbot_controls_destination: ClawbotControlsDestination::Root,
             clawbot_workspace_root: None,
             clawbot_provider_task: None,
@@ -4639,10 +4639,15 @@ See the Codex keymap documentation for supported actions and examples."
             app.chat_widget.thread_name(),
             app.chat_widget.rollout_path().as_deref(),
         );
+        let respawn_target = app.chat_widget.thread_name().or_else(|| {
+            app.current_displayed_thread_id()
+                .map(|thread_id| thread_id.to_string())
+        });
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
             thread_id: resumable_thread.as_ref().map(|thread| thread.thread_id),
             thread_name: resumable_thread.and_then(|thread| thread.thread_name),
+            respawn_target,
             update_action: app.pending_update_action,
             respawn_with_yolo: should_respawn_with_yolo(&app.config),
             exit_reason,
@@ -4961,6 +4966,17 @@ See the Codex keymap documentation for supported actions and examples."
             }
             AppEvent::CommitTick => {
                 self.chat_widget.on_commit_tick();
+            }
+            AppEvent::RespawnRequested => {
+                if self
+                    .reattach_active_btw_thread_for_respawn(tui, app_server)
+                    .await?
+                {
+                    return Ok(AppRunControl::Continue);
+                }
+                return Ok(self
+                    .handle_exit_mode(app_server, ExitMode::RespawnImmediate)
+                    .await);
             }
             AppEvent::Exit(mode) => {
                 return Ok(self.handle_exit_mode(app_server, mode).await);
@@ -6331,6 +6347,64 @@ See the Codex keymap documentation for supported actions and examples."
         }
     }
 
+    async fn reattach_active_btw_thread_for_respawn(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+    ) -> Result<bool> {
+        let Some(thread_id) = self.active_btw_thread_id_for_respawn() else {
+            return Ok(false);
+        };
+
+        let started = match app_server
+            .resume_thread(self.config.clone(), thread_id)
+            .await
+        {
+            Ok(started) => started,
+            Err(err) => {
+                self.chat_widget.add_error_message(format!(
+                    "Failed to reattach `/btw` thread {thread_id}: {err}"
+                ));
+                return Ok(true);
+            }
+        };
+
+        {
+            let channel = self.ensure_thread_channel(thread_id);
+            let mut store = channel.store.lock().await;
+            store.set_session(started.session, started.turns);
+        }
+
+        self.store_active_thread_receiver().await;
+        self.active_thread_id = None;
+        let Some((receiver, snapshot)) = self.activate_thread_for_replay(thread_id).await else {
+            self.chat_widget.add_error_message(format!(
+                "Failed to reattach `/btw` thread {thread_id}: thread state is unavailable."
+            ));
+            self.activate_thread_channel(thread_id).await;
+            return Ok(true);
+        };
+
+        self.active_thread_id = Some(thread_id);
+        self.active_thread_rx = Some(receiver);
+
+        let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
+        self.replace_chat_widget(ChatWidget::new_with_app_event(init));
+        self.reset_for_thread_switch(tui)?;
+        self.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ true);
+        self.drain_active_thread_events(tui, app_server).await?;
+        self.refresh_pending_thread_approvals().await;
+        self.chat_widget.add_info_message(
+            "Reattached the active `/btw` thread without leaving Codex.".to_string(),
+            /*hint*/ None,
+        );
+        Ok(true)
+    }
+
+    fn active_btw_thread_id_for_respawn(&self) -> Option<ThreadId> {
+        self.btw_session.as_ref().map(|session| session.thread_id)
+    }
+
     fn handle_skills_list_response(&mut self, response: SkillsListResponse) {
         let response = list_skills_response_to_core(response);
         let cwd = self.chat_widget.config_ref().cwd.clone();
@@ -6662,8 +6736,7 @@ See the Codex keymap documentation for supported actions and examples."
                         }
                     }
                     KeyChordAction::RespawnCodex => {
-                        self.app_event_tx
-                            .send(AppEvent::Exit(ExitMode::RespawnImmediate));
+                        self.app_event_tx.send(AppEvent::RespawnRequested);
                     }
                     KeyChordAction::UndoLastUserMessage => {
                         self.app_event_tx.send(AppEvent::UndoLastUserMessage);
@@ -10260,7 +10333,6 @@ guardian_approval = true
             workflow_scheduler: WorkflowSchedulerState::default(),
             workflow_history: WorkflowHistoryState::default(),
             btw_session: None,
-            btw_closing_thread_ids: HashSet::new(),
             clawbot_controls_destination: ClawbotControlsDestination::Root,
             clawbot_workspace_root: None,
             clawbot_provider_task: None,
@@ -10340,7 +10412,6 @@ guardian_approval = true
                 workflow_scheduler: WorkflowSchedulerState::default(),
                 workflow_history: WorkflowHistoryState::default(),
                 btw_session: None,
-                btw_closing_thread_ids: HashSet::new(),
                 clawbot_controls_destination: ClawbotControlsDestination::Root,
                 clawbot_workspace_root: None,
                 clawbot_provider_task: None,
@@ -11959,7 +12030,7 @@ model = "gpt-5.2"
     }
 
     #[tokio::test]
-    async fn ctrl_x_ctrl_r_requests_respawn_exit() {
+    async fn ctrl_x_ctrl_r_requests_respawn() {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
 
         assert_eq!(
@@ -11976,10 +12047,7 @@ model = "gpt-5.2"
             )),
             None
         );
-        assert_matches!(
-            app_event_rx.try_recv(),
-            Ok(AppEvent::Exit(ExitMode::RespawnImmediate))
-        );
+        assert_matches!(app_event_rx.try_recv(), Ok(AppEvent::RespawnRequested));
     }
 
     #[tokio::test]
@@ -13168,29 +13236,6 @@ model = "gpt-5.2"
     }
 
     #[tokio::test]
-    async fn btw_insert_summary_appends_to_existing_composer() -> Result<()> {
-        let mut app = make_test_app().await;
-        let mut app_server =
-            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
-        let thread_id = ThreadId::new();
-        app.btw_session = Some(BtwSessionState {
-            thread_id,
-            final_message: Some("First point.\n\nSecond point.".to_string()),
-            last_status: None,
-        });
-        app.chat_widget
-            .set_composer_text("Existing draft".to_string(), Vec::new(), Vec::new());
-
-        app.insert_btw_summary(&mut app_server).await;
-
-        assert_eq!(
-            app.chat_widget.composer_text_with_pending(),
-            "Existing draft\n\nBTW summary:\nFirst point.\nSecond point."
-        );
-        assert!(app.btw_session.is_none());
-        Ok(())
-    }
-    #[tokio::test]
     async fn shutdown_first_exit_returns_immediate_exit_when_shutdown_submit_fails() {
         let mut app = make_test_app().await;
         let thread_id = ThreadId::new();
@@ -13253,6 +13298,35 @@ model = "gpt-5.2"
             control,
             AppRunControl::Exit(ExitReason::RespawnRequested)
         ));
+    }
+
+    #[tokio::test]
+    async fn active_btw_thread_id_for_respawn_prefers_btw_session() {
+        let mut app = make_test_app().await;
+        let main_thread_id = ThreadId::new();
+        let btw_thread_id = ThreadId::new();
+
+        app.primary_thread_id = Some(main_thread_id);
+        app.active_thread_id = Some(btw_thread_id);
+        app.btw_session = Some(BtwSessionState {
+            thread_id: btw_thread_id,
+        });
+        assert_eq!(app.active_btw_thread_id_for_respawn(), Some(btw_thread_id));
+
+        app.active_thread_id = Some(main_thread_id);
+        assert_eq!(app.active_btw_thread_id_for_respawn(), Some(btw_thread_id));
+    }
+
+    #[tokio::test]
+    async fn active_btw_thread_id_for_respawn_uses_hidden_btw_thread_when_no_visible_thread() {
+        let mut app = make_test_app().await;
+        let btw_thread_id = ThreadId::new();
+
+        app.btw_session = Some(BtwSessionState {
+            thread_id: btw_thread_id,
+        });
+
+        assert_eq!(app.active_btw_thread_id_for_respawn(), Some(btw_thread_id));
     }
 
     #[tokio::test]

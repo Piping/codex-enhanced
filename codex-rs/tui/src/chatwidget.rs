@@ -7746,10 +7746,9 @@ impl ChatWidget {
             .send(AppEvent::Exit(ExitMode::ShutdownFirst));
     }
 
-    /// Request an immediate exit so the outer CLI respawns this session.
+    /// Request a respawn or in-process reattach, depending on the active thread context.
     fn request_respawn(&self) {
-        self.app_event_tx
-            .send(AppEvent::Exit(ExitMode::RespawnImmediate));
+        self.app_event_tx.send(AppEvent::RespawnRequested);
     }
 
     fn request_redraw(&mut self) {

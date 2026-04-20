@@ -145,7 +145,7 @@ impl SlashCommand {
             SlashCommand::Plugins => "browse plugins",
             SlashCommand::Workflow => "inspect and trigger workspace workflows",
             SlashCommand::Respawn => "restart Codex and resume this session",
-            SlashCommand::Btw => "run a hidden temporary discussion",
+            SlashCommand::Btw => "start a new agent thread",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",

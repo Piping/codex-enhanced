@@ -434,7 +434,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::OpenWorkflowControls);
             }
             SlashCommand::Btw => {
-                self.add_error_message("Usage: /btw <temporary discussion prompt>".to_string());
+                self.add_error_message("Usage: /btw <prompt>".to_string());
             }
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {

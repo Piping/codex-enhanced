@@ -3,12 +3,8 @@ use std::path::PathBuf;
 
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::HookEventName as AppServerHookEventName;
-use codex_app_server_protocol::HookOutputEntryKind as AppServerHookOutputEntryKind;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
-use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SubAgentSpawnParams;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
@@ -16,42 +12,27 @@ use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::TurnStatus;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::Wrap;
 use uuid::Uuid;
 
 use super::App;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
-use crate::bottom_pane::SelectionItem;
-use crate::bottom_pane::SelectionViewParams;
-use crate::bottom_pane::SideContentWidth;
-use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use codex_app_server_client::AppServerRequestHandle;
 
 const BTW_DEVELOPER_INSTRUCTIONS: &str = concat!(
-    "This is a hidden `/btw` discussion thread. ",
-    "Treat it as a temporary scratchpad that runs with the same approval and sandbox settings ",
-    "as the source thread. ",
-    "You may inspect local context and use tools that are allowed by that thread. ",
-    "Your answer will be shown to the user in a temporary confirmation view and may be inserted ",
-    "back into the main composer."
+    "This is a `/btw` agent thread. ",
+    "Treat it as a dedicated follow-up agent with the same approval and sandbox settings as the ",
+    "source thread. ",
+    "Use the thread directly and answer the user's prompt in that thread."
 );
-const BTW_DISCUSSION_VIEW_ID: &str = "btw-discussion";
-const PREVIEW_CHAR_LIMIT: usize = 1_200;
-const SUMMARY_MAX_LINES: usize = 4;
-const SUMMARY_MAX_CHARS: usize = 500;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BtwSessionState {
     pub(crate) thread_id: ThreadId,
-    pub(crate) final_message: Option<String>,
-    pub(crate) last_status: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,7 +51,7 @@ impl App {
         let trimmed_prompt = prompt.trim();
         if trimmed_prompt.is_empty() {
             self.chat_widget
-                .add_error_message("Usage: /btw <temporary discussion prompt>".to_string());
+                .add_error_message("Usage: /btw <prompt>".to_string());
             return;
         }
 
@@ -95,6 +76,7 @@ impl App {
             /*is_closed*/ false,
         );
         self.prime_btw_thread_channel(app_server, thread_id).await;
+        self.btw_session = Some(BtwSessionState { thread_id });
 
         let turn_result = app_server
             .turn_start(
@@ -114,6 +96,14 @@ impl App {
             )
             .await;
         if let Err(err) = turn_result {
+            self.btw_session = None;
+            if let Err(close_err) = app_server.thread_unsubscribe(thread_id).await {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    error = %close_err,
+                    "failed to clean up `/btw` thread after submission failure"
+                );
+            }
             self.chat_widget
                 .add_error_message(format!("Failed to submit `/btw`: {err}"));
             return;
@@ -121,191 +111,6 @@ impl App {
 
         self.app_event_tx
             .send(AppEvent::SelectAgentThread(thread_id));
-    }
-
-    pub(crate) fn finish_btw_discussion(
-        &mut self,
-        thread_id: ThreadId,
-        result: Result<String, String>,
-    ) {
-        let Some(session) = self.btw_session.as_mut() else {
-            return;
-        };
-        if session.thread_id != thread_id {
-            return;
-        }
-
-        match result {
-            Ok(message) => {
-                session.final_message = Some(message.clone());
-                self.open_btw_result_popup(&message);
-            }
-            Err(err) => {
-                let message = btw_failure_message(&err, session.last_status.as_deref());
-                self.open_btw_failure_popup(&message);
-            }
-        }
-    }
-
-    pub(crate) fn reject_btw_request(
-        &mut self,
-        thread_id: ThreadId,
-        request: &ServerRequest,
-    ) -> Option<String> {
-        let session = self.btw_session.as_mut()?;
-        if session.thread_id != thread_id {
-            return None;
-        }
-
-        let reason = btw_request_rejection_reason(request)?;
-        session.last_status = Some(reason.clone());
-        self.open_btw_failure_popup(&format!("`/btw` cannot continue: {reason}"));
-        Some(reason)
-    }
-
-    pub(crate) fn handle_btw_notification(
-        &mut self,
-        thread_id: ThreadId,
-        notification: &ServerNotification,
-    ) -> bool {
-        if self.btw_closing_thread_ids.contains(&thread_id) {
-            if matches!(notification, ServerNotification::ThreadClosed(_)) {
-                self.btw_closing_thread_ids.remove(&thread_id);
-            }
-            return true;
-        }
-
-        let Some(session) = self.btw_session.as_mut() else {
-            return false;
-        };
-        if session.thread_id != thread_id {
-            return false;
-        }
-
-        let status_message = if let Some(status) = btw_status_message(notification)
-            && session.final_message.is_none()
-            && session.last_status.as_deref() != Some(status.as_str())
-        {
-            session.last_status = Some(status.clone());
-            Some(status)
-        } else {
-            None
-        };
-        let final_message_recorded = session.final_message.is_some();
-
-        if let Some(status_message) = status_message.as_deref() {
-            self.open_btw_loading_popup(Some(status_message));
-        }
-
-        if final_message_recorded {
-            return true;
-        }
-
-        match notification {
-            ServerNotification::Error(notification) if !notification.will_retry => {
-                self.app_event_tx.send(AppEvent::BtwCompleted {
-                    thread_id,
-                    result: Err(notification.error.message.clone()),
-                });
-            }
-            ServerNotification::TurnCompleted(notification) => {
-                let result = match notification.turn.status {
-                    TurnStatus::Completed => last_agent_message_or_error(&notification.turn),
-                    TurnStatus::Failed => last_agent_message_or_error(&notification.turn)
-                        .or_else(|_| turn_failed_error(&notification.turn)),
-                    TurnStatus::Interrupted => {
-                        Err("Temporary discussion was interrupted.".to_string())
-                    }
-                    TurnStatus::InProgress => return true,
-                };
-                self.app_event_tx
-                    .send(AppEvent::BtwCompleted { thread_id, result });
-            }
-            ServerNotification::ThreadClosed(_) => {
-                self.app_event_tx.send(AppEvent::BtwCompleted {
-                    thread_id,
-                    result: Err("Temporary discussion closed before a final answer.".to_string()),
-                });
-            }
-            _ => {}
-        }
-
-        true
-    }
-
-    pub(crate) async fn insert_btw_summary(&mut self, app_server: &mut AppServerSession) {
-        let Some(message) = self
-            .btw_session
-            .as_ref()
-            .and_then(|session| session.final_message.as_deref())
-        else {
-            self.open_btw_failure_popup("`/btw` summary is unavailable.");
-            return;
-        };
-
-        self.insert_btw_text(summarize_message(message));
-        self.chat_widget.add_info_message(
-            "Inserted `/btw` summary into the composer.".to_string(),
-            /*hint*/ None,
-        );
-        self.close_btw_session(app_server).await;
-    }
-
-    pub(crate) async fn insert_btw_full(&mut self, app_server: &mut AppServerSession) {
-        let Some(message) = self
-            .btw_session
-            .as_ref()
-            .and_then(|session| session.final_message.as_deref())
-        else {
-            self.open_btw_failure_popup("`/btw` answer is unavailable.");
-            return;
-        };
-
-        self.insert_btw_text(full_insert_text(message));
-        self.chat_widget.add_info_message(
-            "Inserted `/btw` answer into the composer.".to_string(),
-            /*hint*/ None,
-        );
-        self.close_btw_session(app_server).await;
-    }
-
-    pub(crate) async fn discard_btw_session(&mut self, app_server: &mut AppServerSession) {
-        let had_session = self.btw_session.is_some();
-        self.close_btw_session(app_server).await;
-        if had_session {
-            self.chat_widget.add_info_message(
-                "Discarded `/btw` discussion.".to_string(),
-                /*hint*/ None,
-            );
-        }
-    }
-
-    fn insert_btw_text(&mut self, text: String) {
-        if !self
-            .chat_widget
-            .composer_text_with_pending()
-            .trim()
-            .is_empty()
-        {
-            self.chat_widget.insert_str("\n\n");
-        }
-        self.chat_widget.insert_str(&text);
-    }
-
-    pub(crate) async fn close_btw_session(&mut self, app_server: &mut AppServerSession) {
-        let Some(session) = self.btw_session.take() else {
-            return;
-        };
-        self.close_btw_thread(app_server, session.thread_id).await;
-    }
-
-    async fn close_btw_thread(&mut self, app_server: &mut AppServerSession, thread_id: ThreadId) {
-        if !self.btw_closing_thread_ids.insert(thread_id) {
-            return;
-        }
-        if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
-            tracing::warn!(thread_id = %thread_id, error = %err, "failed to close `/btw` thread");
-        }
     }
 
     async fn start_btw_thread(
@@ -328,7 +133,7 @@ impl App {
                     ),
                 })
                 .await
-                .map_err(|err| format!("failed to fork temporary thread: {err}"))?;
+                .map_err(|err| format!("failed to fork `/btw` thread: {err}"))?;
             ThreadId::from_string(&response.thread.id)
                 .map_err(|err| format!("invalid `/btw` thread id: {err}"))
         } else {
@@ -338,7 +143,7 @@ impl App {
                     params: btw_thread_start_params(self, app_server, permissions, subagent_spawn),
                 })
                 .await
-                .map_err(|err| format!("failed to start temporary thread: {err}"))?;
+                .map_err(|err| format!("failed to start `/btw` thread: {err}"))?;
             ThreadId::from_string(&response.thread.id)
                 .map_err(|err| format!("invalid `/btw` thread id: {err}"))
         }
@@ -405,7 +210,7 @@ impl App {
                 tracing::warn!(
                     thread_id = %thread_id,
                     error = %err,
-                    "failed to inspect `/btw` source thread; starting a fresh temporary thread"
+                    "failed to inspect `/btw` source thread; starting a fresh thread"
                 );
                 return Ok(None);
             }
@@ -442,26 +247,6 @@ impl App {
                 );
             }
         }
-    }
-
-    fn open_btw_loading_popup(&mut self, status_message: Option<&str>) {
-        let status_message = status_message.map(ToOwned::to_owned);
-        self.show_btw_popup(move || btw_loading_view_params(status_message.as_deref()));
-    }
-
-    fn open_btw_result_popup(&mut self, message: &str) {
-        self.show_btw_popup(|| btw_result_view_params(message));
-    }
-
-    fn open_btw_failure_popup(&mut self, error: &str) {
-        self.show_btw_popup(|| btw_failure_view_params(error));
-    }
-
-    fn show_btw_popup<F>(&mut self, build: F)
-    where
-        F: Fn() -> SelectionViewParams,
-    {
-        self.open_selection_popup_for_view(BTW_DISCUSSION_VIEW_ID, |_app, _| build());
     }
 
     fn btw_thread_cwd(&self, app_server: &AppServerSession) -> Option<String> {
@@ -517,7 +302,6 @@ pub(super) fn btw_thread_start_params(
             app.config.developer_instructions.as_deref(),
         )),
         personality: app.config.personality,
-        ephemeral: Some(true),
         subagent_spawn: subagent_spawn.cloned(),
         persist_extended_history: true,
         ..ThreadStartParams::default()
@@ -546,7 +330,6 @@ pub(super) fn btw_thread_fork_params(
             app.config.developer_instructions.as_deref(),
         )),
         subagent_spawn: subagent_spawn.cloned(),
-        ephemeral: true,
         persist_extended_history: true,
         ..ThreadForkParams::default()
     }
@@ -590,336 +373,11 @@ fn merge_developer_instructions(existing: Option<&str>) -> String {
     }
 }
 
-fn preview_text(message: &str) -> String {
-    let trimmed = message.trim();
-    if trimmed.chars().count() <= PREVIEW_CHAR_LIMIT {
-        return trimmed.to_string();
-    }
-
-    let preview: String = trimmed.chars().take(PREVIEW_CHAR_LIMIT).collect();
-    format!("{preview}\n\n...preview truncated...")
-}
-
-fn summarize_message(message: &str) -> String {
-    let mut kept = Vec::new();
-    let mut used_chars = 0usize;
-    for line in message
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
-        let next_len = used_chars.saturating_add(line.chars().count());
-        if !kept.is_empty() && (kept.len() >= SUMMARY_MAX_LINES || next_len > SUMMARY_MAX_CHARS) {
-            break;
-        }
-        kept.push(line.to_string());
-        used_chars = next_len;
-    }
-
-    if kept.is_empty() {
-        "BTW summary:\n(Empty answer)".to_string()
-    } else {
-        format!("BTW summary:\n{}", kept.join("\n"))
-    }
-}
-
-fn full_insert_text(message: &str) -> String {
-    format!("BTW discussion:\n{message}")
-}
-
-fn last_agent_message_for_turn(turn: &codex_app_server_protocol::Turn) -> Option<String> {
-    turn.items.iter().rev().find_map(|item| match item {
-        codex_app_server_protocol::ThreadItem::AgentMessage { text, .. } => Some(text.clone()),
-        _ => None,
-    })
-}
-
-fn last_agent_message_or_error(turn: &codex_app_server_protocol::Turn) -> Result<String, String> {
-    last_agent_message_for_turn(turn)
-        .ok_or_else(|| "Temporary discussion finished without a final answer.".to_string())
-}
-
-fn turn_failed_error(turn: &codex_app_server_protocol::Turn) -> Result<String, String> {
-    Err(turn
-        .error
-        .as_ref()
-        .map(|error| error.message.clone())
-        .unwrap_or_else(|| "Temporary discussion failed without a final error.".to_string()))
-}
-
-fn btw_loading_view_params(status_message: Option<&str>) -> SelectionViewParams {
-    let mut body = String::new();
-    if let Some(status_message) = status_message.filter(|status| !status.trim().is_empty()) {
-        body.push_str("Current hidden status:\n");
-        body.push_str(status_message);
-        body.push_str("\n\n");
-    }
-    body.push_str(
-        "Codex is answering in a hidden ephemeral thread. Nothing will be written back to the \
-         main composer unless you explicitly choose an insert action.",
-    );
-    SelectionViewParams {
-        view_id: Some(BTW_DISCUSSION_VIEW_ID),
-        title: Some("Temporary BTW discussion".to_string()),
-        subtitle: Some("Running a hidden temporary discussion thread.".to_string()),
-        footer_hint: Some(standard_popup_hint_line()),
-        items: vec![SelectionItem {
-            name: "Discard".to_string(),
-            description: Some("Cancel and destroy the temporary discussion.".to_string()),
-            actions: vec![Box::new(|tx| tx.send(AppEvent::BtwDiscard))],
-            dismiss_on_select: true,
-            ..Default::default()
-        }],
-        side_content: Paragraph::new(body).wrap(Wrap { trim: false }).into(),
-        side_content_width: SideContentWidth::Half,
-        side_content_min_width: 28,
-        on_cancel: Some(Box::new(|tx| tx.send(AppEvent::BtwDiscard))),
-        ..Default::default()
-    }
-}
-
-fn btw_failure_message(error: &str, last_status: Option<&str>) -> String {
-    let mut message = format!("`/btw` failed: {error}");
-    if let Some(last_status) = last_status.filter(|status| !status.trim().is_empty())
-        && !message.contains(last_status)
-    {
-        message.push_str("\n\nLast hidden status:\n");
-        message.push_str(last_status);
-    }
-    message
-}
-
-fn btw_request_rejection_reason(request: &ServerRequest) -> Option<String> {
-    match request {
-        ServerRequest::ToolRequestUserInput { .. } => {
-            Some(
-                "the hidden temporary discussion asked for interactive user input. Run the prompt in the main thread instead.".to_string()
-            )
-        }
-        ServerRequest::McpServerElicitationRequest { .. } => {
-            Some(
-                "the hidden temporary discussion requested MCP interaction, which `/btw` cannot surface.".to_string()
-            )
-        }
-        ServerRequest::DynamicToolCall { .. } => {
-            Some(
-                "the hidden temporary discussion required an unsupported client-side tool call.".to_string()
-            )
-        }
-        ServerRequest::CommandExecutionRequestApproval { .. }
-        | ServerRequest::FileChangeRequestApproval { .. }
-        | ServerRequest::PermissionsRequestApproval { .. } => None,
-        ServerRequest::ChatgptAuthTokensRefresh { .. }
-        | ServerRequest::ApplyPatchApproval { .. }
-        | ServerRequest::ExecCommandApproval { .. } => {
-            Some(
-                "the hidden temporary discussion required an unsupported client-side request.".to_string()
-            )
-        }
-    }
-}
-
-fn btw_status_message(notification: &ServerNotification) -> Option<String> {
-    match notification {
-        ServerNotification::HookStarted(notification) => {
-            let label = hook_event_label(notification.run.event_name);
-            Some(match notification.run.status_message.as_deref() {
-                Some(status_message) if !status_message.is_empty() => {
-                    format!("Running {label} hook: {status_message}")
-                }
-                _ => format!("Running {label} hook"),
-            })
-        }
-        ServerNotification::HookCompleted(notification) => {
-            let label = hook_event_label(notification.run.event_name);
-            let status = format!("{:?}", notification.run.status).to_lowercase();
-            let mut message = format!("{label} hook ({status})");
-            if let Some(entry) = notification.run.entries.iter().find(|entry| {
-                matches!(
-                    entry.kind,
-                    AppServerHookOutputEntryKind::Warning
-                        | AppServerHookOutputEntryKind::Stop
-                        | AppServerHookOutputEntryKind::Error
-                )
-            }) {
-                message.push_str(": ");
-                message.push_str(&entry.text);
-            }
-            Some(message)
-        }
-        ServerNotification::Error(notification) => Some(notification.error.message.clone()),
-        _ => None,
-    }
-}
-
-fn hook_event_label(event_name: AppServerHookEventName) -> &'static str {
-    match event_name {
-        AppServerHookEventName::PreToolUse => "PreToolUse",
-        AppServerHookEventName::PostToolUse => "PostToolUse",
-        AppServerHookEventName::SessionStart => "SessionStart",
-        AppServerHookEventName::UserPromptSubmit => "UserPromptSubmit",
-        AppServerHookEventName::Stop => "Stop",
-    }
-}
-
-fn btw_result_view_params(message: &str) -> SelectionViewParams {
-    SelectionViewParams {
-        view_id: Some(BTW_DISCUSSION_VIEW_ID),
-        title: Some("Temporary BTW answer".to_string()),
-        subtitle: Some("Choose what to do with the temporary answer.".to_string()),
-        footer_hint: Some(standard_popup_hint_line()),
-        items: vec![
-            SelectionItem {
-                name: "Insert Summary".to_string(),
-                description: Some("Insert a short summary into the main composer.".to_string()),
-                actions: vec![Box::new(|tx| tx.send(AppEvent::BtwInsertSummary))],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: "Insert Full".to_string(),
-                description: Some("Insert the full answer into the main composer.".to_string()),
-                actions: vec![Box::new(|tx| tx.send(AppEvent::BtwInsertFull))],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: "Discard".to_string(),
-                description: Some(
-                    "Destroy the temporary discussion and keep the main composer untouched."
-                        .to_string(),
-                ),
-                actions: vec![Box::new(|tx| tx.send(AppEvent::BtwDiscard))],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-        ],
-        side_content: Paragraph::new(preview_text(message))
-            .wrap(Wrap { trim: false })
-            .into(),
-        side_content_width: SideContentWidth::Half,
-        side_content_min_width: 28,
-        on_cancel: Some(Box::new(|tx| tx.send(AppEvent::BtwDiscard))),
-        ..Default::default()
-    }
-}
-
-fn btw_failure_view_params(error: &str) -> SelectionViewParams {
-    SelectionViewParams {
-        view_id: Some(BTW_DISCUSSION_VIEW_ID),
-        title: Some("Temporary BTW failed".to_string()),
-        subtitle: Some("The hidden temporary discussion did not complete.".to_string()),
-        footer_hint: Some(standard_popup_hint_line()),
-        items: vec![SelectionItem {
-            name: "Close".to_string(),
-            description: Some("Dismiss this temporary discussion.".to_string()),
-            actions: vec![Box::new(|tx| tx.send(AppEvent::BtwDiscard))],
-            dismiss_on_select: true,
-            ..Default::default()
-        }],
-        side_content: Paragraph::new(error.to_string())
-            .wrap(Wrap { trim: false })
-            .into(),
-        side_content_width: SideContentWidth::Half,
-        side_content_min_width: 28,
-        on_cancel: Some(Box::new(|tx| tx.send(AppEvent::BtwDiscard))),
-        ..Default::default()
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-    use ratatui::layout::Rect;
-    use tokio::sync::mpsc::unbounded_channel;
 
-    use super::btw_failure_view_params;
-    use super::btw_loading_view_params;
-    use super::btw_result_view_params;
     use super::merge_developer_instructions;
-    use super::preview_text;
-    use super::summarize_message;
-    use crate::app_event::AppEvent;
-    use crate::app_event_sender::AppEventSender;
-    use crate::bottom_pane::ListSelectionView;
-    use crate::render::renderable::Renderable;
-
-    fn render_selection_popup(view: &ListSelectionView, width: u16, height: u16) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
-        terminal
-            .draw(|frame| {
-                let area = Rect::new(0, 0, width, height);
-                view.render(area, frame.buffer_mut());
-            })
-            .expect("draw popup");
-        format!("{:?}", terminal.backend())
-    }
-
-    #[test]
-    fn btw_loading_popup_snapshot() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let view = ListSelectionView::new(btw_loading_view_params(/*status_message*/ None), tx);
-
-        assert_snapshot!(
-            "btw_loading_popup",
-            render_selection_popup(&view, /*width*/ 92, /*height*/ 20)
-        );
-    }
-
-    #[test]
-    fn btw_result_popup_snapshot() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let view = ListSelectionView::new(
-            btw_result_view_params(
-                "Use a hidden thread to brainstorm tradeoffs, then choose whether to insert the \
-                 summary or the full answer back into the main composer.",
-            ),
-            tx,
-        );
-
-        assert_snapshot!(
-            "btw_result_popup",
-            render_selection_popup(&view, /*width*/ 92, /*height*/ 28)
-        );
-    }
-
-    #[test]
-    fn btw_failure_popup_snapshot() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let view = ListSelectionView::new(
-            btw_failure_view_params("`/btw` failed: upstream unavailable"),
-            tx,
-        );
-
-        assert_snapshot!(
-            "btw_failure_popup",
-            render_selection_popup(&view, /*width*/ 92, /*height*/ 20)
-        );
-    }
-
-    #[test]
-    fn summarize_btw_message_keeps_short_prefix_for_insertion() {
-        let summary = summarize_message(
-            "First point.\n\nSecond point.\nThird point.\nFourth point.\nFifth point.",
-        );
-
-        assert_eq!(
-            summary,
-            "BTW summary:\nFirst point.\nSecond point.\nThird point.\nFourth point."
-        );
-    }
-
-    #[test]
-    fn preview_text_truncates_long_messages() {
-        let preview = preview_text(&"a".repeat(1_250));
-        assert!(preview.contains("preview truncated"));
-    }
 
     #[test]
     fn merge_developer_instructions_appends_btw_guardrail() {
