@@ -243,6 +243,9 @@ pub(crate) enum AppEvent {
     /// Resume a thread by UUID or thread name inside the running TUI session.
     ResumeSessionByIdOrName(String),
 
+    /// Reattach the current session, keeping `/btw` threads in-process when possible.
+    RespawnRequested,
+
     /// Open the local TUI display preferences panel.
     OpenDisplayPreferencesPanel,
 
@@ -523,17 +526,6 @@ pub(crate) enum AppEvent {
     StartBtwDiscussion {
         prompt: String,
     },
-
-    BtwCompleted {
-        thread_id: ThreadId,
-        result: Result<String, String>,
-    },
-
-    BtwInsertSummary,
-
-    BtwInsertFull,
-
-    BtwDiscard,
     /// Retry the last turn using the routed profile fallback policy.
     RetryLastUserTurnWithProfileFallback {
         action: ProfileFallbackAction,

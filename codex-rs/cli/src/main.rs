@@ -510,13 +510,13 @@ fn finish_interactive_exit(
     respawn_args: &[OsString],
 ) -> anyhow::Result<()> {
     if matches!(exit_info.exit_reason, ExitReason::RespawnRequested) {
-        let Some(thread_id) = exit_info.thread_id.as_ref() else {
+        let Some(respawn_target) = exit_info.respawn_target.as_deref() else {
             anyhow::bail!("cannot respawn Codex: current session has no thread id");
         };
         respawn_current_codex_session(
             arg0_paths,
             respawn_args,
-            &thread_id.to_string(),
+            respawn_target,
             exit_info.respawn_with_yolo,
         )?;
         return Ok(());
@@ -1959,6 +1959,9 @@ mod tests {
                 .map(ThreadId::from_string)
                 .map(Result::unwrap),
             thread_name: thread_name.map(str::to_string),
+            respawn_target: thread_name
+                .map(str::to_string)
+                .or_else(|| conversation_id.map(str::to_string)),
             update_action: None,
             respawn_with_yolo: false,
             exit_reason: ExitReason::UserRequested,
@@ -1971,12 +1974,35 @@ mod tests {
             token_usage: TokenUsage::default(),
             thread_id: None,
             thread_name: None,
+            respawn_target: None,
             update_action: None,
             respawn_with_yolo: false,
             exit_reason: ExitReason::UserRequested,
         };
         let lines = format_exit_messages(exit_info, /*color_enabled*/ false);
         assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn finish_interactive_exit_respawns_with_named_target_without_rollout_hint() {
+        let exit_info = AppExitInfo {
+            token_usage: TokenUsage::default(),
+            thread_id: None,
+            thread_name: Some("btw scratch".to_string()),
+            respawn_target: Some("btw scratch".to_string()),
+            update_action: None,
+            respawn_with_yolo: false,
+            exit_reason: ExitReason::RespawnRequested,
+        };
+        let arg0_paths = Arg0DispatchPaths {
+            codex_self_exe: Some(PathBuf::from("/usr/bin/true")),
+            codex_linux_sandbox_exe: None,
+            main_execve_wrapper_exe: None,
+        };
+
+        let result = finish_interactive_exit(exit_info, &arg0_paths, &[]);
+
+        assert!(result.is_ok());
     }
 
     #[test]

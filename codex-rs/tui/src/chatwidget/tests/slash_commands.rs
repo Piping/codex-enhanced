@@ -249,7 +249,7 @@ async fn slash_btw_requires_prompt() {
     assert_eq!(cells.len(), 1, "expected one error message");
     let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        rendered.contains("Usage: /btw <temporary discussion prompt>"),
+        rendered.contains("Usage: /btw <prompt>"),
         "expected usage message, got {rendered:?}"
     );
 }
@@ -321,15 +321,12 @@ async fn slash_quit_requests_exit() {
 }
 
 #[tokio::test]
-async fn slash_respawn_requests_respawn_exit() {
+async fn slash_respawn_requests_respawn() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.dispatch_command(SlashCommand::Respawn);
 
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::Exit(ExitMode::RespawnImmediate))
-    );
+    assert_matches!(rx.try_recv(), Ok(AppEvent::RespawnRequested));
 }
 
 #[tokio::test]

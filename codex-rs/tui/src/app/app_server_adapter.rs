@@ -199,9 +199,6 @@ impl App {
                     }
                     _ => None,
                 };
-                if self.handle_btw_notification(thread_id, &notification) {
-                    return;
-                }
                 let result = if self.primary_thread_id == Some(thread_id)
                     || self.primary_thread_id.is_none()
                 {
@@ -295,16 +292,6 @@ impl App {
             tracing::warn!("ignoring threadless app-server request");
             return;
         };
-
-        if let Some(reason) = self.reject_btw_request(thread_id, &request) {
-            if let Err(err) = self
-                .reject_app_server_request(app_server_client, request.id().clone(), reason)
-                .await
-            {
-                tracing::warn!("{err}");
-            }
-            return;
-        }
 
         if self
             .maybe_auto_resolve_clawbot_server_request(app_server_client, thread_id, &request)

@@ -878,4 +878,49 @@ mod tests {
             "expected no pre-wrapped continuation row to contain later words, rows: {rows:?}"
         );
     }
+
+    #[test]
+    fn vt100_preserve_lines_mode_marks_terminal_wrap_instead_of_hard_newline() {
+        let width: u16 = 12;
+        let height: u16 = 8;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        let viewport = Rect::new(0, height - 1, width, 1);
+        term.set_viewport_area(viewport);
+
+        let line: Line<'static> = Line::from("plain text that would otherwise pre-wrap");
+        insert_history_lines_with_mode_and_wrap(
+            &mut term,
+            vec![line],
+            InsertHistoryMode::Standard,
+            ScrollbackWrapMode::PreserveLines,
+        )
+        .expect("insert preserved history");
+
+        let screen = term.backend().vt100().screen();
+        let rows: Vec<String> = screen.rows(0, width).collect();
+        let populated_rows: Vec<u16> = rows
+            .iter()
+            .enumerate()
+            .filter_map(|(row, content)| (!content.trim_end().is_empty()).then_some(row as u16))
+            .collect();
+
+        assert!(
+            populated_rows.len() >= 2,
+            "expected wrapped visual rows, got rows: {populated_rows:?}"
+        );
+
+        let first = populated_rows[0];
+        let last = *populated_rows.last().expect("last populated row");
+        assert!(
+            screen.row_wrapped(first),
+            "expected first visual row to be terminal-wrapped"
+        );
+
+        let copied = screen.contents_between(first, 0, last, width);
+        assert!(
+            !copied.contains('\n'),
+            "expected wrapped row selection to stay one logical line, got: {copied:?}"
+        );
+    }
 }

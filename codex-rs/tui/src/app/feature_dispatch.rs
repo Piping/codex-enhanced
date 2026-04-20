@@ -29,11 +29,7 @@ impl FeatureRoute {
             | AppEvent::JumpToTranscriptCell { .. }
             | AppEvent::ForkCurrentSession
             | AppEvent::UndoLastUserMessage => Some(Self::Thread),
-            AppEvent::StartBtwDiscussion { .. }
-            | AppEvent::BtwCompleted { .. }
-            | AppEvent::BtwInsertSummary
-            | AppEvent::BtwInsertFull
-            | AppEvent::BtwDiscard => Some(Self::Btw),
+            AppEvent::StartBtwDiscussion { .. } => Some(Self::Btw),
             AppEvent::OpenWorkflowControls
             | AppEvent::OpenWorkflowControlView { .. }
             | AppEvent::CreateDefaultWorkflowTemplate
@@ -112,22 +108,6 @@ impl App {
         match event {
             AppEvent::StartBtwDiscussion { prompt } => {
                 self.start_btw_discussion(app_server, prompt).await;
-            }
-            AppEvent::BtwCompleted { thread_id, result } => {
-                let is_error = result.is_err();
-                self.finish_btw_discussion(thread_id, result);
-                if is_error {
-                    self.close_btw_session(app_server).await;
-                }
-            }
-            AppEvent::BtwInsertSummary => {
-                self.insert_btw_summary(app_server).await;
-            }
-            AppEvent::BtwInsertFull => {
-                self.insert_btw_full(app_server).await;
-            }
-            AppEvent::BtwDiscard => {
-                self.discard_btw_session(app_server).await;
             }
             _ => unreachable!("non-btw event passed to btw feature dispatcher"),
         }
