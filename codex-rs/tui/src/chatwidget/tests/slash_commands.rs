@@ -1136,6 +1136,15 @@ async fn slash_profile_dispatches_open_profile_management_panel_event() {
 }
 
 #[tokio::test]
+async fn slash_del_agent_dispatches_open_delete_agent_picker_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::DelAgent);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenDeleteAgentPicker));
+}
+
+#[tokio::test]
 async fn slash_btw_dispatches_start_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

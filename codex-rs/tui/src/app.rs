@@ -76,7 +76,6 @@ use crate::test_support::PathBufExt;
 use crate::test_support::test_path_buf;
 #[cfg(test)]
 use crate::test_support::test_path_display;
-use crate::token_usage::TokenUsage;
 use crate::transcript_reflow::TranscriptReflowState;
 use crate::tui;
 use crate::tui::TuiEvent;
@@ -88,7 +87,6 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
-use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -115,11 +113,9 @@ use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::PluginUninstallResponse;
-use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
-use codex_app_server_protocol::SkillErrorInfo;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadItem;
@@ -160,6 +156,19 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 #[cfg(target_os = "windows")]
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_rollout::StateDbHandle;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::FinalOutput;
+use codex_protocol::protocol::GetHistoryEntryResponseEvent;
+use codex_protocol::protocol::ListSkillsResponseEvent;
+#[cfg(test)]
+use codex_app_server_protocol::McpAuthStatus;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SkillErrorInfo;
+use codex_protocol::protocol::TokenUsage;
+use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
@@ -196,6 +205,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
 use uuid::Uuid;
+mod agent_delete;
 mod agent_navigation;
 mod app_server_event_targets;
 mod app_server_events;
@@ -3004,6 +3014,13 @@ impl App {
         thread_id: ThreadId,
         notification: ServerNotification,
     ) -> Result<()> {
+        if matches!(notification, ServerNotification::ThreadArchived(_))
+            && self.primary_thread_id != Some(thread_id)
+        {
+            self.forget_live_subagent_thread(thread_id).await;
+            return Ok(());
+        }
+
         let inferred_session = self
             .infer_session_for_thread_notification(thread_id, &notification)
             .await;
@@ -3084,6 +3101,10 @@ impl App {
                 .await
             {
                 Ok(thread) => {
+                    if self.is_archived_thread_rollout_path(thread.path.as_deref()) {
+                        self.forget_live_subagent_thread(thread_id).await;
+                        continue;
+                    }
                     self.upsert_agent_picker_thread(
                         thread_id,
                         thread.agent_nickname,
@@ -3515,6 +3536,31 @@ impl App {
         self.sync_active_agent_label();
     }
 
+    fn is_archived_thread_rollout_path(&self, rollout_path: Option<&Path>) -> bool {
+        rollout_path.is_some_and(|path| {
+            path.starts_with(self.config.codex_home.join(ARCHIVED_SESSIONS_SUBDIR))
+        })
+    }
+
+    async fn forget_live_subagent_thread(&mut self, thread_id: ThreadId) {
+        if self.primary_thread_id == Some(thread_id) {
+            return;
+        }
+
+        self.abort_thread_event_listener(thread_id);
+        self.thread_event_channels.remove(&thread_id);
+        if self.active_thread_id == Some(thread_id) {
+            self.clear_active_thread().await;
+            if let Some(primary_thread_id) = self.primary_thread_id {
+                self.app_event_tx
+                    .send(AppEvent::SelectAgentThread(primary_thread_id));
+            }
+        }
+        self.agent_navigation.remove(thread_id);
+        self.sync_active_agent_label();
+        self.refresh_pending_thread_approvals().await;
+    }
+
     async fn refresh_agent_picker_thread_liveness(
         &mut self,
         app_server: &mut AppServerSession,
@@ -3528,6 +3574,10 @@ impl App {
             .await
         {
             Ok(thread) => {
+                if self.is_archived_thread_rollout_path(thread.path.as_deref()) {
+                    self.forget_live_subagent_thread(thread_id).await;
+                    return false;
+                }
                 if matches!(
                     (&mode, &existing_entry, has_replay_channel),
                     (ThreadLivenessRefreshMode::Selection, None, false)
@@ -3995,6 +4045,10 @@ impl App {
                 .await
             {
                 Ok(thread) => {
+                    if self.is_archived_thread_rollout_path(thread.path.as_deref()) {
+                        self.forget_live_subagent_thread(thread_id).await;
+                        continue;
+                    }
                     threads_by_id.insert(thread_id, thread);
                 }
                 Err(err) => {
@@ -7251,6 +7305,7 @@ mod tests {
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::ServerRequest;
     use codex_app_server_protocol::Thread;
+    use codex_app_server_protocol::ThreadArchivedNotification;
     use codex_app_server_protocol::ThreadClosedNotification;
     use codex_app_server_protocol::ThreadItem;
     use codex_app_server_protocol::ThreadStartedNotification;
@@ -8739,6 +8794,57 @@ mod tests {
             })
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn archived_thread_notifications_do_not_recreate_live_subagent_state() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let primary_thread_id = ThreadId::new();
+        let archived_thread_id = ThreadId::new();
+        app.primary_thread_id = Some(primary_thread_id);
+        app.active_thread_id = Some(archived_thread_id);
+        app.thread_event_channels
+            .insert(archived_thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+        app.agent_navigation.upsert(
+            archived_thread_id,
+            Some("Ghost".to_string()),
+            Some("worker".to_string()),
+            /*is_closed*/ false,
+        );
+
+        app.enqueue_thread_notification(
+            archived_thread_id,
+            ServerNotification::ThreadArchived(ThreadArchivedNotification {
+                thread_id: archived_thread_id.to_string(),
+            }),
+        )
+        .await?;
+
+        assert_eq!(app.agent_navigation.get(&archived_thread_id), None);
+        assert!(!app.thread_event_channels.contains_key(&archived_thread_id));
+        assert_matches!(
+            app_event_rx.try_recv(),
+            Ok(AppEvent::SelectAgentThread(thread_id)) if thread_id == primary_thread_id
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn archived_thread_rollout_path_detection_matches_archived_sessions_root() {
+        let app = make_test_app().await;
+        let archived_path = app
+            .config
+            .codex_home
+            .join(codex_rollout::ARCHIVED_SESSIONS_SUBDIR)
+            .join("2026/04/21/rollout-test.jsonl");
+        let live_path = app
+            .config
+            .codex_home
+            .join("sessions/2026/04/21/rollout-test.jsonl");
+
+        assert!(app.is_archived_thread_rollout_path(Some(archived_path.as_path())));
+        assert!(!app.is_archived_thread_rollout_path(Some(live_path.as_path())));
+        assert!(!app.is_archived_thread_rollout_path(None));
     }
 
     #[tokio::test]

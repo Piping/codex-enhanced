@@ -248,6 +248,12 @@ impl ChatWidget {
             SlashCommand::Agent | SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
+            SlashCommand::DelAgent => {
+                self.app_event_tx.send(AppEvent::OpenDeleteAgentPicker);
+            }
+            SlashCommand::Approvals => {
+                self.open_permissions_popup();
+            }
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
             }

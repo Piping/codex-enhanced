@@ -180,7 +180,7 @@ export function assistantMessage(text: string, itemId: string = DEFAULT_MESSAGE_
   };
 }
 
-export function shell_call(): SseEvent {
+export function shellCall(): SseEvent {
   const command = ["bash", "-lc", "echo 'Hello, world!'"];
   return {
     type: "response.output_item.done",

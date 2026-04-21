@@ -1,0 +1,39 @@
+---
+source: tui/src/app/agent_delete.rs
+expression: "render_selection_popup(&view, 92, 16)"
+---
+TestBackend { buffer: Buffer {
+    area: Rect { x: 0, y: 0, width: 92, height: 16 },
+    content: [
+        "                                                                                            ",
+        "  Archive Agent                                                                             ",
+        "  Scout [worker] will be removed from the live agent picker.                                ",
+        "                                                                                            ",
+        "› 1. Archive Agent  Archive Scout [worker] now.                                             ",
+        "  2. Cancel         Keep the agent thread open.                                             ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "                                                                                            ",
+        "  Press enter to confirm or esc to go back                                                  ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 15, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 60, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 4, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 47, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 20, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 47, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 15, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+    ]
+}, scrollback: Buffer {
+    area: Rect { x: 0, y: 0, width: 92, height: 0 }
+}, cursor: false, pos: (0, 0) }

@@ -93,6 +93,16 @@ This supports the CI release flow:
 - stage `openai-codex-cli-bin` on each supported platform runner with the same pinned runtime version
 - build and publish `openai-codex-cli-bin` as platform wheels only; do not publish an sdist
 
+For `codex-enhanced` releases, use the one-shot helper instead:
+
+```bash
+just release-codex-enhanced 1.2.3
+```
+
+This one-shot helper updates `sdk/python-runtime-enhanced/pyproject.toml`,
+creates the matching `vX.Y.Z` tag, commits the version bump, and pushes both the
+commit and tag. Do not edit the version by hand.
+
 ## Compatibility and versioning
 
 - Package: `openai-codex-app-server-sdk`

@@ -16,6 +16,11 @@ codex *args:
 exec *args:
     cargo run --bin codex -- exec "$@"
 
+# One-shot release helper for codex-enhanced runtime tags.
+[no-cd]
+release-codex-enhanced version:
+    bash -ceu 'repo_root="{{justfile_directory()}}"; tag="v{{version}}"; cd "$repo_root"; branch="$(git branch --show-current)"; if [ -z "$branch" ]; then echo "Expected to be on a branch before releasing codex-enhanced." >&2; exit 1; fi; if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then echo "Tag $tag already exists." >&2; exit 1; fi; python3 sdk/python/scripts/update_sdk_artifacts.py set-enhanced-runtime-version "{{version}}"; if git diff --quiet -- sdk/python-runtime-enhanced/pyproject.toml; then echo "sdk/python-runtime-enhanced/pyproject.toml is already at {{version}}." >&2; exit 1; fi; git add sdk/python-runtime-enhanced/pyproject.toml; git commit -m "chore: bump codex-enhanced runtime to $tag"; git tag -a "$tag" -m "Release $tag"; git push --atomic origin "HEAD:$branch" "$tag"'
+
 # Start `codex exec-server` and run codex-tui.
 [no-cd]
 tui-with-exec-server *args:

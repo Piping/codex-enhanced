@@ -41,7 +41,11 @@ pub enum SlashCommand {
     Goal,
     Collab,
     Agent,
+    Approvals,
     Side,
+    #[strum(serialize = "del-agent")]
+    DelAgent,
+    // Undo,
     Copy,
     Raw,
     Diff,
@@ -129,6 +133,8 @@ impl SlashCommand {
             SlashCommand::Goal => "set or view the goal for a long-running task",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
+            SlashCommand::Approvals => "choose what Codex is allowed to do",
+            SlashCommand::DelAgent => "archive an open agent thread",
             SlashCommand::Side => "start a side conversation in an ephemeral fork",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::Keymap => "remap TUI shortcuts",
@@ -202,6 +208,7 @@ impl SlashCommand {
             | SlashCommand::Model
             | SlashCommand::Fast
             | SlashCommand::Personality
+            | SlashCommand::Approvals
             | SlashCommand::Permissions
             | SlashCommand::Keymap
             | SlashCommand::Vim
@@ -239,6 +246,7 @@ impl SlashCommand {
             | SlashCommand::Thread
             | SlashCommand::Profile
             | SlashCommand::Btw
+            | SlashCommand::DelAgent
             | SlashCommand::Feedback
             | SlashCommand::Ide
             | SlashCommand::Quit

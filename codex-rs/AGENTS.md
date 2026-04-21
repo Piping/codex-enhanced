@@ -16,7 +16,7 @@ Detailed task history and validation logs live in [progress.md](codex-rs/progres
 
 ## Release And CI Notes
 
-- Before creating or pushing a `codex-enhanced` release tag, confirm the tag version matches `sdk/python-runtime-enhanced/pyproject.toml`.
+- Before creating or pushing a `codex-enhanced` release tag, use `just release-codex-enhanced <version>` from the repo root. Do not edit `sdk/python-runtime-enhanced/pyproject.toml` by hand; the recipe updates the version, commits it, tags it, and pushes both refs together.
 - The `pypi-release` workflow uses concurrency on `github.ref_name || inputs.release_tag` with `cancel-in-progress: true`.
 - A manual `workflow_dispatch` for the same release tag cancels an in-progress tag-triggered run; treat that as expected behavior, not a separate failure.
 - If a release rerun only needs publish or GitHub Release recovery, check whether `artifact_run_id` can reuse a prior successful artifact build instead of rebuilding every platform.

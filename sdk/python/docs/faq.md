@@ -82,6 +82,16 @@ host, pass `--platform-tag ...` to `stage-runtime`. The intended one-off matrix
 is `macosx_11_0_arm64`, `macosx_10_9_x86_64`, `musllinux_1_1_aarch64`,
 `musllinux_1_1_x86_64`, `win_arm64`, and `win_amd64`.
 
+For `codex-enhanced` releases, use the one-shot helper instead:
+
+```bash
+just release-codex-enhanced 1.2.3
+```
+
+This updates `sdk/python-runtime-enhanced/pyproject.toml`, creates the matching
+`vX.Y.Z` tag, commits the version bump, and pushes both the commit and tag. Do
+not edit the version by hand.
+
 ## Why does a turn "hang"?
 
 A turn is complete only when `turn/completed` arrives for that turn ID.
