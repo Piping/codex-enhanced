@@ -209,6 +209,16 @@ pub(crate) enum RateLimitRefreshOrigin {
 pub(crate) enum AppEvent {
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
+    /// Open the picker for archiving an open sub-agent thread.
+    OpenDeleteAgentPicker,
+    /// Open a confirmation prompt before archiving a sub-agent thread.
+    OpenDeleteAgentConfirmation {
+        thread_id: ThreadId,
+    },
+    /// Archive a sub-agent thread and remove it from the live picker state.
+    ArchiveAgentThread {
+        thread_id: ThreadId,
+    },
     /// Switch the active thread to the selected agent.
     SelectAgentThread(ThreadId),
 

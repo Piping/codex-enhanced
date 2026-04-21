@@ -94,6 +94,19 @@ def current_sdk_version() -> str:
     return match.group(1)
 
 
+RUNTIME_VERSION_RE = re.compile(
+    r"^[0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|beta)(?:\.[0-9]+)?)?$"
+)
+
+
+def _validate_runtime_version(version: str) -> None:
+    if not RUNTIME_VERSION_RE.fullmatch(version):
+        raise RuntimeError(
+            "Runtime version must match <major>.<minor>.<patch> or "
+            "<major>.<minor>.<patch>-(alpha|beta)[.<n>]"
+        )
+
+
 def _copy_package_tree(src: Path, dst: Path) -> None:
     if dst.exists():
         if dst.is_dir():
@@ -179,6 +192,15 @@ def stage_python_runtime_package(
             out_bin.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
         )
     return staging_dir
+
+
+def set_enhanced_runtime_version(runtime_version: str) -> Path:
+    _validate_runtime_version(runtime_version)
+    pyproject_path = python_runtime_root("enhanced") / "pyproject.toml"
+    pyproject_path.write_text(
+        _rewrite_project_version(pyproject_path.read_text(), runtime_version)
+    )
+    return pyproject_path
 
 
 def _flatten_string_enum_one_of(definition: dict[str, Any]) -> bool:
@@ -582,6 +604,7 @@ class CliOps:
     stage_python_sdk_package: Callable[[Path, str, str], Path]
     stage_python_runtime_package: Callable[[Path, str, Path, str], Path]
     current_sdk_version: Callable[[], str]
+    set_enhanced_runtime_version: Callable[[str], Path]
 
 
 def _annotation_to_source(annotation: Any) -> str:
@@ -936,6 +959,14 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "generate-types", help="Regenerate Python protocol-derived types"
     )
+    set_enhanced_runtime_version_parser = subparsers.add_parser(
+        "set-enhanced-runtime-version",
+        help="Update the checked-in codex-enhanced runtime template version",
+    )
+    set_enhanced_runtime_version_parser.add_argument(
+        "runtime_version",
+        help="Version to write into sdk/python-runtime-enhanced/pyproject.toml",
+    )
 
     stage_sdk_parser = subparsers.add_parser(
         "stage-sdk",
@@ -994,12 +1025,15 @@ def default_cli_ops() -> CliOps:
         stage_python_sdk_package=stage_python_sdk_package,
         stage_python_runtime_package=stage_python_runtime_package,
         current_sdk_version=current_sdk_version,
+        set_enhanced_runtime_version=set_enhanced_runtime_version,
     )
 
 
 def run_command(args: argparse.Namespace, ops: CliOps) -> None:
     if args.command == "generate-types":
         ops.generate_types()
+    elif args.command == "set-enhanced-runtime-version":
+        ops.set_enhanced_runtime_version(args.runtime_version)
     elif args.command == "stage-sdk":
         ops.generate_types()
         ops.stage_python_sdk_package(

@@ -17,6 +17,15 @@ impl ThreadController {
         event: AppEvent,
     ) {
         match event {
+            AppEvent::OpenDeleteAgentPicker => {
+                app.open_delete_agent_picker(app_server).await;
+            }
+            AppEvent::OpenDeleteAgentConfirmation { thread_id } => {
+                app.open_delete_agent_confirmation(thread_id);
+            }
+            AppEvent::ArchiveAgentThread { thread_id } => {
+                app.archive_agent_thread(tui, app_server, thread_id).await;
+            }
             AppEvent::OpenThreadPanel => {
                 app.open_thread_panel();
             }

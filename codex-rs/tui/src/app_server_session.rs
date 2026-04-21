@@ -29,6 +29,8 @@ use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadArchiveParams;
+use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
@@ -565,6 +567,21 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/unsubscribe failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_archive(&mut self, thread_id: ThreadId) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadArchiveResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadArchive {
+                request_id,
+                params: ThreadArchiveParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/archive failed in TUI")?;
         Ok(())
     }
 

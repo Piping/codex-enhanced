@@ -14,6 +14,7 @@ export type ThreadOptions = {
   modelReasoningEffort?: ModelReasoningEffort;
   networkAccessEnabled?: boolean;
   webSearchMode?: WebSearchMode;
+  /** Deprecated compatibility alias for `webSearchMode`; maps `true` to `"live"` and `false` to `"disabled"`. */
   webSearchEnabled?: boolean;
   approvalPolicy?: ApprovalMode;
   additionalDirectories?: string[];

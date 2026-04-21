@@ -10,9 +10,7 @@ import {
   responseCompleted,
   responseStarted,
   sse,
-  responseFailed,
   startResponsesTestProxy,
-  SseResponseBody,
 } from "./responsesProxy";
 import { createMockClient, createTestClient } from "./testCodex";
 
@@ -373,6 +371,23 @@ describe("Codex", () => {
       cleanup();
       restore();
       await close();
+    }
+  });
+
+  it("rejects conflicting web search options", async () => {
+    const { client, cleanup } = createMockClient("http://127.0.0.1:1");
+
+    try {
+      const thread = client.startThread({
+        webSearchMode: "cached",
+        webSearchEnabled: false,
+      });
+
+      await expect(thread.run("test conflicting web search")).rejects.toThrow(
+        "Conflicting web search options",
+      );
+    } finally {
+      cleanup();
     }
   });
 
@@ -750,25 +765,24 @@ describe("Codex", () => {
       await close();
     }
   });
-  it("throws ThreadRunError on turn failures", async () => {
-    const { url, close } = await startResponsesTestProxy({
-      statusCode: 200,
-      responseBodies: (function* (): Generator<SseResponseBody> {
-        yield sse(responseStarted("response_1"));
-        while (true) {
-          yield sse(responseFailed("rate limit exceeded"));
-        }
-      })(),
-    });
-    const { client, cleanup } = createMockClient(url);
+  it("throws ThreadRunError on fatal error events", async () => {
+    const { Thread } = await import("../src/thread");
+    const exec = {
+      async *run() {
+        yield JSON.stringify({
+          type: "error",
+          message: "rate limit exceeded",
+        });
+      },
+    };
+    const thread = new Thread(exec as never, {} as never, {});
+    const runPromise = thread.run("fail");
 
-    try {
-      const thread = client.startThread();
-      await expect(thread.run("fail")).rejects.toThrow("stream disconnected before completion:");
-    } finally {
-      cleanup();
-      await close();
-    }
+    await expect(runPromise).rejects.toMatchObject({
+      name: "ThreadRunError",
+      eventType: "error",
+      threadError: { message: "rate limit exceeded" },
+    });
   }, 10000); // TODO(pakrym): remove timeout
 });
 

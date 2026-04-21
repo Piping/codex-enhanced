@@ -286,6 +286,49 @@ def test_stage_enhanced_runtime_release_copies_binary_and_sets_version(
     assert 'version = "1.2.3"' in pyproject
 
 
+def test_set_enhanced_runtime_version_rewrites_checked_in_template(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = _load_update_script_module()
+    runtime_root = tmp_path / "python-runtime-enhanced"
+    runtime_root.mkdir()
+    pyproject_path = runtime_root / "pyproject.toml"
+    pyproject_path.write_text(
+        '[project]\nname = "codex-enhanced"\nversion = "0.1.32"\n'
+    )
+
+    def fake_python_runtime_root(runtime_package: str = "default") -> Path:
+        assert runtime_package == "enhanced"
+        return runtime_root
+
+    monkeypatch.setattr(script, "python_runtime_root", fake_python_runtime_root)
+
+    updated_path = script.set_enhanced_runtime_version("1.2.3")
+
+    assert updated_path == pyproject_path
+    pyproject = pyproject_path.read_text()
+    assert 'name = "codex-enhanced"' in pyproject
+    assert 'version = "1.2.3"' in pyproject
+
+
+def test_set_enhanced_runtime_version_rejects_invalid_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = _load_update_script_module()
+    runtime_root = tmp_path / "python-runtime-enhanced"
+    runtime_root.mkdir()
+    (runtime_root / "pyproject.toml").write_text('version = "0.1.32"\n')
+
+    def fake_python_runtime_root(runtime_package: str = "default") -> Path:
+        assert runtime_package == "enhanced"
+        return runtime_root
+
+    monkeypatch.setattr(script, "python_runtime_root", fake_python_runtime_root)
+
+    with pytest.raises(RuntimeError, match="Runtime version must match"):
+        script.set_enhanced_runtime_version("1.2")
+
+
 def test_stage_runtime_release_replaces_existing_staging_dir(tmp_path: Path) -> None:
     script = _load_update_script_module()
     staging_dir = tmp_path / "runtime-stage"
@@ -367,6 +410,7 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
         stage_python_sdk_package=fake_stage_sdk_package,
         stage_python_runtime_package=fake_stage_runtime_package,
         current_sdk_version=fake_current_sdk_version,
+        set_enhanced_runtime_version=lambda _runtime_version: tmp_path / "pyproject.toml",
     )
 
     script.run_command(args, ops)
@@ -414,6 +458,7 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
         stage_python_sdk_package=fake_stage_sdk_package,
         stage_python_runtime_package=fake_stage_runtime_package,
         current_sdk_version=fake_current_sdk_version,
+        set_enhanced_runtime_version=lambda _runtime_version: tmp_path / "pyproject.toml",
     )
 
     script.run_command(args, ops)
@@ -463,11 +508,55 @@ def test_stage_enhanced_runtime_passes_package_choice(tmp_path: Path) -> None:
         stage_python_sdk_package=fake_stage_sdk_package,
         stage_python_runtime_package=fake_stage_runtime_package,
         current_sdk_version=fake_current_sdk_version,
+        set_enhanced_runtime_version=lambda _runtime_version: tmp_path / "pyproject.toml",
     )
 
     script.run_command(args, ops)
 
     assert calls == [("stage_runtime", "enhanced")]
+
+
+def test_set_enhanced_runtime_version_runs_without_generation(
+    tmp_path: Path,
+) -> None:
+    script = _load_update_script_module()
+    calls: list[tuple[str, str]] = []
+    args = script.parse_args(["set-enhanced-runtime-version", "1.2.3"])
+
+    def fake_generate_types() -> None:
+        raise AssertionError("type generation should not run for version updates")
+
+    def fake_stage_sdk_package(
+        _staging_dir: Path, _sdk_version: str, _runtime_version: str
+    ) -> Path:
+        raise AssertionError("sdk staging should not run for version updates")
+
+    def fake_stage_runtime_package(
+        _staging_dir: Path,
+        _runtime_version: str,
+        _runtime_binary: Path,
+        _runtime_package: str,
+    ) -> Path:
+        raise AssertionError("runtime staging should not run for version updates")
+
+    def fake_current_sdk_version() -> str:
+        raise AssertionError("sdk version should not be read for version updates")
+
+    def fake_set_enhanced_runtime_version(runtime_version: str) -> Path:
+        calls.append(("set_enhanced_runtime_version", runtime_version))
+        return tmp_path / "pyproject.toml"
+
+    ops = script.CliOps(
+        generate_types=fake_generate_types,
+        stage_python_sdk_package=fake_stage_sdk_package,
+        stage_python_runtime_package=fake_stage_runtime_package,
+        current_sdk_version=fake_current_sdk_version,
+        set_enhanced_runtime_version=fake_set_enhanced_runtime_version,
+    )
+
+    script.run_command(args, ops)
+
+    assert calls == [("set_enhanced_runtime_version", "1.2.3")]
 
 
 def test_default_runtime_is_resolved_from_installed_runtime_package(

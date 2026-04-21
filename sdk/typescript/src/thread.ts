@@ -2,7 +2,7 @@ import { CodexOptions } from "./codexOptions";
 import { ThreadEvent, ThreadError, Usage } from "./events";
 import { CodexExec } from "./exec";
 import { ThreadItem } from "./items";
-import { ThreadOptions } from "./threadOptions";
+import { ThreadOptions, WebSearchMode } from "./threadOptions";
 import { TurnOptions } from "./turnOptions";
 import { createOutputSchemaFile } from "./outputSchemaFile";
 
@@ -23,6 +23,19 @@ export type StreamedTurn = {
 
 /** Alias for `StreamedTurn` to describe the result of `runStreamed()`. */
 export type RunStreamedResult = StreamedTurn;
+
+/** Typed error thrown by `run()` when the turn fails or the event stream emits a fatal error. */
+export class ThreadRunError extends Error {
+  readonly threadError: ThreadError;
+  readonly eventType: "turn.failed" | "error";
+
+  constructor(eventType: "turn.failed" | "error", threadError: ThreadError) {
+    super(threadError.message);
+    this.name = "ThreadRunError";
+    this.eventType = eventType;
+    this.threadError = threadError;
+  }
+}
 
 /** An input to send to the agent. */
 export type UserInput =
@@ -73,6 +86,7 @@ export class Thread {
   ): AsyncGenerator<ThreadEvent> {
     const { schemaPath, cleanup } = await createOutputSchemaFile(turnOptions.outputSchema);
     const options = this._threadOptions;
+    const webSearchMode = resolveWebSearchMode(options?.webSearchMode, options?.webSearchEnabled);
     const { prompt, images } = normalizeInput(input);
     const generator = this._exec.run({
       input: prompt,
@@ -88,8 +102,7 @@ export class Thread {
       modelReasoningEffort: options?.modelReasoningEffort,
       signal: turnOptions.signal,
       networkAccessEnabled: options?.networkAccessEnabled,
-      webSearchMode: options?.webSearchMode,
-      webSearchEnabled: options?.webSearchEnabled,
+      webSearchMode,
       approvalPolicy: options?.approvalPolicy,
       additionalDirectories: options?.additionalDirectories,
     });
@@ -117,7 +130,7 @@ export class Thread {
     const items: ThreadItem[] = [];
     let finalResponse: string = "";
     let usage: Usage | null = null;
-    let turnFailure: ThreadError | null = null;
+    let turnFailure: { eventType: "turn.failed" | "error"; error: ThreadError } | null = null;
     for await (const event of generator) {
       if (event.type === "item.completed") {
         if (event.item.type === "agent_message") {
@@ -127,12 +140,15 @@ export class Thread {
       } else if (event.type === "turn.completed") {
         usage = event.usage;
       } else if (event.type === "turn.failed") {
-        turnFailure = event.error;
+        turnFailure = { eventType: "turn.failed", error: event.error };
+        break;
+      } else if (event.type === "error") {
+        turnFailure = { eventType: "error", error: { message: event.message } };
         break;
       }
     }
     if (turnFailure) {
-      throw new Error(turnFailure.message);
+      throw new ThreadRunError(turnFailure.eventType, turnFailure.error);
     }
     return { items, finalResponse, usage };
   }
@@ -152,4 +168,29 @@ function normalizeInput(input: Input): { prompt: string; images: string[] } {
     }
   }
   return { prompt: promptParts.join("\n\n"), images };
+}
+
+function resolveWebSearchMode(
+  webSearchMode: WebSearchMode | undefined,
+  webSearchEnabled: boolean | undefined,
+): WebSearchMode | undefined {
+  if (webSearchMode === undefined) {
+    if (webSearchEnabled === undefined) {
+      return undefined;
+    }
+    return webSearchEnabled ? "live" : "disabled";
+  }
+
+  if (webSearchEnabled === undefined) {
+    return webSearchMode;
+  }
+
+  const legacyMode = webSearchEnabled ? "live" : "disabled";
+  if (webSearchMode !== legacyMode) {
+    throw new Error(
+      `Conflicting web search options: webSearchMode=${webSearchMode} and webSearchEnabled=${webSearchEnabled}`,
+    );
+  }
+
+  return webSearchMode;
 }

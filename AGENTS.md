@@ -213,3 +213,4 @@ These guidelines apply to app-server protocol work in `codex-rs`, especially:
 - 修改代码后总是执行 cargo build -p codex-cli; 然后执行交互式终端 (PTY) 验证要完成的特性是否实现;
 - 在跑 codex 命令之前, 总是先执行 `bash codex-rs/install_local.sh` 来完成本地 debug 二进制的签名和覆盖安装, 然后再运行 `codex` 或做 PTY 验证
 - 当需求改变的时候, 要同步更新对应的文档
+- 对 `codex-enhanced` 的 PyPI/runtime 发版，不要手改 `sdk/python-runtime-enhanced/pyproject.toml` 的 `version`；统一从仓库根目录执行 `just release-codex-enhanced <version>`，让 recipe 完成版本更新、提交、打 tag 和推送。

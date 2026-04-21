@@ -4,7 +4,7 @@ import {
   assistantMessage,
   responseCompleted,
   responseStarted,
-  shell_call as shellCall,
+  shellCall,
   sse,
   SseResponseBody,
   startResponsesTestProxy,

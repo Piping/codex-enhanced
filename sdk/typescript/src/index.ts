@@ -18,12 +18,18 @@ export type {
   CommandExecutionItem,
   FileChangeItem,
   McpToolCallItem,
+  CollabToolCallStatus,
+  CollabTool,
+  CollabAgentStatus,
+  CollabAgentState,
+  CollabToolCallItem,
   WebSearchItem,
+  WebSearchAction,
   TodoListItem,
   ErrorItem,
 } from "./items";
 
-export { Thread } from "./thread";
+export { Thread, ThreadRunError } from "./thread";
 export type { RunResult, RunStreamedResult, Input, UserInput } from "./thread";
 
 export { Codex } from "./codex";

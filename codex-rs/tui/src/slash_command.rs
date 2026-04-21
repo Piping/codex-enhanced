@@ -35,6 +35,8 @@ pub enum SlashCommand {
     Plan,
     Collab,
     Agent,
+    #[strum(serialize = "del-agent")]
+    DelAgent,
     // Undo,
     Copy,
     Diff,
@@ -114,6 +116,7 @@ impl SlashCommand {
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
+            SlashCommand::DelAgent => "archive an open agent thread",
             SlashCommand::Approvals => "choose what Codex is allowed to do",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
@@ -196,6 +199,7 @@ impl SlashCommand {
             | SlashCommand::Thread
             | SlashCommand::Profile
             | SlashCommand::Btw
+            | SlashCommand::DelAgent
             | SlashCommand::Feedback
             | SlashCommand::Quit
             | SlashCommand::Exit => true,

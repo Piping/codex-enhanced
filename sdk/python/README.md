@@ -65,25 +65,12 @@ notebook bootstrap the pinned runtime package automatically.
 ## Maintainer workflow
 
 ```bash
-cd sdk/python
-python scripts/update_sdk_artifacts.py generate-types
-python scripts/update_sdk_artifacts.py \
-  stage-sdk \
-  /tmp/codex-python-release/codex-app-server-sdk \
-  --runtime-version 1.2.3
-python scripts/update_sdk_artifacts.py \
-  stage-runtime \
-  /tmp/codex-python-release/codex-cli-bin \
-  /path/to/codex \
-  --runtime-version 1.2.3
+just release-codex-enhanced 1.2.3
 ```
 
-This supports the CI release flow:
-
-- run `generate-types` before packaging
-- stage `codex-app-server-sdk` once with an exact `codex-cli-bin==...` dependency
-- stage `codex-cli-bin` on each supported platform runner with the same pinned runtime version
-- build and publish `codex-cli-bin` as platform wheels only; do not publish an sdist
+This one-shot helper updates `sdk/python-runtime-enhanced/pyproject.toml`,
+creates the matching `vX.Y.Z` tag, commits the version bump, and pushes both the
+commit and tag. Do not edit the version by hand.
 
 ## Compatibility and versioning
 

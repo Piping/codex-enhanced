@@ -28,7 +28,10 @@ impl FeatureRoute {
             | AppEvent::OpenJumpToMessagePanel
             | AppEvent::JumpToTranscriptCell { .. }
             | AppEvent::ForkCurrentSession
-            | AppEvent::UndoLastUserMessage => Some(Self::Thread),
+            | AppEvent::UndoLastUserMessage
+            | AppEvent::OpenDeleteAgentPicker
+            | AppEvent::OpenDeleteAgentConfirmation { .. }
+            | AppEvent::ArchiveAgentThread { .. } => Some(Self::Thread),
             AppEvent::StartBtwDiscussion { .. } => Some(Self::Btw),
             AppEvent::OpenWorkflowControls
             | AppEvent::OpenWorkflowControlView { .. }

@@ -64,18 +64,11 @@ platform with the same pinned runtime version. Publish `codex-cli-bin` as
 platform wheels only; do not publish an sdist:
 
 ```bash
-cd sdk/python
-python scripts/update_sdk_artifacts.py generate-types
-python scripts/update_sdk_artifacts.py \
-  stage-sdk \
-  /tmp/codex-python-release/codex-app-server-sdk \
-  --runtime-version 1.2.3
-python scripts/update_sdk_artifacts.py \
-  stage-runtime \
-  /tmp/codex-python-release/codex-cli-bin \
-  /path/to/codex \
-  --runtime-version 1.2.3
+just release-codex-enhanced 1.2.3
 ```
+
+For `codex-enhanced` releases, use the one-shot `just` recipe instead of
+editing `sdk/python-runtime-enhanced/pyproject.toml` by hand.
 
 ## Why does a turn "hang"?
 
