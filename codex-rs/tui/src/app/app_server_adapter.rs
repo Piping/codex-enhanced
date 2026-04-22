@@ -211,6 +211,30 @@ impl App {
 
                 if let Err(err) = result {
                     tracing::warn!("failed to enqueue app-server notification: {err}");
+                } else if self.primary_thread_id == Some(thread_id) {
+                    match primary_thread_compaction_result(&notification) {
+                        Some(Ok(())) => {
+                            self.release_pending_workflow_compact_followups(thread_id);
+                        }
+                        Some(Err(message)) => {
+                            self.fail_pending_workflow_compact_followups(thread_id, message);
+                        }
+                        None => {}
+                    }
+                    if self.active_thread_id != Some(thread_id)
+                        && let Some(after_turn) = super::workflow_after_turn_last_agent_message(
+                            self.primary_thread_id,
+                            thread_id,
+                            &notification,
+                        )
+                    {
+                        let _ = self
+                            .handle_primary_thread_turn_complete_for_workflows(
+                                app_server_client,
+                                after_turn,
+                            )
+                            .await;
+                    }
                 } else if self.active_thread_id != Some(thread_id)
                     && let Some(after_turn) = super::workflow_after_turn_last_agent_message(
                         self.primary_thread_id,
@@ -328,6 +352,37 @@ impl App {
             .await
             .map_err(|err| format!("failed to reject app-server request: {err}"))
     }
+}
+
+fn primary_thread_compaction_result(
+    notification: &ServerNotification,
+) -> Option<Result<(), String>> {
+    let ServerNotification::TurnCompleted(notification) = notification else {
+        return None;
+    };
+    let is_compaction_turn = notification.turn.items.iter().any(|item| {
+        matches!(
+            item,
+            codex_app_server_protocol::ThreadItem::ContextCompaction { .. }
+        )
+    });
+    if !is_compaction_turn {
+        return None;
+    }
+
+    Some(match notification.turn.status {
+        codex_app_server_protocol::TurnStatus::Completed => Ok(()),
+        codex_app_server_protocol::TurnStatus::Failed => Err(notification
+            .turn
+            .error
+            .as_ref()
+            .map(|error| format!("Workflow follow-up compaction failed: {}", error.message))
+            .unwrap_or_else(|| "Workflow follow-up compaction failed.".to_string())),
+        codex_app_server_protocol::TurnStatus::Interrupted => {
+            Err("Workflow follow-up compaction was interrupted.".to_string())
+        }
+        codex_app_server_protocol::TurnStatus::InProgress => return None,
+    })
 }
 
 fn server_request_thread_id(request: &ServerRequest) -> Option<ThreadId> {

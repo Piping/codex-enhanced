@@ -39,7 +39,8 @@ impl FeatureRoute {
             | AppEvent::EditWorkflowFile { .. }
             | AppEvent::ToggleWorkflowTriggerEnabled { .. }
             | AppEvent::ToggleWorkflowJobEnabled { .. }
-            | AppEvent::CycleWorkflowJobContext { .. }
+            | AppEvent::CycleWorkflowJobContextStrategy { .. }
+            | AppEvent::CycleWorkflowJobExecutionStrategy { .. }
             | AppEvent::CycleWorkflowJobResponse { .. }
             | AppEvent::EditWorkflowJobField { .. }
             | AppEvent::SetWorkflowTriggerType { .. }

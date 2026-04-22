@@ -8,7 +8,7 @@ expression: popup
   Type to search jobs
 › Back                Return to the previous workflow menu.
   Edit workflow.yaml  Open manual.yaml in your editor.
-  summarize           Enabled · Embed · Assistant · Ready
-  notify              Enabled · Ephemeral · User · Ready
+  summarize           Enabled · Embed · Inherit Session · Assistant · Ready
+  notify              Enabled · Thread Auto · Inherit Session · User · Ready
 
   Press enter to confirm or esc to go back

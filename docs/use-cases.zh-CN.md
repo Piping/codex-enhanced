@@ -139,33 +139,75 @@
 - Stakeholders and interests:
   - User: 重复工作应该沉淀成显式的 YAML-backed automation，而不是反复手敲 prompt。
   - Repo collaborators: workflow definitions 应保持 local、可检查、可编辑。
-  - Runtime: invalid 或不可运行的 workflow conditions 必须可见地失败。
+  - Runtime: invalid、互相冲突或不可运行的 workflow conditions 必须可见地失败。
+  - Main thread continuity: workflow follow-up 不能悄悄丢失、串错线程，或在 compact/fork 过程中破坏当前工作面。
 - Preconditions:
   - Workspace 能存储 `.codex/workflows/*.yaml`。
   - User 可以打开 `/workflow`。
 - Minimal guarantees:
   - Workflow files 保持 local 且可检查。
-  - Parse 或 validation failures 不会被部分隐藏。
+  - Parse 或 validation failures 不会被部分隐藏，也不会对旧字段或歧义配置做静默 fallback。
   - 失败的 workflow runs 不会无限阻塞其他 interactive surface。
 - Success guarantees:
   - User 可以创建、编辑、启用、停用和运行 workflows。
-  - 支持的 triggers 和 job settings 能按预期 thread/context behavior 执行。
+  - 每个 job 都以显式 `context_strategy` 声明如何处理当前上下文。
+  - 每个 job 都以显式 `execution_strategy` 声明如何继承或覆盖当前 session 的执行配置。
+  - 支持的 triggers、`context_strategy`、`execution_strategy`、`response` 和 steps 会按声明的 thread/context behavior 执行。
 - Trigger:
   - User 想把一类重复任务自动化，或管理已有 workflow jobs。
 - Main success scenario:
   1. User 打开 `/workflow`。
   2. Codex 加载 workspace-local workflow definitions。
-  3. User 创建或编辑 workflow、jobs 和 triggers。
-  4. Codex 校验 workflow，并把 YAML 持久化到本地。
+  3. User 创建或编辑 workflow、jobs 和 triggers，并为每个 job 指定 `context_strategy`、`execution_strategy`、`response`、`needs` 和 `steps`。
+  4. Codex 严格校验 workflow，并把 YAML 持久化到本地。
   5. User 手动运行 workflow，或等待某个 trigger 触发。
-  6. Codex 执行 workflow，同时不阻塞无关的 user actions。
+  6. Codex 按 job 声明的 `context_strategy` 选择直接嵌入主线程输入、先 compact 再回灌主线程、或在 workflow child thread 中 `auto/new/fork/fork_compact` 执行。
+  7. Codex 在执行 workflow 时保持主 interactive surface 可用，并把结果按 `response` 配置显示为 assistant cell 或回灌为 user follow-up。
 - Extensions:
   - 3a. Workflow 使用 timeout、retry 或 background execution：
     Codex 会跨 rounds 和 runtime boundaries 保持这些语义。
-  - 4a. YAML 无效或 no-op：
+  - 4a. YAML 无效、缺少必填 `context_strategy` / `execution_strategy`、仍使用旧 `context` 字段，或出现未知字段：
     Codex 明确报告失败，而不是假装 workflow 已激活。
-  - 6a. Triggered work 绑定到某个 thread：
+  - 4b. Job 把 `embed` 或 `embed_compact` 与 `run` steps 组合：
+    Codex 在加载期拒绝该 workflow，而不是在运行时降级或跳过这些 steps。
+  - 4c. `before_turn` trigger 解析到 `embed_compact` job：
+    Codex 在加载期拒绝该 workflow，因为主线程 inline compact 不支持该触发点。
+  - 6a. `thread_fork` 或 `thread_fork_compact` 需要 materialized primary thread，但当前不存在可 fork 的主线程：
+    Codex 明确失败，而不是偷偷退回 `thread_new`。
+  - 7a. Triggered work 绑定到某个 primary thread：
     Codex 会把 follow-up 路由到对应的 bound thread，而不是生成无关上下文。
+  - 7b. `embed_compact` 或 main-thread compact follow-up 在 compact 阶段失败：
+    Codex 可见地报告失败，并且不会静默提交错误的 follow-up。
+  - 7c. `after_turn` workflow 使用 `response: user` 且产生非空回复：
+    Codex 把该回复提交回主线程，并允许它再次满足 `after_turn` 的触发条件。
+  - 7d. `after_turn` workflow 返回空回复：
+    Codex 停止 follow-up 链，而不是继续递归触发。
+- Technology and data variations:
+  - `context_strategy: embed`
+    - 适用：把 workflow prompt 直接作为主线程输入继续执行。
+    - 限制：只允许 prompt steps，不允许 `run`。
+  - `context_strategy: embed_compact`
+    - 适用：先 compact 主线程，再把 workflow prompt 回灌为主线程 follow-up。
+    - 限制：只允许 prompt steps；不适用于 `before_turn`。
+  - `context_strategy: thread_auto`
+    - 适用：优先复用当前主线程上下文；若主线程已 materialized 则 fork，否则新开 workflow child thread。
+  - `context_strategy: thread_new`
+    - 适用：明确隔离 workflow 执行，不继承主线程上下文。
+  - `context_strategy: thread_fork`
+    - 适用：要求继承当前主线程上下文。
+    - 限制：没有可 fork 的 materialized primary thread 时必须失败。
+  - `context_strategy: thread_fork_compact`
+    - 适用：先 fork 主线程，再 compact workflow child thread，随后执行 steps。
+  - `execution_strategy: inherit_session`
+    - 适用：继承当前 primary session 的 `cwd`、model、approval、sandbox 和 reviewer。
+    - 限制：没有当前 primary session 时必须失败，不允许偷偷退回 app config。
+  - `execution_strategy: override_yolo`
+    - 适用：继承当前 primary session 的工作上下文，但把执行权限提升为 yolo。
+    - 效果：`approval_policy = never`，`sandbox_policy = danger-full-access`。
+  - `response: assistant`
+    - Workflow 输出作为 transcript cell 展示，不继续驱动主线程 user turn。
+  - `response: user`
+    - Workflow 输出被重新提交为主线程 user follow-up，可继续触发 after-turn 语义。
 
 ## UC-5 Bridge Feishu Conversations Into Codex Threads
 
@@ -406,7 +448,14 @@
 - Users 可以在 profile 出错时继续工作，而不需要手工改环境。
 - Saved sessions 可以被恢复，并具有足够的 navigation 和 visibility control 来快速找回 context。
 - Workflows 是 repo-local、可编辑、可运行的，并且在 misconfigured 或 unrunnable 时会显式失败。
+- Workflow job 必须显式声明 `context_strategy` 和 `execution_strategy`；旧 `context` 字段或未知字段不会被接受，也不会触发兼容降级。
+- `embed` 与 `embed_compact` job 不能包含 `run` steps；这种组合会在加载期失败。
+- `before_turn` workflows 不能使用 `context_strategy: embed_compact`。
+- `thread_auto` 会在主线程可 fork 时 fork，否则新开 thread；`thread_fork` 不允许悄悄退化成 `thread_new`；`thread_fork_compact` 会在 child thread compact 后执行。
+- `execution_strategy: inherit_session` 和 `override_yolo` 都要求存在当前 primary session；`override_yolo` 必须把 approval/sandbox 提升到 yolo，而不是只改文案。
 - After-turn 和 background workflow activity 不会冻结主 interactive thread。
+- `response: user` 的 workflow 回复会被提交回正确的 primary thread；若回复非空，它可以再次驱动 `after_turn`，若回复为空，递归链会自然停止。
+- main-thread compact follow-up 失败时，错误是可见的，并且不会静默吞掉或错误提交 follow-up。
 - Feishu session bindings 能在常见 runtime disruptions 下保持可用，并支持可见的 inbound/outbound handling。
 - 当多个 Codex processes 共用同一个 Feishu app 时，只有 elected owner 会保持 embedded websocket active。
 - Users 可以为当前 session 显式 preempt websocket ownership，并且当 force refresh 停止后，这种 preemption 会自然失效。
@@ -440,9 +489,13 @@
    - visibility preferences
 
 3. Workflow orchestration
-   - scheduler/runtime
+   - strict YAML contract and validation
+   - `context_strategy` routing and thread bootstrap semantics
+   - `execution_strategy` inheritance and yolo override semantics
+   - main-thread compact follow-up queue and failure handling
    - trigger semantics
    - timeout/retry handling
+   - after-turn follow-up routing and retrigger behavior
    - TUI workflow controls
 
 4. Feishu bridge and coordination
