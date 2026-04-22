@@ -1079,6 +1079,7 @@ pub(crate) struct App {
     last_subagent_backfill_attempt: Option<ThreadId>,
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
+    pending_workflow_compact_followups: VecDeque<PendingWorkflowCompactFollowup>,
     pending_app_server_requests: PendingAppServerRequests,
     // Serialize plugin enablement writes per plugin so stale completions cannot
     // overwrite a newer toggle, even if the plugin is toggled from different
@@ -1109,6 +1110,12 @@ struct WindowsSandboxState {
     setup_started_at: Option<Instant>,
     // One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
+}
+
+#[derive(Debug)]
+struct PendingWorkflowCompactFollowup {
+    thread_id: ThreadId,
+    op: Op,
 }
 
 fn normalize_harness_overrides_for_cwd(
@@ -3901,6 +3908,7 @@ impl App {
         self.last_subagent_backfill_attempt = None;
         self.primary_session_configured = None;
         self.pending_primary_events.clear();
+        self.pending_workflow_compact_followups.clear();
         self.pending_app_server_requests.clear();
         self.chat_widget.set_pending_thread_approvals(Vec::new());
         self.sync_active_agent_label();
@@ -4583,6 +4591,7 @@ See the Codex keymap documentation for supported actions and examples."
             last_subagent_backfill_attempt: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            pending_workflow_compact_followups: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
@@ -10527,6 +10536,7 @@ guardian_approval = true
             last_subagent_backfill_attempt: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            pending_workflow_compact_followups: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
@@ -10606,6 +10616,7 @@ guardian_approval = true
                 last_subagent_backfill_attempt: None,
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
+                pending_workflow_compact_followups: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),
                 pending_plugin_enabled_writes: HashMap::new(),
                 pending_hook_enabled_writes: HashMap::new(),
@@ -10645,7 +10656,8 @@ triggers:
 
 jobs:
   augment:
-    context: embed
+    context_strategy: embed
+    execution_strategy: inherit_session
     steps:
       - prompt: |
           added by before_turn
@@ -10679,7 +10691,8 @@ triggers:
 
 jobs:
   followup:
-    context: embed
+    context_strategy: embed
+    execution_strategy: inherit_session
     steps:
       - prompt: |
           follow up from workflow
@@ -10709,12 +10722,14 @@ triggers:
 
 jobs:
   summarize:
-    context: embed
+    context_strategy: embed
+    execution_strategy: inherit_session
     steps:
       - prompt: |
           summarize the backlog
   notify:
-    context: embed
+    context_strategy: embed
+    execution_strategy: inherit_session
     response: user
     steps:
       - prompt: |
@@ -10738,7 +10753,8 @@ triggers:
 
 jobs:
   summarize:
-    context: embed
+    context_strategy: embed
+    execution_strategy: inherit_session
     steps:
       - prompt: |
           summarize the latest file changes
@@ -13401,6 +13417,8 @@ model = "gpt-5.2"
                     outcome: workflow_runtime::BackgroundWorkflowRunOutcome::Completed(vec![
                         workflow_runtime::WorkflowJobRunResult {
                             delivery: workflow_runtime::WorkflowOutputDelivery::UserFollowup,
+                            execution_strategy:
+                                workflow_definition::WorkflowExecutionStrategy::InheritSession,
                             workflow_name: "director".to_string(),
                             trigger_id: "job:review_backlog".to_string(),
                             job_name: "review_backlog".to_string(),

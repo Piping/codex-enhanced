@@ -1,5 +1,6 @@
 use super::AfterTurnContext;
 use super::App;
+use super::workflow_definition::WorkflowExecutionStrategy;
 use super::workflow_runtime::WorkflowOutputDelivery;
 use super::workflow_runtime::WorkflowPhaseContext;
 use crate::app::workflow_definition::WorkflowTriggerKind;
@@ -13,13 +14,19 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::markdown::append_markdown;
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadCompactStartParams;
+use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use ratatui::text::Line;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::Arc;
+use uuid::Uuid;
 
 #[derive(Default)]
 pub(crate) struct WorkflowHistoryState {
@@ -138,6 +145,11 @@ impl App {
                                 self.config.cwd.as_path(),
                             )));
                         }
+                        WorkflowOutputDelivery::MainThreadCompactInput => {
+                            cells.push(Arc::new(history_cell::new_error_event(
+                                "Workflow before_turn failed: `context_strategy: embed_compact` is not supported for before_turn triggers.".to_string(),
+                            )));
+                        }
                         WorkflowOutputDelivery::MainThreadInput
                         | WorkflowOutputDelivery::UserFollowup => {
                             items.push(UserInput::Text {
@@ -228,6 +240,7 @@ impl App {
         &mut self,
         text: String,
         source: WorkflowReplySource,
+        execution_strategy: WorkflowExecutionStrategy,
     ) -> Option<Arc<dyn HistoryCell>> {
         let Some(primary_thread_id) = self.primary_thread_id else {
             self.chat_widget.add_error_message(
@@ -243,7 +256,7 @@ impl App {
 
         let origin_cell: Arc<dyn HistoryCell> = Arc::new(workflow_info_cell(&source));
         let visible_cell = self.record_workflow_history_cell(primary_thread_id, origin_cell);
-        let Some(op) = self.workflow_followup_user_turn(trimmed) else {
+        let Some(op) = self.workflow_followup_user_turn(trimmed, execution_strategy) else {
             self.chat_widget.add_error_message(
                 "Failed to build the main-thread follow-up for the workflow.".to_string(),
             );
@@ -256,30 +269,125 @@ impl App {
         visible_cell
     }
 
-    fn workflow_followup_user_turn(&self, text: String) -> Option<Op> {
+    pub(crate) async fn queue_workflow_followup_to_primary_after_compact(
+        &mut self,
+        app_server: &AppServerSession,
+        text: String,
+        source: WorkflowReplySource,
+        execution_strategy: WorkflowExecutionStrategy,
+    ) -> Option<Arc<dyn HistoryCell>> {
+        let Some(primary_thread_id) = self.primary_thread_id else {
+            self.chat_widget.add_error_message(
+                "Failed to find the main thread for background compact follow-up.".to_string(),
+            );
+            return None;
+        };
+
+        let trimmed = text.trim().to_string();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let origin_cell: Arc<dyn HistoryCell> = Arc::new(workflow_info_cell(&source));
+        let visible_cell = self.record_workflow_history_cell(primary_thread_id, origin_cell);
+        let Some(op) = self.workflow_followup_user_turn(trimmed, execution_strategy) else {
+            self.chat_widget.add_error_message(
+                "Failed to build the main-thread compact follow-up for the workflow.".to_string(),
+            );
+            return visible_cell;
+        };
+
+        let start_compaction = self.pending_workflow_compact_followups.is_empty();
+        self.pending_workflow_compact_followups
+            .push_back(super::PendingWorkflowCompactFollowup {
+                thread_id: primary_thread_id,
+                op,
+            });
+
+        if start_compaction
+            && let Err(err) = app_server
+                .request_handle()
+                .request_typed::<ThreadCompactStartResponse>(ClientRequest::ThreadCompactStart {
+                    request_id: RequestId::String(format!("workflow-compact-{}", Uuid::new_v4())),
+                    params: ThreadCompactStartParams {
+                        thread_id: primary_thread_id.to_string(),
+                    },
+                })
+                .await
+        {
+            self.pending_workflow_compact_followups.pop_back();
+            self.chat_widget.add_error_message(format!(
+                "Failed to compact the main thread for workflow follow-up: {err}"
+            ));
+        }
+
+        visible_cell
+    }
+
+    pub(crate) fn release_pending_workflow_compact_followups(&mut self, thread_id: ThreadId) {
+        let mut remaining = VecDeque::new();
+        while let Some(followup) = self.pending_workflow_compact_followups.pop_front() {
+            if followup.thread_id == thread_id {
+                self.app_event_tx.send(AppEvent::SubmitWorkflowFollowup {
+                    thread_id: followup.thread_id,
+                    op: followup.op,
+                });
+            } else {
+                remaining.push_back(followup);
+            }
+        }
+        self.pending_workflow_compact_followups = remaining;
+    }
+
+    pub(crate) fn fail_pending_workflow_compact_followups(
+        &mut self,
+        thread_id: ThreadId,
+        message: String,
+    ) {
+        let mut remaining = VecDeque::new();
+        let mut dropped = 0usize;
+        while let Some(followup) = self.pending_workflow_compact_followups.pop_front() {
+            if followup.thread_id == thread_id {
+                dropped = dropped.saturating_add(1);
+            } else {
+                remaining.push_back(followup);
+            }
+        }
+        self.pending_workflow_compact_followups = remaining;
+        if dropped > 0 {
+            self.chat_widget.add_error_message(message);
+        }
+    }
+
+    fn workflow_followup_user_turn(
+        &mut self,
+        text: String,
+        execution_strategy: WorkflowExecutionStrategy,
+    ) -> Option<Op> {
         let text = text.trim().to_string();
         if text.is_empty() {
             return None;
         }
 
-        let session = self.primary_session_configured.as_ref();
-        let cwd = session
-            .map(|session| session.cwd.clone())
-            .unwrap_or_else(|| self.config.cwd.clone());
-        let approval_policy = session
-            .map(|session| session.approval_policy)
-            .unwrap_or_else(|| self.config.permissions.approval_policy.value());
-        let approvals_reviewer = session.map(|session| session.approvals_reviewer);
-        let sandbox_policy = session
-            .map(|session| session.sandbox_policy.clone())
-            .unwrap_or_else(|| self.config.permissions.sandbox_policy.get().clone());
-        let model = session
-            .map(|session| session.model.clone())
-            .filter(|model| !model.trim().is_empty())
-            .or_else(|| self.config.model.clone())
-            .unwrap_or_else(|| self.chat_widget.current_model().to_string());
-        let effort = session.and_then(|session| session.reasoning_effort);
-        let service_tier = session.and_then(|session| session.service_tier.map(Some));
+        let session = self.primary_session_configured.as_ref().or_else(|| {
+            self.chat_widget.add_error_message(format!(
+                "Workflow execution strategy `{}` requires a current primary session.",
+                execution_strategy.as_str()
+            ));
+            None
+        })?;
+        let cwd = session.cwd.clone();
+        let mut approval_policy = session.approval_policy;
+        let mut approvals_reviewer = session.approvals_reviewer;
+        let mut sandbox_policy = session.sandbox_policy.clone();
+        if execution_strategy == WorkflowExecutionStrategy::OverrideYolo {
+            approval_policy = codex_protocol::protocol::AskForApproval::Never;
+            approvals_reviewer = codex_protocol::config_types::ApprovalsReviewer::User;
+            sandbox_policy = codex_protocol::protocol::SandboxPolicy::DangerFullAccess;
+        }
+        let model = session.model.clone();
+        let effort = session.reasoning_effort;
+        let service_tier = session.service_tier.map(Some);
 
         Some(Op::UserTurn {
             items: vec![UserInput::Text {
@@ -288,7 +396,7 @@ impl App {
             }],
             cwd: cwd.to_path_buf(),
             approval_policy,
-            approvals_reviewer,
+            approvals_reviewer: Some(approvals_reviewer),
             sandbox_policy,
             model,
             effort,

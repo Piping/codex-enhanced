@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use serde_yaml::Mapping;
 use serde_yaml::Value as YamlValue;
 
-use super::workflow_definition::WorkflowContextMode;
+use super::workflow_definition::WorkflowContextStrategy;
+use super::workflow_definition::WorkflowExecutionStrategy;
 use super::workflow_definition::WorkflowResponseMode;
 use super::workflow_definition::WorkflowStep;
 use super::workflow_yaml::serialize_yaml_value;
@@ -25,7 +26,8 @@ triggers:
 
 jobs:
   main:
-    context: ephemeral
+    context_strategy: thread_auto
+    execution_strategy: inherit_session
     response: assistant
     steps:
       - prompt: |
@@ -141,21 +143,52 @@ pub(crate) fn set_trigger_type(
     })
 }
 
-pub(crate) fn cycle_job_context(
+pub(crate) fn cycle_job_context_strategy(
     workflow_path: &Path,
     job_name: &str,
-) -> Result<WorkflowContextMode, String> {
+) -> Result<WorkflowContextStrategy, String> {
     mutate_job(workflow_path, job_name, |job| {
         let current = job
-            .get(string_key("context"))
-            .and_then(|value| serde_yaml::from_value::<WorkflowContextMode>(value.clone()).ok())
-            .unwrap_or_default();
+            .get(string_key("context_strategy"))
+            .ok_or_else(|| "workflow job is missing required `context_strategy`".to_string())
+            .and_then(|value| {
+                serde_yaml::from_value::<WorkflowContextStrategy>(value.clone())
+                    .map_err(|err| err.to_string())
+            })?;
         let next = match current {
-            WorkflowContextMode::Embed => WorkflowContextMode::Ephemeral,
-            WorkflowContextMode::Ephemeral => WorkflowContextMode::Embed,
+            WorkflowContextStrategy::Embed => WorkflowContextStrategy::EmbedCompact,
+            WorkflowContextStrategy::EmbedCompact => WorkflowContextStrategy::ThreadAuto,
+            WorkflowContextStrategy::ThreadAuto => WorkflowContextStrategy::ThreadNew,
+            WorkflowContextStrategy::ThreadNew => WorkflowContextStrategy::ThreadFork,
+            WorkflowContextStrategy::ThreadFork => WorkflowContextStrategy::ThreadForkCompact,
+            WorkflowContextStrategy::ThreadForkCompact => WorkflowContextStrategy::Embed,
         };
         job.insert(
-            string_key("context"),
+            string_key("context_strategy"),
+            serde_yaml::to_value(next).map_err(|err| err.to_string())?,
+        );
+        Ok(next)
+    })
+}
+
+pub(crate) fn cycle_job_execution_strategy(
+    workflow_path: &Path,
+    job_name: &str,
+) -> Result<WorkflowExecutionStrategy, String> {
+    mutate_job(workflow_path, job_name, |job| {
+        let current = job
+            .get(string_key("execution_strategy"))
+            .ok_or_else(|| "workflow job is missing required `execution_strategy`".to_string())
+            .and_then(|value| {
+                serde_yaml::from_value::<WorkflowExecutionStrategy>(value.clone())
+                    .map_err(|err| err.to_string())
+            })?;
+        let next = match current {
+            WorkflowExecutionStrategy::InheritSession => WorkflowExecutionStrategy::OverrideYolo,
+            WorkflowExecutionStrategy::OverrideYolo => WorkflowExecutionStrategy::InheritSession,
+        };
+        job.insert(
+            string_key("execution_strategy"),
             serde_yaml::to_value(next).map_err(|err| err.to_string())?,
         );
         Ok(next)
@@ -586,6 +619,8 @@ triggers:
 
 jobs:
   notify:
+    context_strategy: thread_auto
+    execution_strategy: inherit_session
     response: assistant
     steps:
       - prompt: |
@@ -646,14 +681,18 @@ jobs:
     }
 
     #[test]
-    fn cycle_job_context_and_response_round_trip() {
+    fn cycle_job_context_execution_strategy_and_response_round_trip() {
         let dir = tempdir().unwrap();
         let path = dir.path().join(".codex/workflows/workflow.yaml");
         write_workflow(&path);
 
         assert_eq!(
-            cycle_job_context(&path, "notify").unwrap(),
-            WorkflowContextMode::Embed
+            cycle_job_context_strategy(&path, "notify").unwrap(),
+            WorkflowContextStrategy::ThreadNew
+        );
+        assert_eq!(
+            cycle_job_execution_strategy(&path, "notify").unwrap(),
+            WorkflowExecutionStrategy::OverrideYolo
         );
         assert_eq!(
             cycle_job_response(&path, "notify").unwrap(),

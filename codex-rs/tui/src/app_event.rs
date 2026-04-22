@@ -733,7 +733,12 @@ pub(crate) enum AppEvent {
         job_name: String,
     },
 
-    CycleWorkflowJobContext {
+    CycleWorkflowJobContextStrategy {
+        workflow_path: PathBuf,
+        job_name: String,
+    },
+
+    CycleWorkflowJobExecutionStrategy {
         workflow_path: PathBuf,
         job_name: String,
     },

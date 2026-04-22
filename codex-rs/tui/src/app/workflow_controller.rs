@@ -42,11 +42,17 @@ impl WorkflowController {
             } => {
                 app.toggle_workflow_job_enabled_from_ui(workflow_path, job_name);
             }
-            AppEvent::CycleWorkflowJobContext {
+            AppEvent::CycleWorkflowJobContextStrategy {
                 workflow_path,
                 job_name,
             } => {
-                app.cycle_workflow_job_context_from_ui(workflow_path, job_name);
+                app.cycle_workflow_job_context_strategy_from_ui(workflow_path, job_name);
+            }
+            AppEvent::CycleWorkflowJobExecutionStrategy {
+                workflow_path,
+                job_name,
+            } => {
+                app.cycle_workflow_job_execution_strategy_from_ui(workflow_path, job_name);
             }
             AppEvent::CycleWorkflowJobResponse {
                 workflow_path,

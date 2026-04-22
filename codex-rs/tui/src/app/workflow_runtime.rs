@@ -1,7 +1,8 @@
 use super::App;
 use super::workflow_definition::LoadedWorkflowJob;
 use super::workflow_definition::LoadedWorkflowRegistry;
-use super::workflow_definition::WorkflowContextMode;
+use super::workflow_definition::WorkflowContextStrategy;
+use super::workflow_definition::WorkflowExecutionStrategy;
 use super::workflow_definition::WorkflowResponseMode;
 use super::workflow_definition::WorkflowStep;
 use super::workflow_definition::WorkflowTriggerKind;
@@ -11,6 +12,7 @@ use super::workflow_history::WorkflowReplySource;
 use super::workflow_history::workflow_result_cell;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
+use crate::app_server_session::ThreadSessionState;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
 use crate::legacy_core::config::Config;
@@ -21,6 +23,8 @@ use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ThreadCompactStartParams;
+use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
@@ -36,6 +40,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use std::collections::BTreeMap;
@@ -136,6 +141,7 @@ impl BackgroundWorkflowRunTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WorkflowOutputDelivery {
     MainThreadInput,
+    MainThreadCompactInput,
     AssistantCell,
     UserFollowup,
 }
@@ -179,6 +185,7 @@ impl From<WorkflowPhaseContext<'_>> for OwnedWorkflowPhaseContext {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WorkflowJobRunResult {
     pub(crate) delivery: WorkflowOutputDelivery,
+    pub(crate) execution_strategy: WorkflowExecutionStrategy,
     pub(crate) workflow_name: String,
     pub(crate) trigger_id: String,
     pub(crate) job_name: String,
@@ -204,7 +211,20 @@ pub(crate) struct BackgroundWorkflowRunResult {
 struct WorkflowThreadSession {
     thread_id: String,
     cwd: PathBuf,
+    execution_config: WorkflowExecutionConfig,
     notifications: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<ServerNotification>>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorkflowExecutionConfig {
+    model: String,
+    model_provider_id: String,
+    service_tier: Option<codex_protocol::config_types::ServiceTier>,
+    approval_policy: AskForApproval,
+    approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
+    sandbox_policy: SandboxPolicy,
+    cwd: PathBuf,
+    reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 }
 
 #[derive(Clone, Copy)]
@@ -224,11 +244,14 @@ struct WorkflowTurnState {
 }
 
 trait WorkflowRuntimeClient: Send + Sync {
-    fn start_workflow_thread(&self) -> BoxFuture<'_, Result<WorkflowThreadSession, String>>;
+    fn start_workflow_thread(
+        &self,
+        strategy: WorkflowThreadStartStrategy,
+        execution_strategy: WorkflowExecutionStrategy,
+    ) -> BoxFuture<'_, Result<WorkflowThreadSession, String>>;
     fn start_turn(
         &self,
-        thread_id: String,
-        cwd: PathBuf,
+        thread: &WorkflowThreadSession,
         input: String,
     ) -> BoxFuture<'_, Result<String, String>>;
     fn read_turn<'a>(
@@ -244,11 +267,31 @@ trait WorkflowRuntimeClient: Send + Sync {
     fn unsubscribe_thread(&self, thread_id: String) -> BoxFuture<'_, Result<(), String>>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkflowThreadStartStrategy {
+    Auto,
+    New,
+    Fork,
+    ForkCompact,
+}
+
+impl WorkflowThreadStartStrategy {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::New => "new",
+            Self::Fork => "fork",
+            Self::ForkCompact => "fork_compact",
+        }
+    }
+}
+
 pub(crate) struct AppServerWorkflowRuntimeClient {
     request_handle: AppServerRequestHandle,
     workflow_thread_notification_channels: WorkflowThreadNotificationChannels,
     config: Config,
     primary_thread_id: Option<ThreadId>,
+    primary_session_configured: Option<ThreadSessionState>,
     is_remote: bool,
     remote_cwd_override: Option<PathBuf>,
 }
@@ -259,12 +302,14 @@ impl AppServerWorkflowRuntimeClient {
         workflow_thread_notification_channels: WorkflowThreadNotificationChannels,
         config: Config,
         primary_thread_id: Option<ThreadId>,
+        primary_session_configured: Option<ThreadSessionState>,
     ) -> Self {
         Self {
             request_handle: app_server.request_handle(),
             workflow_thread_notification_channels,
             config,
             primary_thread_id,
+            primary_session_configured,
             is_remote: app_server.is_remote(),
             remote_cwd_override: app_server.remote_cwd_override().map(PathBuf::from),
         }
@@ -272,37 +317,34 @@ impl AppServerWorkflowRuntimeClient {
 }
 
 impl WorkflowRuntimeClient for AppServerWorkflowRuntimeClient {
-    fn start_workflow_thread(&self) -> BoxFuture<'_, Result<WorkflowThreadSession, String>> {
+    fn start_workflow_thread(
+        &self,
+        strategy: WorkflowThreadStartStrategy,
+        execution_strategy: WorkflowExecutionStrategy,
+    ) -> BoxFuture<'_, Result<WorkflowThreadSession, String>> {
         Box::pin(async move {
-            let fork_source_thread_id = if let Some(primary_thread_id) = self.primary_thread_id {
-                let response: ThreadReadResponse = self
-                    .request_handle
-                    .request_typed(ClientRequest::ThreadRead {
-                        request_id: request_id(),
-                        params: ThreadReadParams {
-                            thread_id: primary_thread_id.to_string(),
-                            include_turns: false,
-                        },
-                    })
-                    .await
-                    .map_err(|err| format!("failed to inspect workflow source thread: {err}"))?;
-                response
-                    .thread
-                    .path
-                    .as_ref()
-                    .is_some_and(|path| path.exists())
-                    .then_some(primary_thread_id)
-            } else {
-                None
+            let execution_config = self.resolve_execution_config(execution_strategy)?;
+            let fork_source_thread_id = match strategy {
+                WorkflowThreadStartStrategy::Auto => self.available_fork_source_thread_id().await?,
+                WorkflowThreadStartStrategy::New => None,
+                WorkflowThreadStartStrategy::Fork | WorkflowThreadStartStrategy::ForkCompact => {
+                    Some(self.available_fork_source_thread_id().await?.ok_or_else(|| {
+                        format!(
+                            "workflow context strategy requires a materialized primary thread for `{}`",
+                            strategy.as_str()
+                        )
+                    })?)
+                }
             };
 
-            if let Some(primary_thread_id) = fork_source_thread_id {
+            let thread = if let Some(primary_thread_id) = fork_source_thread_id {
                 let response: ThreadForkResponse = self
                     .request_handle
                     .request_typed(ClientRequest::ThreadFork {
                         request_id: request_id(),
                         params: workflow_thread_fork_params(
-                            &self.config,
+                            &execution_config,
+                            self.config.active_profile.as_deref(),
                             primary_thread_id,
                             self.is_remote,
                             self.remote_cwd_override.as_deref(),
@@ -310,61 +352,52 @@ impl WorkflowRuntimeClient for AppServerWorkflowRuntimeClient {
                     })
                     .await
                     .map_err(|err| format!("failed to fork workflow thread: {err}"))?;
-                let thread_id = ThreadId::from_string(&response.thread.id).map_err(|err| {
-                    format!(
-                        "workflow thread id `{}` is invalid: {err}",
-                        response.thread.id
-                    )
-                })?;
-                let (sender, receiver) = mpsc::unbounded_channel();
-                self.workflow_thread_notification_channels
-                    .lock()
+                register_workflow_thread(
+                    &self.workflow_thread_notification_channels,
+                    response.thread.id,
+                    response.cwd.to_path_buf(),
+                    execution_config.clone(),
+                )
+                .await?
+            } else {
+                let response: ThreadStartResponse = self
+                    .request_handle
+                    .request_typed(ClientRequest::ThreadStart {
+                        request_id: request_id(),
+                        params: workflow_thread_start_params(
+                            &execution_config,
+                            self.config.active_profile.as_deref(),
+                            self.is_remote,
+                            self.remote_cwd_override.as_deref(),
+                        ),
+                    })
                     .await
-                    .insert(thread_id, sender);
-                return Ok(WorkflowThreadSession {
-                    thread_id: response.thread.id,
-                    cwd: response.cwd.to_path_buf(),
-                    notifications: Arc::new(tokio::sync::Mutex::new(receiver)),
-                });
+                    .map_err(|err| format!("failed to start workflow thread: {err}"))?;
+                register_workflow_thread(
+                    &self.workflow_thread_notification_channels,
+                    response.thread.id,
+                    response.cwd.to_path_buf(),
+                    execution_config,
+                )
+                .await?
+            };
+
+            if matches!(strategy, WorkflowThreadStartStrategy::ForkCompact) {
+                self.compact_workflow_thread(&thread).await?;
             }
 
-            let response: ThreadStartResponse = self
-                .request_handle
-                .request_typed(ClientRequest::ThreadStart {
-                    request_id: request_id(),
-                    params: workflow_thread_start_params(
-                        &self.config,
-                        self.is_remote,
-                        self.remote_cwd_override.as_deref(),
-                    ),
-                })
-                .await
-                .map_err(|err| format!("failed to start workflow thread: {err}"))?;
-            let thread_id = ThreadId::from_string(&response.thread.id).map_err(|err| {
-                format!(
-                    "workflow thread id `{}` is invalid: {err}",
-                    response.thread.id
-                )
-            })?;
-            let (sender, receiver) = mpsc::unbounded_channel();
-            self.workflow_thread_notification_channels
-                .lock()
-                .await
-                .insert(thread_id, sender);
-            Ok(WorkflowThreadSession {
-                thread_id: response.thread.id,
-                cwd: response.cwd.to_path_buf(),
-                notifications: Arc::new(tokio::sync::Mutex::new(receiver)),
-            })
+            Ok(thread)
         })
     }
 
     fn start_turn(
         &self,
-        thread_id: String,
-        cwd: PathBuf,
+        thread: &WorkflowThreadSession,
         input: String,
     ) -> BoxFuture<'_, Result<String, String>> {
+        let thread_id = thread.thread_id.clone();
+        let cwd = thread.cwd.clone();
+        let execution_config = thread.execution_config.clone();
         Box::pin(async move {
             let response: TurnStartResponse = self
                 .request_handle
@@ -380,17 +413,13 @@ impl WorkflowRuntimeClient for AppServerWorkflowRuntimeClient {
                             .into(),
                         ],
                         cwd: Some(cwd),
-                        approval_policy: Some(
-                            self.config.permissions.approval_policy.value().into(),
-                        ),
-                        approvals_reviewer: Some(self.config.approvals_reviewer.into()),
-                        sandbox_policy: Some(
-                            self.config.permissions.sandbox_policy.get().clone().into(),
-                        ),
-                        model: self.config.model.clone(),
+                        approval_policy: Some(execution_config.approval_policy.into()),
+                        approvals_reviewer: Some(execution_config.approvals_reviewer.into()),
+                        sandbox_policy: Some(execution_config.sandbox_policy.into()),
+                        model: Some(execution_config.model),
                         responsesapi_client_metadata: None,
-                        service_tier: None,
-                        effort: self.config.model_reasoning_effort,
+                        service_tier: Some(execution_config.service_tier),
+                        effort: execution_config.reasoning_effort,
                         summary: self.config.model_reasoning_summary,
                         personality: None,
                         output_schema: None,
@@ -540,6 +569,139 @@ impl WorkflowRuntimeClient for AppServerWorkflowRuntimeClient {
     }
 }
 
+impl AppServerWorkflowRuntimeClient {
+    fn resolve_execution_config(
+        &self,
+        execution_strategy: WorkflowExecutionStrategy,
+    ) -> Result<WorkflowExecutionConfig, String> {
+        let session = self.primary_session_configured.as_ref().ok_or_else(|| {
+            format!(
+                "workflow execution strategy `{}` requires a current primary session",
+                execution_strategy.as_str()
+            )
+        })?;
+
+        let mut execution_config = WorkflowExecutionConfig {
+            model: session.model.clone(),
+            model_provider_id: session.model_provider_id.clone(),
+            service_tier: session.service_tier,
+            approval_policy: session.approval_policy,
+            approvals_reviewer: session.approvals_reviewer,
+            sandbox_policy: session.sandbox_policy.clone(),
+            cwd: session.cwd.to_path_buf(),
+            reasoning_effort: session.reasoning_effort,
+        };
+        if execution_strategy == WorkflowExecutionStrategy::OverrideYolo {
+            execution_config.approval_policy = AskForApproval::Never;
+            execution_config.approvals_reviewer =
+                codex_protocol::config_types::ApprovalsReviewer::User;
+            execution_config.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        }
+
+        Ok(execution_config)
+    }
+
+    async fn available_fork_source_thread_id(&self) -> Result<Option<ThreadId>, String> {
+        let Some(primary_thread_id) = self.primary_thread_id else {
+            return Ok(None);
+        };
+
+        let response: ThreadReadResponse = self
+            .request_handle
+            .request_typed(ClientRequest::ThreadRead {
+                request_id: request_id(),
+                params: ThreadReadParams {
+                    thread_id: primary_thread_id.to_string(),
+                    include_turns: false,
+                },
+            })
+            .await
+            .map_err(|err| format!("failed to inspect workflow source thread: {err}"))?;
+
+        Ok(response
+            .thread
+            .path
+            .as_ref()
+            .is_some_and(|path| path.exists())
+            .then_some(primary_thread_id))
+    }
+
+    async fn compact_workflow_thread(&self, thread: &WorkflowThreadSession) -> Result<(), String> {
+        let _: ThreadCompactStartResponse = self
+            .request_handle
+            .request_typed(ClientRequest::ThreadCompactStart {
+                request_id: request_id(),
+                params: ThreadCompactStartParams {
+                    thread_id: thread.thread_id.clone(),
+                },
+            })
+            .await
+            .map_err(|err| format!("failed to compact workflow thread: {err}"))?;
+
+        let deadline = tokio::time::Instant::now() + WORKFLOW_STEP_TIMEOUT;
+        loop {
+            let Some(remaining) = deadline.checked_duration_since(tokio::time::Instant::now())
+            else {
+                return Err(format!(
+                    "workflow thread compaction timed out after {}",
+                    humantime::format_duration(WORKFLOW_STEP_TIMEOUT)
+                ));
+            };
+
+            {
+                let mut notifications = thread.notifications.lock().await;
+                loop {
+                    match notifications.try_recv() {
+                        Ok(ServerNotification::TurnCompleted(notification))
+                            if notification.thread_id == thread.thread_id =>
+                        {
+                            return match notification.turn.status {
+                                TurnStatus::Completed => Ok(()),
+                                TurnStatus::Interrupted => {
+                                    Err("workflow thread compaction was interrupted".to_string())
+                                }
+                                TurnStatus::Failed => Err(notification
+                                    .turn
+                                    .error
+                                    .map(|error| error.message)
+                                    .unwrap_or_else(|| {
+                                        "workflow thread compaction failed".to_string()
+                                    })),
+                                TurnStatus::InProgress => continue,
+                            };
+                        }
+                        Ok(_) => {}
+                        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+                        | Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+                    }
+                }
+            }
+            sleep(remaining.min(WORKFLOW_POLL_INTERVAL)).await;
+        }
+    }
+}
+
+async fn register_workflow_thread(
+    workflow_thread_notification_channels: &WorkflowThreadNotificationChannels,
+    thread_id: String,
+    cwd: PathBuf,
+    execution_config: WorkflowExecutionConfig,
+) -> Result<WorkflowThreadSession, String> {
+    let parsed_thread_id = ThreadId::from_string(&thread_id)
+        .map_err(|err| format!("workflow thread id `{thread_id}` is invalid: {err}"))?;
+    let (sender, receiver) = mpsc::unbounded_channel();
+    workflow_thread_notification_channels
+        .lock()
+        .await
+        .insert(parsed_thread_id, sender);
+    Ok(WorkflowThreadSession {
+        thread_id,
+        cwd,
+        execution_config,
+        notifications: Arc::new(tokio::sync::Mutex::new(receiver)),
+    })
+}
+
 #[allow(dead_code)]
 impl App {
     pub(crate) async fn run_before_turn_workflows(
@@ -554,6 +716,7 @@ impl App {
             self.workflow_thread_notification_channels.clone(),
             self.config.clone(),
             self.primary_thread_id,
+            self.primary_session_configured.clone(),
         );
         let mut results = Vec::new();
         for workflow in &registry.files {
@@ -797,11 +960,26 @@ impl App {
                                     visible_cells.push(cell);
                                 }
                             }
+                            WorkflowOutputDelivery::MainThreadCompactInput => {
+                                if let Some(cell) = self
+                                    .queue_workflow_followup_to_primary_after_compact(
+                                        app_server,
+                                        message,
+                                        source,
+                                        result.execution_strategy,
+                                    )
+                                    .await
+                                {
+                                    visible_cells.push(cell);
+                                }
+                            }
                             WorkflowOutputDelivery::MainThreadInput
                             | WorkflowOutputDelivery::UserFollowup => {
-                                if let Some(cell) =
-                                    self.queue_workflow_followup_to_primary(message, source)
-                                {
+                                if let Some(cell) = self.queue_workflow_followup_to_primary(
+                                    message,
+                                    source,
+                                    result.execution_strategy,
+                                ) {
                                     visible_cells.push(cell);
                                 }
                             }
@@ -891,6 +1069,7 @@ impl App {
             self.workflow_thread_notification_channels.clone(),
             self.config.clone(),
             self.primary_thread_id,
+            self.primary_session_configured.clone(),
         );
         let workflow_cwd = self.config.cwd.to_path_buf();
         let app_event_tx = self.app_event_tx.clone();
@@ -1087,7 +1266,10 @@ async fn run_workflow_job(
     phase_context: WorkflowPhaseContext<'_>,
     cancellation: Option<&CancellationToken>,
 ) -> Result<WorkflowJobRunResult, WorkflowRunError> {
-    if matches!(job.config.context, WorkflowContextMode::Embed) {
+    if matches!(
+        job.config.context_strategy,
+        WorkflowContextStrategy::Embed | WorkflowContextStrategy::EmbedCompact
+    ) {
         let prompt = job
             .config
             .steps
@@ -1098,12 +1280,25 @@ async fn run_workflow_job(
             })
             .ok_or_else(|| {
                 WorkflowRunError::Failed(format!(
-                    "workflow `{workflow_name}` job `{}` uses embed context but has no prompt step",
-                    job.name
+                    "workflow `{workflow_name}` job `{}` uses `context_strategy: {}` but has no prompt step",
+                    job.name,
+                    job.config.context_strategy.as_str()
                 ))
             })?;
         return Ok(WorkflowJobRunResult {
-            delivery: WorkflowOutputDelivery::MainThreadInput,
+            delivery: match job.config.context_strategy {
+                WorkflowContextStrategy::Embed => WorkflowOutputDelivery::MainThreadInput,
+                WorkflowContextStrategy::EmbedCompact => {
+                    WorkflowOutputDelivery::MainThreadCompactInput
+                }
+                WorkflowContextStrategy::ThreadAuto
+                | WorkflowContextStrategy::ThreadNew
+                | WorkflowContextStrategy::ThreadFork
+                | WorkflowContextStrategy::ThreadForkCompact => unreachable!(
+                    "thread-based context strategy should not return main-thread input"
+                ),
+            },
+            execution_strategy: job.config.execution_strategy,
             workflow_name: workflow_name.to_string(),
             trigger_id: trigger_id.to_string(),
             job_name: job.name.clone(),
@@ -1203,6 +1398,7 @@ async fn run_workflow_job(
             WorkflowResponseMode::Assistant => WorkflowOutputDelivery::AssistantCell,
             WorkflowResponseMode::User => WorkflowOutputDelivery::UserFollowup,
         },
+        execution_strategy: job.config.execution_strategy,
         workflow_name: workflow_name.to_string(),
         trigger_id: trigger_id.to_string(),
         job_name: job.name.clone(),
@@ -1233,8 +1429,19 @@ async fn execute_workflow_step(
             let thread = match thread {
                 Some(thread) => thread.clone(),
                 None => {
+                    let strategy = match context.job.config.context_strategy {
+                        WorkflowContextStrategy::Embed | WorkflowContextStrategy::EmbedCompact => {
+                            unreachable!("embed context strategies should have returned early")
+                        }
+                        WorkflowContextStrategy::ThreadAuto => WorkflowThreadStartStrategy::Auto,
+                        WorkflowContextStrategy::ThreadNew => WorkflowThreadStartStrategy::New,
+                        WorkflowContextStrategy::ThreadFork => WorkflowThreadStartStrategy::Fork,
+                        WorkflowContextStrategy::ThreadForkCompact => {
+                            WorkflowThreadStartStrategy::ForkCompact
+                        }
+                    };
                     let started = client
-                        .start_workflow_thread()
+                        .start_workflow_thread(strategy, context.job.config.execution_strategy)
                         .await
                         .map_err(WorkflowRunError::Failed)?;
                     *thread = Some(started.clone());
@@ -1262,7 +1469,7 @@ async fn run_workflow_prompt(
     cancellation: Option<&CancellationToken>,
 ) -> Result<Option<String>, WorkflowRunError> {
     let turn_id = client
-        .start_turn(thread.thread_id.clone(), thread.cwd.clone(), prompt)
+        .start_turn(thread, prompt)
         .await
         .map_err(WorkflowRunError::Failed)?;
     let deadline = tokio::time::Instant::now() + step_timeout;
@@ -1450,21 +1657,25 @@ fn build_workflow_prompt_input(
 }
 
 fn workflow_thread_start_params(
-    config: &Config,
+    execution_config: &WorkflowExecutionConfig,
+    active_profile: Option<&str>,
     is_remote: bool,
     remote_cwd_override: Option<&std::path::Path>,
 ) -> ThreadStartParams {
     ThreadStartParams {
-        model: config.model.clone(),
-        model_provider: (!is_remote).then_some(config.model_provider_id.clone()),
-        cwd: workflow_thread_cwd(config, is_remote, remote_cwd_override),
-        approval_policy: Some(config.permissions.approval_policy.value().into()),
-        approvals_reviewer: Some(AppServerApprovalsReviewer::from(config.approvals_reviewer)),
-        sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),
-        config: config.active_profile.as_ref().map(|profile| {
+        model: Some(execution_config.model.clone()),
+        model_provider: (!is_remote).then_some(execution_config.model_provider_id.clone()),
+        service_tier: Some(execution_config.service_tier),
+        cwd: workflow_thread_cwd(execution_config, is_remote, remote_cwd_override),
+        approval_policy: Some(execution_config.approval_policy.into()),
+        approvals_reviewer: Some(AppServerApprovalsReviewer::from(
+            execution_config.approvals_reviewer,
+        )),
+        sandbox: sandbox_mode_from_policy(execution_config.sandbox_policy.clone()),
+        config: active_profile.map(|profile| {
             HashMap::from([(
                 "profile".to_string(),
-                serde_json::Value::String(profile.clone()),
+                serde_json::Value::String(profile.to_string()),
             )])
         }),
         ephemeral: Some(true),
@@ -1474,23 +1685,27 @@ fn workflow_thread_start_params(
 }
 
 fn workflow_thread_fork_params(
-    config: &Config,
+    execution_config: &WorkflowExecutionConfig,
+    active_profile: Option<&str>,
     thread_id: ThreadId,
     is_remote: bool,
     remote_cwd_override: Option<&std::path::Path>,
 ) -> ThreadForkParams {
     ThreadForkParams {
         thread_id: thread_id.to_string(),
-        model: config.model.clone(),
-        model_provider: (!is_remote).then_some(config.model_provider_id.clone()),
-        cwd: workflow_thread_cwd(config, is_remote, remote_cwd_override),
-        approval_policy: Some(config.permissions.approval_policy.value().into()),
-        approvals_reviewer: Some(AppServerApprovalsReviewer::from(config.approvals_reviewer)),
-        sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),
-        config: config.active_profile.as_ref().map(|profile| {
+        model: Some(execution_config.model.clone()),
+        model_provider: (!is_remote).then_some(execution_config.model_provider_id.clone()),
+        service_tier: Some(execution_config.service_tier),
+        cwd: workflow_thread_cwd(execution_config, is_remote, remote_cwd_override),
+        approval_policy: Some(execution_config.approval_policy.into()),
+        approvals_reviewer: Some(AppServerApprovalsReviewer::from(
+            execution_config.approvals_reviewer,
+        )),
+        sandbox: sandbox_mode_from_policy(execution_config.sandbox_policy.clone()),
+        config: active_profile.map(|profile| {
             HashMap::from([(
                 "profile".to_string(),
-                serde_json::Value::String(profile.clone()),
+                serde_json::Value::String(profile.to_string()),
             )])
         }),
         ephemeral: true,
@@ -1500,14 +1715,16 @@ fn workflow_thread_fork_params(
 }
 
 fn workflow_thread_cwd(
-    config: &Config,
+    execution_config: &WorkflowExecutionConfig,
     is_remote: bool,
     remote_cwd_override: Option<&std::path::Path>,
 ) -> Option<String> {
     if is_remote {
-        remote_cwd_override.map(|cwd| cwd.to_string_lossy().to_string())
+        remote_cwd_override
+            .map(|cwd| cwd.to_string_lossy().to_string())
+            .or_else(|| Some(execution_config.cwd.to_string_lossy().to_string()))
     } else {
-        Some(config.cwd.to_string_lossy().to_string())
+        Some(execution_config.cwd.to_string_lossy().to_string())
     }
 }
 
@@ -1608,6 +1825,56 @@ mod tests {
             .expect("config should build")
     }
 
+    fn test_workflow_execution_config() -> WorkflowExecutionConfig {
+        WorkflowExecutionConfig {
+            model: "gpt-test".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::OnRequest,
+            approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            cwd: PathBuf::from("/tmp/workflow"),
+            reasoning_effort: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn override_yolo_execution_strategy_overrides_session_permissions() {
+        let temp_dir = tempdir().expect("tempdir");
+        let config = build_config(&temp_dir).await;
+        let mut app_server = crate::start_embedded_app_server_for_picker(&config)
+            .await
+            .expect("embedded app server");
+        let started = app_server
+            .start_thread(&config)
+            .await
+            .expect("start primary thread");
+        let session = started.session;
+        let client = AppServerWorkflowRuntimeClient::new(
+            &app_server,
+            Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            config,
+            Some(session.thread_id),
+            Some(session.clone()),
+        );
+
+        let execution_config = client
+            .resolve_execution_config(WorkflowExecutionStrategy::OverrideYolo)
+            .expect("resolve execution config");
+
+        assert_eq!(execution_config.cwd, session.cwd.to_path_buf());
+        assert_eq!(execution_config.model, session.model);
+        assert_eq!(execution_config.approval_policy, AskForApproval::Never);
+        assert_eq!(
+            execution_config.approvals_reviewer,
+            codex_protocol::config_types::ApprovalsReviewer::User
+        );
+        assert_eq!(
+            execution_config.sandbox_policy,
+            SandboxPolicy::DangerFullAccess
+        );
+    }
+
     struct FakeWorkflowRuntimeClient {
         calls: Mutex<Vec<String>>,
         thread_id: String,
@@ -1627,16 +1894,31 @@ mod tests {
     }
 
     impl WorkflowRuntimeClient for FakeWorkflowRuntimeClient {
-        fn start_workflow_thread(&self) -> BoxFuture<'_, Result<WorkflowThreadSession, String>> {
+        fn start_workflow_thread(
+            &self,
+            strategy: WorkflowThreadStartStrategy,
+            execution_strategy: WorkflowExecutionStrategy,
+        ) -> BoxFuture<'_, Result<WorkflowThreadSession, String>> {
             Box::pin(async move {
                 let (_sender, receiver) = mpsc::unbounded_channel();
-                self.calls
-                    .lock()
-                    .expect("calls lock")
-                    .push("start_workflow_thread".to_string());
+                self.calls.lock().expect("calls lock").push(format!(
+                    "start_workflow_thread:{}:{}",
+                    strategy.as_str(),
+                    execution_strategy.as_str()
+                ));
                 Ok(WorkflowThreadSession {
                     thread_id: self.thread_id.clone(),
                     cwd: PathBuf::from("/tmp/workflow"),
+                    execution_config: WorkflowExecutionConfig {
+                        model: "gpt-test".to_string(),
+                        model_provider_id: "test".to_string(),
+                        service_tier: None,
+                        approval_policy: AskForApproval::OnRequest,
+                        approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
+                        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                        cwd: PathBuf::from("/tmp/workflow"),
+                        reasoning_effort: None,
+                    },
                     notifications: Arc::new(tokio::sync::Mutex::new(receiver)),
                 })
             })
@@ -1644,10 +1926,10 @@ mod tests {
 
         fn start_turn(
             &self,
-            thread_id: String,
-            _cwd: PathBuf,
+            thread: &WorkflowThreadSession,
             input: String,
         ) -> BoxFuture<'_, Result<String, String>> {
+            let thread_id = thread.thread_id.clone();
             Box::pin(async move {
                 self.calls
                     .lock()
@@ -1721,6 +2003,8 @@ triggers:
 
 jobs:
   review_backlog:
+    context_strategy: thread_auto
+    execution_strategy: inherit_session
     steps:
       - prompt: summarize the backlog
 "#,
@@ -1759,7 +2043,7 @@ jobs:
         assert_eq!(
             client.calls.lock().expect("calls lock").clone(),
             vec![
-                "start_workflow_thread".to_string(),
+                "start_workflow_thread:auto:inherit_session".to_string(),
                 "start_turn:thr_workflow:Workflow: director\nTrigger: job:review_backlog\nJob: review_backlog\n\nCurrent workflow prompt:\nsummarize the backlog".to_string(),
                 "read_turn:thr_workflow:turn_workflow".to_string(),
                 "read_turn:thr_workflow:turn_workflow".to_string(),
@@ -1779,6 +2063,8 @@ jobs:
 
 jobs:
   review_backlog:
+    context_strategy: thread_auto
+    execution_strategy: inherit_session
     steps:
       - prompt: summarize the backlog
 "#,
@@ -1819,7 +2105,7 @@ jobs:
         assert_eq!(
             client.calls.lock().expect("calls lock").clone(),
             vec![
-                "start_workflow_thread".to_string(),
+                "start_workflow_thread:auto:inherit_session".to_string(),
                 "start_turn:thr_workflow:Workflow: director\nTrigger: job:review_backlog\nJob: review_backlog\n\nCurrent workflow prompt:\nsummarize the backlog".to_string(),
                 "read_turn:thr_workflow:turn_workflow".to_string(),
                 "start_turn:thr_workflow:Workflow: director\nTrigger: job:review_backlog\nJob: review_backlog\n\nCurrent workflow prompt:\nsummarize the backlog".to_string(),
@@ -1840,6 +2126,8 @@ jobs:
 
 jobs:
   review_backlog:
+    context_strategy: thread_auto
+    execution_strategy: inherit_session
     steps:
       - prompt: summarize the backlog
         timeout: 1s
@@ -1918,6 +2206,8 @@ triggers:
 
 jobs:
   review_backlog:
+    context_strategy: thread_auto
+    execution_strategy: inherit_session
     steps:
       - prompt: summarize the backlog
 "#,
@@ -1961,6 +2251,8 @@ jobs:
 
 jobs:
   review_backlog:
+    context_strategy: thread_auto
+    execution_strategy: inherit_session
     enabled: false
     steps:
       - prompt: summarize the backlog
@@ -2008,6 +2300,8 @@ triggers:
 
 jobs:
   review_backlog:
+    context_strategy: thread_auto
+    execution_strategy: inherit_session
     enabled: false
     steps:
       - prompt: summarize the backlog
@@ -2048,6 +2342,8 @@ jobs:
 
 jobs:
   review_backlog:
+    context_strategy: thread_auto
+    execution_strategy: inherit_session
     steps:
       - prompt: summarize the backlog
 "#,
@@ -2091,7 +2387,7 @@ jobs:
         assert_eq!(
             client.calls.lock().expect("calls lock").clone(),
             vec![
-                "start_workflow_thread".to_string(),
+                "start_workflow_thread:auto:inherit_session".to_string(),
                 "start_turn:thr_workflow:Workflow: director\nTrigger: job:review_backlog\nJob: review_backlog\n\nCurrent workflow prompt:\nsummarize the backlog".to_string(),
                 "read_turn:thr_workflow:turn_workflow".to_string(),
                 "interrupt_turn:thr_workflow:turn_workflow".to_string(),
@@ -2113,11 +2409,13 @@ jobs:
             Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             config,
             /*primary_thread_id*/ None,
+            /*primary_session_configured*/ None,
         );
         let (sender, receiver) = mpsc::unbounded_channel();
         let thread = WorkflowThreadSession {
             thread_id: "thr_workflow".to_string(),
             cwd: PathBuf::from("/tmp/workflow"),
+            execution_config: test_workflow_execution_config(),
             notifications: Arc::new(tokio::sync::Mutex::new(receiver)),
         };
 
@@ -2173,17 +2471,25 @@ jobs:
         let config = build_config(&temp_dir).await;
         let workflow_thread_notification_channels =
             Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-        let app_server = crate::start_embedded_app_server_for_picker(&config)
+        let mut app_server = crate::start_embedded_app_server_for_picker(&config)
             .await
             .expect("embedded app server");
+        let started = app_server
+            .start_thread(&config)
+            .await
+            .expect("start primary thread");
         let client = AppServerWorkflowRuntimeClient::new(
             &app_server,
             workflow_thread_notification_channels.clone(),
             config,
             /*primary_thread_id*/ None,
+            Some(started.session),
         );
         let thread = client
-            .start_workflow_thread()
+            .start_workflow_thread(
+                WorkflowThreadStartStrategy::Auto,
+                WorkflowExecutionStrategy::InheritSession,
+            )
             .await
             .expect("start workflow thread");
 
@@ -2247,23 +2553,16 @@ jobs:
     }
 
     #[tokio::test]
-    async fn start_workflow_thread_starts_fresh_thread_when_primary_thread_is_unmaterialized() {
+    async fn start_workflow_thread_starts_fresh_thread_when_no_primary_thread_is_available() {
         let temp_dir = tempdir().expect("tempdir");
         let config = build_config(&temp_dir).await;
         let mut app_server = crate::start_embedded_app_server_for_picker(&config)
             .await
             .expect("embedded app server");
-        let primary = app_server
+        let started = app_server
             .start_thread(&config)
             .await
             .expect("start primary thread");
-        assert!(
-            primary
-                .session
-                .rollout_path
-                .as_ref()
-                .is_some_and(|path| !path.exists())
-        );
         let workflow_thread_notification_channels =
             Arc::new(tokio::sync::Mutex::new(HashMap::new()));
 
@@ -2271,17 +2570,17 @@ jobs:
             &app_server,
             workflow_thread_notification_channels.clone(),
             config,
-            Some(primary.session.thread_id),
+            None,
+            Some(started.session),
         );
         let workflow_thread = client
-            .start_workflow_thread()
+            .start_workflow_thread(
+                WorkflowThreadStartStrategy::Auto,
+                WorkflowExecutionStrategy::InheritSession,
+            )
             .await
             .expect("start workflow thread");
 
-        assert_ne!(
-            workflow_thread.thread_id,
-            primary.session.thread_id.to_string()
-        );
         let registered_thread_ids = workflow_thread_notification_channels
             .lock()
             .await
@@ -2292,6 +2591,38 @@ jobs:
         assert_eq!(
             registered_thread_ids[0].to_string(),
             workflow_thread.thread_id
+        );
+    }
+
+    #[tokio::test]
+    async fn start_workflow_thread_rejects_missing_primary_session_for_inherit_session() {
+        let temp_dir = tempdir().expect("tempdir");
+        let config = build_config(&temp_dir).await;
+        let app_server = crate::start_embedded_app_server_for_picker(&config)
+            .await
+            .expect("embedded app server");
+        let client = AppServerWorkflowRuntimeClient::new(
+            &app_server,
+            Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            config,
+            None,
+            None,
+        );
+
+        let error = match client
+            .start_workflow_thread(
+                WorkflowThreadStartStrategy::Auto,
+                WorkflowExecutionStrategy::InheritSession,
+            )
+            .await
+        {
+            Ok(_) => panic!("missing session should fail"),
+            Err(error) => error,
+        };
+
+        assert_eq!(
+            error,
+            "workflow execution strategy `inherit_session` requires a current primary session"
         );
     }
 }

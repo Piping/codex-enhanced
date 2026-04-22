@@ -41,13 +41,24 @@ The job page can:
 
 - `Run Now`
 - enable or disable the job flag in YAML
-- edit common structured fields such as `context`, `response`, `needs`, and `steps`
+- edit common structured fields such as `context_strategy`, `execution_strategy`, `response`, `needs`, and `steps`
 - open the workflow YAML directly
 
 Behavior notes:
 
 - `Run Now` still works even if the job has `enabled: false`.
 - Job `enabled: false` only affects workflow-controlled selection logic. It does not block an explicit manual `Run Now` from the menu.
+- `context_strategy` is required on every job. The supported values are:
+- `embed`: run prompt output inline against the current thread.
+- `embed_compact`: compact the current main thread first, then queue the workflow follow-up inline. This is not allowed for `before_turn` triggers.
+- `thread_auto`: run in a workflow child thread, forking the current primary thread when possible and otherwise starting a new one.
+- `thread_new`: always start a fresh workflow child thread.
+- `thread_fork`: require an existing primary thread and fork it.
+- `thread_fork_compact`: fork the current primary thread, compact the child thread, then run the workflow there.
+- `embed` and `embed_compact` only support prompt steps. Jobs using either strategy cannot include `run` steps.
+- `execution_strategy` is also required on every job.
+- `inherit_session`: inherit the current primary session's `cwd`, model, approval policy, reviewer, sandbox policy, service tier, and reasoning effort. If there is no current primary session, the workflow run fails visibly.
+- `override_yolo`: inherit the current primary session's execution context, but override approvals to `Never` and sandbox to `DangerFullAccess`. If there is no current primary session, the workflow run fails visibly.
 
 ## Trigger Entry
 
@@ -132,7 +143,8 @@ triggers:
 jobs:
   notify:
     enabled: false
-    context: ephemeral
+    context_strategy: thread_auto
+    execution_strategy: inherit_session
     response: assistant
     steps:
       - prompt: |

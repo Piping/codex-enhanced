@@ -22,7 +22,8 @@ use super::workflow_definition::LoadedWorkflowFile;
 use super::workflow_definition::LoadedWorkflowJob;
 use super::workflow_definition::LoadedWorkflowRegistry;
 use super::workflow_definition::WorkflowAfterTurnCondition;
-use super::workflow_definition::WorkflowContextMode;
+use super::workflow_definition::WorkflowContextStrategy;
+use super::workflow_definition::WorkflowExecutionStrategy;
 use super::workflow_definition::WorkflowResponseMode;
 use super::workflow_definition::WorkflowTriggerKind;
 use super::workflow_definition::load_workflow_registry;
@@ -353,17 +354,17 @@ impl App {
         }
     }
 
-    pub(crate) fn cycle_workflow_job_context_from_ui(
+    pub(crate) fn cycle_workflow_job_context_strategy_from_ui(
         &mut self,
         workflow_path: PathBuf,
         job_name: String,
     ) {
-        match workflow_editor::cycle_job_context(workflow_path.as_path(), &job_name) {
-            Ok(context) => {
+        match workflow_editor::cycle_job_context_strategy(workflow_path.as_path(), &job_name) {
+            Ok(context_strategy) => {
                 self.chat_widget.add_info_message(
                     format!(
-                        "Workflow job `{job_name}` now uses {} context.",
-                        workflow_context_label(context)
+                        "Workflow job `{job_name}` now uses {}.",
+                        workflow_context_strategy_label(context_strategy)
                     ),
                     /*hint*/ None,
                 );
@@ -376,6 +377,26 @@ impl App {
                 self.chat_widget
                     .add_to_history(history_cell::new_error_event(err));
             }
+        }
+    }
+
+    pub(crate) fn cycle_workflow_job_execution_strategy_from_ui(
+        &mut self,
+        workflow_path: PathBuf,
+        job_name: String,
+    ) {
+        match workflow_editor::cycle_job_execution_strategy(workflow_path.as_path(), &job_name) {
+            Ok(execution_strategy) => {
+                self.chat_widget.add_info_message(
+                    format!(
+                        "Workflow job `{job_name}` now uses {}.",
+                        workflow_execution_strategy_label(execution_strategy)
+                    ),
+                    /*hint*/ None,
+                );
+                self.refresh_workflow_controls_if_active();
+            }
+            Err(error) => self.chat_widget.add_error_message(error),
         }
     }
 
@@ -740,9 +761,10 @@ impl App {
                         items.push(SelectionItem {
                             name: job.name.clone(),
                             description: Some(format!(
-                                "{} · {} · {} · {status}",
+                                "{} · {} · {} · {} · {status}",
                                 if job.config.enabled { "Enabled" } else { "Disabled" },
-                                workflow_context_label(job.config.context),
+                                workflow_context_strategy_label(job.config.context_strategy),
+                                workflow_execution_strategy_label(job.config.execution_strategy),
                                 workflow_response_label(job.config.response)
                             )),
                             selected_description: Some(
@@ -1218,18 +1240,49 @@ impl App {
                 });
 
                 items.push(SelectionItem {
-                    name: format!("Context: {}", workflow_context_label(job.config.context)),
+                    name: format!(
+                        "Context Strategy: {}",
+                        workflow_context_strategy_label(job.config.context_strategy)
+                    ),
                     description: Some(
-                        "Toggle between embed and ephemeral execution context.".to_string(),
+                        "Cycle how this workflow job uses and reshapes the current context."
+                            .to_string(),
                     ),
                     selected_description: Some(
-                        "Toggle this job's `context` field in workflow.yaml.".to_string(),
+                        "Cycle this job's `context_strategy` field in workflow.yaml.".to_string(),
                     ),
                     actions: vec![Box::new({
                         let workflow_path = workflow_path.to_path_buf();
                         let job_name = job.name.clone();
                         move |tx| {
-                            tx.send(AppEvent::CycleWorkflowJobContext {
+                            tx.send(AppEvent::CycleWorkflowJobContextStrategy {
+                                workflow_path: workflow_path.clone(),
+                                job_name: job_name.clone(),
+                            });
+                        }
+                    })],
+                    dismiss_on_select: false,
+                    ..Default::default()
+                });
+
+                items.push(SelectionItem {
+                    name: format!(
+                        "Execution Strategy: {}",
+                        workflow_execution_strategy_label(job.config.execution_strategy)
+                    ),
+                    description: Some(
+                        "Cycle how this workflow job inherits or overrides session execution settings."
+                            .to_string(),
+                    ),
+                    selected_description: Some(
+                        "Cycle this job's `execution_strategy` field in workflow.yaml."
+                            .to_string(),
+                    ),
+                    actions: vec![Box::new({
+                        let workflow_path = workflow_path.to_path_buf();
+                        let job_name = job.name.clone();
+                        move |tx| {
+                            tx.send(AppEvent::CycleWorkflowJobExecutionStrategy {
                                 workflow_path: workflow_path.clone(),
                                 job_name: job_name.clone(),
                             });
@@ -1619,10 +1672,14 @@ fn workflow_target_status(
     }
 }
 
-fn workflow_context_label(context: WorkflowContextMode) -> &'static str {
-    match context {
-        WorkflowContextMode::Embed => "Embed",
-        WorkflowContextMode::Ephemeral => "Ephemeral",
+fn workflow_context_strategy_label(context_strategy: WorkflowContextStrategy) -> &'static str {
+    match context_strategy {
+        WorkflowContextStrategy::Embed => "Embed",
+        WorkflowContextStrategy::EmbedCompact => "Embed + Compact",
+        WorkflowContextStrategy::ThreadAuto => "Thread Auto",
+        WorkflowContextStrategy::ThreadNew => "Thread New",
+        WorkflowContextStrategy::ThreadFork => "Thread Fork",
+        WorkflowContextStrategy::ThreadForkCompact => "Thread Fork + Compact",
     }
 }
 
@@ -1739,6 +1796,15 @@ fn workflow_after_turn_condition_key(condition: WorkflowAfterTurnCondition) -> &
     }
 }
 
+fn workflow_execution_strategy_label(
+    execution_strategy: WorkflowExecutionStrategy,
+) -> &'static str {
+    match execution_strategy {
+        WorkflowExecutionStrategy::InheritSession => "Inherit Session",
+        WorkflowExecutionStrategy::OverrideYolo => "Override Yolo",
+    }
+}
+
 fn workflow_response_label(response: WorkflowResponseMode) -> &'static str {
     match response {
         WorkflowResponseMode::Assistant => "Assistant",
@@ -1811,12 +1877,14 @@ triggers:
 
 jobs:
   summarize:
-    context: embed
+    context_strategy: embed
+    execution_strategy: inherit_session
     steps:
       - prompt: |
           summarize the backlog
   notify:
-    context: ephemeral
+    context_strategy: thread_auto
+    execution_strategy: inherit_session
     response: user
     needs: [summarize]
     steps:
@@ -1842,7 +1910,8 @@ triggers:
 jobs:
   notify:
     enabled: false
-    context: ephemeral
+    context_strategy: thread_auto
+    execution_strategy: inherit_session
     response: user
     steps:
       - prompt: |
@@ -1946,7 +2015,8 @@ jobs:
             job_name: "notify".to_string(),
         });
         let popup = render_bottom_popup(&app.chat_widget, /*width*/ 100);
-        assert!(popup.contains("Run Now             Run this job immediately"));
+        assert!(popup.contains("Run Now"));
+        assert!(popup.contains("background workflow thread"));
         assert!(!popup.contains("This job is disabled."));
     }
 

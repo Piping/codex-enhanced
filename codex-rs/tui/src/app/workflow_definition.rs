@@ -32,12 +32,22 @@ impl std::fmt::Display for WorkflowDefinitionError {
 
 impl std::error::Error for WorkflowDefinitionError {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum WorkflowContextMode {
+pub(crate) enum WorkflowContextStrategy {
     Embed,
-    #[default]
-    Ephemeral,
+    EmbedCompact,
+    ThreadAuto,
+    ThreadNew,
+    ThreadFork,
+    ThreadForkCompact,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WorkflowExecutionStrategy {
+    InheritSession,
+    OverrideYolo,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
@@ -107,13 +117,14 @@ impl WorkflowStep {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct WorkflowJobConfig {
     #[serde(default = "default_true")]
     pub(crate) enabled: bool,
     #[serde(default)]
     pub(crate) needs: Vec<String>,
-    #[serde(default)]
-    pub(crate) context: WorkflowContextMode,
+    pub(crate) context_strategy: WorkflowContextStrategy,
+    pub(crate) execution_strategy: WorkflowExecutionStrategy,
     #[serde(default)]
     pub(crate) response: WorkflowResponseMode,
     #[serde(default)]
@@ -279,15 +290,18 @@ pub(crate) fn load_workflow_registry(
                     )));
                 }
             }
-            if matches!(job.context, WorkflowContextMode::Embed)
-                && job
-                    .steps
-                    .iter()
-                    .any(|step| matches!(step, WorkflowStep::Run { .. }))
+            if matches!(
+                job.context_strategy,
+                WorkflowContextStrategy::Embed | WorkflowContextStrategy::EmbedCompact
+            ) && job
+                .steps
+                .iter()
+                .any(|step| matches!(step, WorkflowStep::Run { .. }))
             {
                 return Err(WorkflowDefinitionError::Invalid(format!(
-                    "workflow `{workflow_name}` job `{job_name}` in `{}` cannot use `run` steps when `context` is `embed`",
-                    path.display()
+                    "workflow `{workflow_name}` job `{job_name}` in `{}` cannot use `run` steps when `context_strategy` is `{}`",
+                    path.display(),
+                    job.context_strategy.as_str()
                 )));
             }
             jobs.insert(
@@ -357,10 +371,63 @@ pub(crate) fn load_workflow_registry(
         }
     }
 
-    Ok(LoadedWorkflowRegistry {
+    let registry = LoadedWorkflowRegistry {
         files: loaded_files,
         jobs,
-    })
+    };
+    validate_before_turn_context_strategies(&registry)?;
+    Ok(registry)
+}
+
+fn validate_before_turn_context_strategies(
+    registry: &LoadedWorkflowRegistry,
+) -> Result<(), WorkflowDefinitionError> {
+    for workflow in &registry.files {
+        for trigger in &workflow.triggers {
+            if !matches!(trigger.kind, WorkflowTriggerKind::BeforeTurn) {
+                continue;
+            }
+
+            let ordered_jobs = ordered_jobs_for_roots(registry, &trigger.jobs)?;
+            if let Some(job) = ordered_jobs
+                .iter()
+                .filter_map(|job_name| registry.jobs.get(job_name))
+                .find(|job| job.config.context_strategy == WorkflowContextStrategy::EmbedCompact)
+            {
+                return Err(WorkflowDefinitionError::Invalid(format!(
+                    "workflow `{}` trigger `{}` cannot use job `{}` with `context_strategy: {}` because before_turn workflows cannot compact the main thread inline",
+                    workflow.name,
+                    trigger.id,
+                    job.name,
+                    job.config.context_strategy.as_str()
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+impl WorkflowContextStrategy {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Embed => "embed",
+            Self::EmbedCompact => "embed_compact",
+            Self::ThreadAuto => "thread_auto",
+            Self::ThreadNew => "thread_new",
+            Self::ThreadFork => "thread_fork",
+            Self::ThreadForkCompact => "thread_fork_compact",
+        }
+    }
+}
+
+impl WorkflowExecutionStrategy {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::InheritSession => "inherit_session",
+            Self::OverrideYolo => "override_yolo",
+        }
+    }
 }
 
 pub(crate) fn ordered_jobs_for_roots(
@@ -477,6 +544,8 @@ mod tests {
 
 jobs:
   notify:
+    context_strategy: thread_auto
+    execution_strategy: inherit_session
     steps:
       - prompt: summarize the changes
         timeout: not-a-duration
@@ -515,6 +584,8 @@ triggers:
 
 jobs:
   notify:
+    context_strategy: thread_auto
+    execution_strategy: inherit_session
     steps:
       - prompt: summarize the changes
 "#,
@@ -527,6 +598,114 @@ jobs:
             WorkflowTriggerKind::AfterTurn {
                 condition: WorkflowAfterTurnCondition::TurnSucceeded,
             }
+        );
+    }
+
+    #[test]
+    fn load_workflow_registry_rejects_legacy_context_field() {
+        let dir = tempdir().unwrap();
+        let workflows_dir = dir.path().join(".codex/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        let workflow_path = workflows_dir.join("workflow.yaml");
+        fs::write(
+            &workflow_path,
+            r#"name: director
+
+jobs:
+  notify:
+    context: ephemeral
+    execution_strategy: inherit_session
+    steps:
+      - prompt: summarize the changes
+"#,
+        )
+        .unwrap();
+
+        let error = load_workflow_registry(dir.path()).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains(&format!(
+                "failed to parse workflow file `{}`",
+                workflow_path.display()
+            )),
+            "unexpected error message: {message}"
+        );
+        assert!(
+            message.contains("unknown field `context`"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn load_workflow_registry_rejects_missing_execution_strategy() {
+        let dir = tempdir().unwrap();
+        let workflows_dir = dir.path().join(".codex/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        let workflow_path = workflows_dir.join("workflow.yaml");
+        fs::write(
+            &workflow_path,
+            r#"name: director
+
+jobs:
+  notify:
+    context_strategy: thread_auto
+    steps:
+      - prompt: summarize the changes
+"#,
+        )
+        .unwrap();
+
+        let error = load_workflow_registry(dir.path()).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains(&format!(
+                "failed to parse workflow file `{}`",
+                workflow_path.display()
+            )),
+            "unexpected error message: {message}"
+        );
+        assert!(
+            message.contains("missing field `execution_strategy`"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn load_workflow_registry_rejects_before_turn_embed_compact() {
+        let dir = tempdir().unwrap();
+        let workflows_dir = dir.path().join(".codex/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        let workflow_path = workflows_dir.join("workflow.yaml");
+        fs::write(
+            &workflow_path,
+            r#"name: director
+
+triggers:
+  - type: before_turn
+    id: followup
+    jobs: [notify]
+
+jobs:
+  notify:
+    context_strategy: embed_compact
+    execution_strategy: inherit_session
+    steps:
+      - prompt: summarize the changes
+"#,
+        )
+        .unwrap();
+
+        let error = load_workflow_registry(dir.path()).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains(
+                "workflow `director` trigger `followup` cannot use job `notify` with `context_strategy: embed_compact`"
+            ),
+            "unexpected error message: {message}"
+        );
+        assert!(
+            message.contains("before_turn workflows cannot compact the main thread inline"),
+            "unexpected error message: {message}"
         );
     }
 
@@ -547,6 +726,8 @@ triggers:
 
 jobs:
   notify:
+    context_strategy: thread_auto
+    execution_strategy: inherit_session
     steps:
       - prompt: summarize the changes
 "#,
