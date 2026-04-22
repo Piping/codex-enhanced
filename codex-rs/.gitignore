@@ -8,8 +8,8 @@
 /target-arm64/
 
 .codex/
+.agents/
+target/
 progress.md
 install_local.sh
 *.bkp
-
-target/
