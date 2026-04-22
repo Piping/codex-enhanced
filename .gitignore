@@ -102,3 +102,6 @@ site/
 docs/assets/
 # CocoIndex Code (ccc)
 /.cocoindex_code/
+
+.agents/
+.codex/
