@@ -4,6 +4,7 @@
 mod agent_job_tool;
 mod agent_tool;
 mod apply_patch_tool;
+mod chat_completions;
 mod code_mode;
 mod dynamic_tool;
 mod image_detail;
@@ -43,6 +44,7 @@ pub use agent_tool::create_wait_agent_tool_v2;
 pub use apply_patch_tool::ApplyPatchToolArgs;
 pub use apply_patch_tool::create_apply_patch_freeform_tool;
 pub use apply_patch_tool::create_apply_patch_json_tool;
+pub use chat_completions::create_tools_json_for_chat_completions_api;
 pub use code_mode::augment_tool_spec_for_code_mode;
 pub use code_mode::collect_code_mode_exec_prompt_tool_definitions;
 pub use code_mode::collect_code_mode_tool_definitions;
