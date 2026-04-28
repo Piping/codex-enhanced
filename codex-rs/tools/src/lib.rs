@@ -4,6 +4,7 @@
 mod code_mode;
 mod dynamic_tool;
 mod image_detail;
+mod chat_completions;
 mod json_schema;
 mod mcp_tool;
 mod request_plugin_install;
@@ -19,6 +20,7 @@ pub use code_mode::collect_code_mode_exec_prompt_tool_definitions;
 pub use code_mode::collect_code_mode_tool_definitions;
 pub use code_mode::tool_spec_to_code_mode_tool_definition;
 pub use codex_protocol::ToolName;
+pub use chat_completions::create_tools_json_for_chat_completions_api;
 pub use dynamic_tool::parse_dynamic_tool;
 pub use image_detail::can_request_original_image_detail;
 pub use image_detail::normalize_output_image_detail;
