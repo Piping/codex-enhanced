@@ -1136,6 +1136,18 @@ async fn slash_profile_dispatches_open_profile_management_panel_event() {
 }
 
 #[tokio::test]
+async fn slash_settings_opens_popup_without_realtime_audio() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::RealtimeConversation, /*enabled*/ false);
+
+    chat.dispatch_command(SlashCommand::Settings);
+
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("slash_settings_popup_without_realtime_audio", popup);
+}
+
+#[tokio::test]
 async fn slash_del_agent_dispatches_open_delete_agent_picker_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

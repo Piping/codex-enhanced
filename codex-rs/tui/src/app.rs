@@ -10652,6 +10652,7 @@ guardian_approval = true
 
 triggers:
   - type: before_turn
+    bind_thread: all
     jobs: [augment]
 
 jobs:
@@ -10674,6 +10675,18 @@ jobs:
         workspace_cwd: &Path,
         condition: Option<&str>,
     ) -> Result<()> {
+        write_test_after_turn_workflow_with_condition_and_bind_thread(
+            workspace_cwd,
+            condition,
+            "all",
+        )
+    }
+
+    fn write_test_after_turn_workflow_with_condition_and_bind_thread(
+        workspace_cwd: &Path,
+        condition: Option<&str>,
+        bind_thread: &str,
+    ) -> Result<()> {
         let workflows_dir = workspace_cwd.join(".codex/workflows");
         std::fs::create_dir_all(&workflows_dir)?;
         let condition = condition
@@ -10687,6 +10700,7 @@ jobs:
 triggers:
   - type: after_turn
     id: followup
+    bind_thread: {bind_thread}
 {condition}    jobs: [followup]
 
 jobs:
@@ -10702,6 +10716,36 @@ jobs:
         Ok(())
     }
 
+    fn write_test_manual_workflow_with_bind_thread(
+        workspace_cwd: &Path,
+        bind_thread: &str,
+    ) -> Result<()> {
+        let workflows_dir = workspace_cwd.join(".codex/workflows");
+        std::fs::create_dir_all(&workflows_dir)?;
+        std::fs::write(
+            workflows_dir.join("manual_restricted.yaml"),
+            format!(
+                r#"name: restricted
+
+triggers:
+  - type: manual
+    id: review_backlog
+    bind_thread: {bind_thread}
+    jobs: [summarize]
+
+jobs:
+  summarize:
+    context_strategy: embed
+    execution_strategy: inherit_session
+    steps:
+      - prompt: |
+          summarize the backlog
+"#
+            ),
+        )?;
+        Ok(())
+    }
+
     fn write_test_manual_workflow(workspace_cwd: &Path) -> Result<()> {
         let workflows_dir = workspace_cwd.join(".codex/workflows");
         std::fs::create_dir_all(&workflows_dir)?;
@@ -10712,12 +10756,15 @@ jobs:
 triggers:
   - type: manual
     id: review_backlog
+    bind_thread: all
     jobs: [summarize]
   - type: manual
     id: triage
+    bind_thread: all
     jobs: [notify]
   - type: after_turn
     id: followup
+    bind_thread: all
     jobs: [notify]
 
 jobs:
@@ -10749,6 +10796,7 @@ jobs:
 triggers:
   - type: file_watch
     id: refresh
+    bind_thread: all
     jobs: [summarize]
 
 jobs:
@@ -13112,6 +13160,47 @@ model = "gpt-5.2"
     }
 
     #[tokio::test]
+    async fn after_turn_skips_when_primary_thread_is_not_bound() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+
+        let allowed_thread_id = ThreadId::new();
+        write_test_after_turn_workflow_with_condition_and_bind_thread(
+            app.config.cwd.as_path(),
+            None,
+            format!("[\"{allowed_thread_id}\"]").as_str(),
+        )?;
+
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start thread");
+        app.enqueue_primary_thread_session(started.session, Vec::new())
+            .await?;
+        app.active_thread_id = Some(ThreadId::new());
+        while app_event_rx.try_recv().is_ok() {}
+
+        app.handle_app_server_event(
+            &app_server,
+            AppServerEvent::ServerNotification(turn_completed_notification_with_agent_message(
+                app.primary_thread_id.expect("primary thread"),
+                "turn-1",
+                TurnStatus::Completed,
+                "final reply",
+            )),
+        )
+        .await;
+
+        assert!(app.background_workflow_labels().is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn inactive_primary_turn_complete_still_runs_after_turn_continuity() -> Result<()> {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let mut app_server =
@@ -13245,6 +13334,45 @@ model = "gpt-5.2"
         let stopped = app.workflow_scheduler.stop_active_workflow_runs().await;
         assert_eq!(stopped, 1);
         app.sync_background_workflow_status();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn workflow_ui_manual_trigger_action_rejects_unbound_primary_thread() -> Result<()> {
+        let mut app = make_test_app().await;
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+
+        let allowed_thread_id = ThreadId::new();
+        write_test_manual_workflow_with_bind_thread(
+            app.config.cwd.as_path(),
+            format!("[\"{allowed_thread_id}\"]").as_str(),
+        )?;
+
+        let mut started_app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let started = started_app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await?;
+        app.primary_thread_id = Some(started.session.thread_id);
+        app.primary_session_configured = Some(started.session);
+        app.active_thread_id = app.primary_thread_id;
+
+        let cell = app.start_manual_workflow_trigger_from_ui(
+            &started_app_server,
+            "restricted".to_string(),
+            "review_backlog".to_string(),
+        );
+        let rendered = cell
+            .display_lines(/*width*/ 100)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Workflow trigger failed"));
+        assert!(rendered.contains("not allowed by `bind_thread`"));
+        assert!(app.background_workflow_labels().is_empty());
+
         Ok(())
     }
 

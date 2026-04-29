@@ -1861,17 +1861,21 @@ mod tests {
 triggers:
   - type: manual
     id: review_backlog
+    bind_thread: all
     jobs: [summarize]
   - type: manual
     id: triage
     enabled: false
+    bind_thread: all
     jobs: [notify]
   - type: interval
     id: pulse
+    bind_thread: all
     every: 30m
     jobs: [summarize]
   - type: after_turn
     id: followup
+    bind_thread: all
     condition: turn_succeeded
     jobs: [notify]
 
@@ -1905,6 +1909,7 @@ jobs:
 triggers:
   - type: manual
     id: review_backlog
+    bind_thread: all
     jobs: [notify]
 
 jobs:

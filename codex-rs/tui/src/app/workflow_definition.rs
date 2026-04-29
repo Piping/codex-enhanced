@@ -1,4 +1,5 @@
 use codex_app_server_protocol::TurnStatus;
+use codex_protocol::ThreadId;
 use indexmap::IndexMap;
 use serde::Deserialize;
 use serde::Serialize;
@@ -131,6 +132,47 @@ pub(crate) struct WorkflowJobConfig {
     pub(crate) steps: Vec<WorkflowStep>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WorkflowTriggerBindThread {
+    All,
+    ThreadIds(Vec<ThreadId>),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum WorkflowTriggerBindThreadValue {
+    Keyword(String),
+    ThreadIds(Vec<ThreadId>),
+}
+
+impl<'de> Deserialize<'de> for WorkflowTriggerBindThread {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match WorkflowTriggerBindThreadValue::deserialize(deserializer)? {
+            WorkflowTriggerBindThreadValue::Keyword(keyword) => {
+                if keyword == "all" {
+                    Ok(Self::All)
+                } else {
+                    Err(serde::de::Error::custom(
+                        "bind_thread must be `all` or a non-empty list of thread ids",
+                    ))
+                }
+            }
+            WorkflowTriggerBindThreadValue::ThreadIds(thread_ids) => {
+                if thread_ids.is_empty() {
+                    Err(serde::de::Error::custom(
+                        "bind_thread thread id list must not be empty",
+                    ))
+                } else {
+                    Ok(Self::ThreadIds(thread_ids))
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct WorkflowFile {
     name: String,
@@ -146,6 +188,7 @@ struct WorkflowTriggerConfig {
     id: Option<String>,
     #[serde(default = "default_true")]
     enabled: bool,
+    bind_thread: WorkflowTriggerBindThread,
     jobs: Vec<String>,
     #[serde(flatten)]
     kind: WorkflowTriggerKind,
@@ -189,6 +232,7 @@ pub(crate) struct LoadedWorkflowFile {
 pub(crate) struct LoadedWorkflowTrigger {
     pub(crate) id: String,
     pub(crate) enabled: bool,
+    pub(crate) bind_thread: WorkflowTriggerBindThread,
     pub(crate) jobs: Vec<String>,
     pub(crate) kind: WorkflowTriggerKind,
 }
@@ -348,6 +392,7 @@ pub(crate) fn load_workflow_registry(
             triggers.push(LoadedWorkflowTrigger {
                 id: trigger_id,
                 enabled: trigger.enabled,
+                bind_thread: trigger.bind_thread.clone(),
                 jobs: trigger.jobs.clone(),
                 kind: trigger.kind.clone(),
             });
@@ -426,6 +471,19 @@ impl WorkflowExecutionStrategy {
         match self {
             Self::InheritSession => "inherit_session",
             Self::OverrideYolo => "override_yolo",
+        }
+    }
+}
+
+impl WorkflowTriggerBindThread {
+    pub(crate) fn matches_primary_thread_id(&self, primary_thread_id: Option<ThreadId>) -> bool {
+        let Some(primary_thread_id) = primary_thread_id else {
+            return false;
+        };
+
+        match self {
+            Self::All => true,
+            Self::ThreadIds(thread_ids) => thread_ids.contains(&primary_thread_id),
         }
     }
 }
@@ -580,6 +638,7 @@ jobs:
 triggers:
   - type: after_turn
     id: followup
+    bind_thread: all
     jobs: [notify]
 
 jobs:
@@ -671,6 +730,129 @@ jobs:
     }
 
     #[test]
+    fn load_workflow_registry_rejects_missing_bind_thread() {
+        let dir = tempdir().unwrap();
+        let workflows_dir = dir.path().join(".codex/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        let workflow_path = workflows_dir.join("workflow.yaml");
+        fs::write(
+            &workflow_path,
+            r#"name: director
+
+triggers:
+  - type: manual
+    id: followup
+    jobs: [notify]
+
+jobs:
+  notify:
+    context_strategy: thread_auto
+    execution_strategy: inherit_session
+    steps:
+      - prompt: summarize the changes
+"#,
+        )
+        .unwrap();
+
+        let error = load_workflow_registry(dir.path()).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains(&format!(
+                "failed to parse workflow file `{}`",
+                workflow_path.display()
+            )),
+            "unexpected error message: {message}"
+        );
+        assert!(
+            message.contains("missing field `bind_thread`"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn load_workflow_registry_rejects_invalid_bind_thread_keyword() {
+        let dir = tempdir().unwrap();
+        let workflows_dir = dir.path().join(".codex/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        let workflow_path = workflows_dir.join("workflow.yaml");
+        fs::write(
+            &workflow_path,
+            r#"name: director
+
+triggers:
+  - type: manual
+    id: followup
+    bind_thread: primary
+    jobs: [notify]
+
+jobs:
+  notify:
+    context_strategy: thread_auto
+    execution_strategy: inherit_session
+    steps:
+      - prompt: summarize the changes
+"#,
+        )
+        .unwrap();
+
+        let error = load_workflow_registry(dir.path()).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("bind_thread must be `all` or a non-empty list of thread ids"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn load_workflow_registry_parses_bind_thread_thread_ids() {
+        let dir = tempdir().unwrap();
+        let workflows_dir = dir.path().join(".codex/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        let workflow_path = workflows_dir.join("workflow.yaml");
+        let primary_thread_id = ThreadId::new();
+        let other_thread_id = ThreadId::new();
+        fs::write(
+            &workflow_path,
+            format!(
+                r#"name: director
+
+triggers:
+  - type: manual
+    id: followup
+    bind_thread:
+      - {primary_thread_id}
+    jobs: [notify]
+
+jobs:
+  notify:
+    context_strategy: thread_auto
+    execution_strategy: inherit_session
+    steps:
+      - prompt: summarize the changes
+"#,
+            ),
+        )
+        .unwrap();
+
+        let registry = load_workflow_registry(dir.path()).unwrap();
+        let trigger = &registry.files[0].triggers[0];
+        assert_eq!(
+            trigger.bind_thread,
+            WorkflowTriggerBindThread::ThreadIds(vec![primary_thread_id])
+        );
+        assert!(
+            trigger
+                .bind_thread
+                .matches_primary_thread_id(Some(primary_thread_id))
+        );
+        assert!(
+            !trigger
+                .bind_thread
+                .matches_primary_thread_id(Some(other_thread_id))
+        );
+    }
+
+    #[test]
     fn load_workflow_registry_rejects_before_turn_embed_compact() {
         let dir = tempdir().unwrap();
         let workflows_dir = dir.path().join(".codex/workflows");
@@ -683,6 +865,7 @@ jobs:
 triggers:
   - type: before_turn
     id: followup
+    bind_thread: all
     jobs: [notify]
 
 jobs:
@@ -721,6 +904,7 @@ jobs:
 triggers:
   - type: after_turn
     id: followup
+    bind_thread: all
     condition: turn_succeeded
     jobs: [notify]
 
