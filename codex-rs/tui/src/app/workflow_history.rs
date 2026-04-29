@@ -437,7 +437,12 @@ impl App {
                 let WorkflowTriggerKind::AfterTurn { condition } = &trigger.kind else {
                     continue;
                 };
-                if !trigger.enabled || !condition.matches_turn_status(&after_turn.status) {
+                if !trigger.enabled
+                    || !trigger
+                        .bind_thread
+                        .matches_primary_thread_id(self.primary_thread_id)
+                    || !condition.matches_turn_status(&after_turn.status)
+                {
                     continue;
                 }
 

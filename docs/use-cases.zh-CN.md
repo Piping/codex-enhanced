@@ -152,22 +152,25 @@
   - User 可以创建、编辑、启用、停用和运行 workflows。
   - 每个 job 都以显式 `context_strategy` 声明如何处理当前上下文。
   - 每个 job 都以显式 `execution_strategy` 声明如何继承或覆盖当前 session 的执行配置。
-  - 支持的 triggers、`context_strategy`、`execution_strategy`、`response` 和 steps 会按声明的 thread/context behavior 执行。
+  - 每个 trigger 都以显式 `bind_thread` 声明它对哪些 primary thread 生效，不允许省略，也不允许静默回退默认值。
+  - 支持的 triggers、`bind_thread`、`context_strategy`、`execution_strategy`、`response` 和 steps 会按声明的 thread/context behavior 执行。
 - Trigger:
   - User 想把一类重复任务自动化，或管理已有 workflow jobs。
 - Main success scenario:
   1. User 打开 `/workflow`。
   2. Codex 加载 workspace-local workflow definitions。
-  3. User 创建或编辑 workflow、jobs 和 triggers，并为每个 job 指定 `context_strategy`、`execution_strategy`、`response`、`needs` 和 `steps`。
+  3. User 创建或编辑 workflow、jobs 和 triggers，并为每个 trigger 指定必填 `bind_thread`，为每个 job 指定 `context_strategy`、`execution_strategy`、`response`、`needs` 和 `steps`。
   4. Codex 严格校验 workflow，并把 YAML 持久化到本地。
   5. User 手动运行 workflow，或等待某个 trigger 触发。
-  6. Codex 按 job 声明的 `context_strategy` 选择直接嵌入主线程输入、先 compact 再回灌主线程、或在 workflow child thread 中 `auto/new/fork/fork_compact` 执行。
+  6. Codex 先用 trigger 的 `bind_thread` 判断当前 primary thread 是否允许触发该 trigger；未命中时跳过触发，命中时再按 job 声明的 `context_strategy` 选择直接嵌入主线程输入、先 compact 再回灌主线程、或在 workflow child thread 中 `auto/new/fork/fork_compact` 执行。
   7. Codex 在执行 workflow 时保持主 interactive surface 可用，并把结果按 `response` 配置显示为 assistant cell 或回灌为 user follow-up。
 - Extensions:
   - 3a. Workflow 使用 timeout、retry 或 background execution：
     Codex 会跨 rounds 和 runtime boundaries 保持这些语义。
-  - 4a. YAML 无效、缺少必填 `context_strategy` / `execution_strategy`、仍使用旧 `context` 字段，或出现未知字段：
+  - 4a. YAML 无效、缺少必填 `bind_thread` / `context_strategy` / `execution_strategy`、仍使用旧 `context` 字段，或出现未知字段：
     Codex 明确报告失败，而不是假装 workflow 已激活。
+  - 4aa. Trigger 的 `bind_thread` 既不是 `all`，也不是 thread id 列表，或列表中的任一 thread id 非法：
+    Codex 在加载期拒绝该 workflow，而不是运行时猜测意图或忽略非法值。
   - 4b. Job 把 `embed` 或 `embed_compact` 与 `run` steps 组合：
     Codex 在加载期拒绝该 workflow，而不是在运行时降级或跳过这些 steps。
   - 4c. `before_turn` trigger 解析到 `embed_compact` job：
@@ -183,6 +186,12 @@
   - 7d. `after_turn` workflow 返回空回复：
     Codex 停止 follow-up 链，而不是继续递归触发。
 - Technology and data variations:
+  - `bind_thread: all`
+    - 适用：让 trigger 对当前 workspace 中任意拥有该 workflow 的 Codex primary thread 生效。
+    - 限制：字段必填；不能通过省略字段来表达 `all`。
+  - `bind_thread: [<thread-id>, ...]`
+    - 适用：只允许指定 primary thread ids 触发该 trigger，避免同目录多个 Codex instances 全部执行同一类 workflow。
+    - 限制：必须是非空 thread id 列表；每个 id 都必须是合法 thread id。
   - `context_strategy: embed`
     - 适用：把 workflow prompt 直接作为主线程输入继续执行。
     - 限制：只允许 prompt steps，不允许 `run`。
@@ -451,6 +460,8 @@
 - Workflow job 必须显式声明 `context_strategy` 和 `execution_strategy`；旧 `context` 字段或未知字段不会被接受，也不会触发兼容降级。
 - `embed` 与 `embed_compact` job 不能包含 `run` steps；这种组合会在加载期失败。
 - `before_turn` workflows 不能使用 `context_strategy: embed_compact`。
+- 每个 trigger 都必须显式声明 `bind_thread`；支持的值只有 `all` 或非空 thread id 列表。
+- `bind_thread` 只决定“当前 Codex primary thread 是否允许触发这个 trigger”；它不改变 job 的 `context_strategy`，也不引入新的 thread-group 语义。
 - `thread_auto` 会在主线程可 fork 时 fork，否则新开 thread；`thread_fork` 不允许悄悄退化成 `thread_new`；`thread_fork_compact` 会在 child thread compact 后执行。
 - `execution_strategy: inherit_session` 和 `override_yolo` 都要求存在当前 primary session；`override_yolo` 必须把 approval/sandbox 提升到 yolo，而不是只改文案。
 - After-turn 和 background workflow activity 不会冻结主 interactive thread。

@@ -76,9 +76,15 @@ The trigger page can:
 
 Behavior notes:
 
+- Every trigger must declare `bind_thread`.
+- `bind_thread: all` allows the trigger to run for any Codex primary thread using this workspace.
+- `bind_thread: ["<thread-id>", ...]` restricts the trigger to the listed Codex primary thread ids.
+- Omitting `bind_thread` is invalid. Codex rejects the workflow file instead of guessing a default.
+- `bind_thread` only gates whether the current Codex primary thread may start the trigger. It does not replace or modify job `context_strategy`.
 - Trigger `enabled: false` disables the trigger itself.
 - A disabled trigger cannot be started from `Run Now` until it is enabled again.
 - `Run Now` is available for any enabled trigger type, not only `manual`.
+- `Run Now` still respects `bind_thread`. If the current primary thread is not allowed, the run fails visibly instead of bypassing the restriction.
 - If a trigger resolves only to disabled or otherwise unrunnable jobs, the run fails visibly instead of silently doing nothing.
 - `After Turn` runs are dispatched as background workflow tasks after the turn finishes, so the main thread stays responsive and the transcript shows workflow start/completion cells separately.
 - `After Turn` defaults to `condition: turn_succeeded`, which means the previous turn must finish successfully before the trigger runs. Set `condition: turn_finished` when follow-up work should also run after failed turns.
@@ -136,6 +142,7 @@ name: director
 triggers:
   - id: pulse
     type: interval
+    bind_thread: all
     every: 30m
     enabled: true
     jobs: [notify]

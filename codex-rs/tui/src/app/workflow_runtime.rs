@@ -721,7 +721,12 @@ impl App {
         let mut results = Vec::new();
         for workflow in &registry.files {
             for trigger in &workflow.triggers {
-                if !trigger.enabled || !matches!(trigger.kind, WorkflowTriggerKind::BeforeTurn) {
+                if !trigger.enabled
+                    || !trigger
+                        .bind_thread
+                        .matches_primary_thread_id(self.primary_thread_id)
+                    || !matches!(trigger.kind, WorkflowTriggerKind::BeforeTurn)
+                {
                     continue;
                 }
                 results.extend(
@@ -749,6 +754,50 @@ impl App {
         workflow_name: String,
         trigger_id: String,
     ) -> Arc<dyn HistoryCell> {
+        let registry = match load_workflow_registry(self.config.cwd.as_path()) {
+            Ok(registry) => registry,
+            Err(error) => {
+                return Arc::new(history_cell::new_error_event(format!(
+                    "Workflow trigger failed: failed to load workflows: {error}"
+                )));
+            }
+        };
+        let Some(workflow) = registry
+            .files
+            .iter()
+            .find(|workflow| workflow.name == workflow_name)
+        else {
+            return Arc::new(history_cell::new_error_event(format!(
+                "Workflow trigger failed: workflow `{workflow_name}` does not exist"
+            )));
+        };
+        let Some(trigger) = workflow
+            .triggers
+            .iter()
+            .find(|trigger| trigger.id == trigger_id)
+        else {
+            return Arc::new(history_cell::new_error_event(format!(
+                "Workflow trigger failed: trigger `{workflow_name}/{trigger_id}` does not exist"
+            )));
+        };
+        if !trigger.enabled {
+            return Arc::new(history_cell::new_error_event(format!(
+                "Workflow trigger failed: workflow trigger `{workflow_name}/{trigger_id}` is disabled"
+            )));
+        }
+        if !trigger
+            .bind_thread
+            .matches_primary_thread_id(self.primary_thread_id)
+        {
+            let current_primary_thread_id = self
+                .primary_thread_id
+                .map(|thread_id| thread_id.to_string())
+                .unwrap_or_else(|| "none".to_string());
+            return Arc::new(history_cell::new_error_event(format!(
+                "Workflow trigger failed: current primary thread `{current_primary_thread_id}` is not allowed by `bind_thread` for `{workflow_name}/{trigger_id}`"
+            )));
+        }
+
         let label = format!("{workflow_name} · {trigger_id}");
         match self.queue_or_start_trigger_run(
             app_server,
@@ -871,7 +920,12 @@ impl App {
         let mut visible_cells = Vec::new();
         for workflow in &registry.files {
             for trigger in &workflow.triggers {
-                if !trigger.enabled || !matches!(trigger.kind, WorkflowTriggerKind::FileWatch) {
+                if !trigger.enabled
+                    || !trigger
+                        .bind_thread
+                        .matches_primary_thread_id(self.primary_thread_id)
+                    || !matches!(trigger.kind, WorkflowTriggerKind::FileWatch)
+                {
                     continue;
                 }
 
@@ -1999,6 +2053,7 @@ mod tests {
 
 triggers:
   - type: manual
+    bind_thread: all
     jobs: [review_backlog]
 
 jobs:
@@ -2202,6 +2257,7 @@ jobs:
 triggers:
   - type: after_turn
     id: follow_up
+    bind_thread: all
     jobs: [review_backlog]
 
 jobs:
@@ -2296,6 +2352,7 @@ jobs:
 triggers:
   - type: after_turn
     id: follow_up
+    bind_thread: all
     jobs: [review_backlog]
 
 jobs:

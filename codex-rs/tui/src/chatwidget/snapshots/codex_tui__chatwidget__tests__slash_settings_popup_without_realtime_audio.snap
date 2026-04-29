@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+assertion_line: 284
+expression: popup
+---
+  Settings
+  Configure UI and realtime settings for Codex.
+
+› 1. UI  Configure local TUI-only transcript visibility for reasoning, tool
+         activity, and diffs.
+
+  Press enter to confirm or esc to go back

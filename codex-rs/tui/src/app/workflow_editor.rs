@@ -22,6 +22,7 @@ const DEFAULT_WORKFLOW_TEMPLATE: &str = r#"name: sample-workflow
 triggers:
   - type: manual
     id: run_now
+    bind_thread: all
     jobs: [main]
 
 jobs:
@@ -607,13 +608,16 @@ mod tests {
 triggers:
   - type: manual
     id: review
+    bind_thread: all
     jobs: [notify]
   - type: after_turn
     id: followup
+    bind_thread: all
     condition: turn_finished
     jobs: [notify]
   - type: interval
     id: pulse
+    bind_thread: all
     every: 30m
     jobs: [notify]
 
@@ -642,6 +646,7 @@ jobs:
         let text = fs::read_to_string(created).unwrap();
         assert!(text.contains("sample-workflow"));
         assert!(text.contains("run_now"));
+        assert!(text.contains("bind_thread: all"));
     }
 
     #[test]
@@ -810,6 +815,7 @@ jobs:
 triggers:
   - type: after_turn
     id: followup
+    bind_thread: all
     jobs: [notify]
 
 jobs:
