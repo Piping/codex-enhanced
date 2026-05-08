@@ -1370,7 +1370,7 @@ impl App {
                 let mut config = self.config.clone();
                 if !self.try_set_approval_policy_on_config(
                     &mut config,
-                    policy,
+                    policy.to_core(),
                     "Failed to set approval policy",
                     "failed to set approval policy on app config",
                 ) {
@@ -1974,6 +1974,9 @@ impl App {
             AppEvent::KeymapCleared { context, action } => {
                 self.apply_keymap_clear(context, action).await;
             }
+            unexpected => {
+                tracing::warn!(event = ?unexpected, "unexpected feature-routed app event reached generic dispatcher");
+            }
         }
         Ok(AppRunControl::Continue)
     }
@@ -2127,6 +2130,10 @@ impl App {
             ExitMode::Immediate => {
                 self.pending_shutdown_exit_thread_id = None;
                 AppRunControl::Exit(ExitReason::UserRequested)
+            }
+            ExitMode::RespawnImmediate => {
+                self.pending_shutdown_exit_thread_id = None;
+                AppRunControl::Exit(ExitReason::RespawnRequested)
             }
         }
     }

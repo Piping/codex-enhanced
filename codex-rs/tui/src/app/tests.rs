@@ -1,5 +1,7 @@
 //! App-level orchestration tests for the TUI.
 
+mod btw_tests;
+mod clawbot_tests;
 mod model_catalog;
 
 use super::*;
@@ -435,6 +437,7 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
     let model = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
     app.chat_widget = ChatWidget::new_with_app_event(ChatWidgetInit {
         config,
+        display_preferences: app.display_preferences.clone(),
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         app_event_tx: app.app_event_tx.clone(),
         workspace_command_runner: None,
@@ -1536,8 +1539,12 @@ async fn refresh_agent_picker_thread_liveness_prunes_closed_metadata_only_thread
         /*is_closed*/ false,
     );
 
-    let is_available =
-        Box::pin(app.refresh_agent_picker_thread_liveness(&mut app_server, thread_id)).await;
+    let is_available = Box::pin(app.refresh_agent_picker_thread_liveness(
+        &mut app_server,
+        thread_id,
+        ThreadLivenessRefreshMode::Picker,
+    ))
+    .await;
 
     assert!(!is_available);
     assert_eq!(app.agent_navigation.get(&thread_id), None);
@@ -1724,7 +1731,7 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
     );
     assert_eq!(
         AskForApproval::from(app.config.permissions.approval_policy.value()),
-        auto_review.approval_policy
+        auto_review.approval_policy.into()
     );
     assert_eq!(
         AskForApproval::from(
@@ -1734,7 +1741,7 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
                 .approval_policy
                 .value(),
         ),
-        auto_review.approval_policy
+        auto_review.approval_policy.into()
     );
     assert_eq!(
         app.chat_widget
@@ -1756,9 +1763,10 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
         op_rx.try_recv(),
         Ok(Op::OverrideTurnContext {
             cwd: None,
-            approval_policy: Some(auto_review.approval_policy),
+            approval_policy: Some(auto_review.approval_policy.into()),
             approvals_reviewer: Some(auto_review.approvals_reviewer),
             permission_profile: Some(auto_review.permission_profile.clone()),
+            sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1849,6 +1857,7 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
             permission_profile: None,
+            sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1911,7 +1920,7 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
     );
     assert_eq!(
         AskForApproval::from(app.config.permissions.approval_policy.value()),
-        auto_review.approval_policy
+        auto_review.approval_policy.into()
     );
     assert_eq!(
         app.chat_widget
@@ -1924,9 +1933,10 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
         op_rx.try_recv(),
         Ok(Op::OverrideTurnContext {
             cwd: None,
-            approval_policy: Some(auto_review.approval_policy),
+            approval_policy: Some(auto_review.approval_policy.into()),
             approvals_reviewer: Some(auto_review.approvals_reviewer),
             permission_profile: Some(auto_review.permission_profile.clone()),
+            sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1984,6 +1994,7 @@ async fn update_feature_flags_disabling_guardian_clears_manual_review_policy_wit
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
             permission_profile: None,
+            sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -2040,9 +2051,10 @@ async fn update_feature_flags_enabling_guardian_in_profile_sets_profile_auto_rev
         op_rx.try_recv(),
         Ok(Op::OverrideTurnContext {
             cwd: None,
-            approval_policy: Some(auto_review.approval_policy),
+            approval_policy: Some(auto_review.approval_policy.into()),
             approvals_reviewer: Some(auto_review.approvals_reviewer),
             permission_profile: Some(auto_review.permission_profile.clone()),
+            sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -2130,6 +2142,7 @@ guardian_approval = true
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
             permission_profile: None,
+            sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -3847,7 +3860,7 @@ async fn clear_ui_header_shows_fast_status_for_fast_capable_models() {
     assert_app_snapshot!("clear_ui_header_fast_status_fast_capable_models", rendered);
 }
 
-async fn make_test_app() -> App {
+pub(crate) async fn make_test_app() -> App {
     let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
@@ -3880,6 +3893,8 @@ async fn make_test_app() -> App {
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         backtrack: BacktrackState::default(),
+        key_chord: KeyChordState::default(),
+        display_preferences: DisplayPreferences::default(),
         backtrack_render_pending: false,
         feedback: codex_feedback::CodexFeedback::new(),
         feedback_audience: FeedbackAudience::External,
@@ -3899,13 +3914,26 @@ async fn make_test_app() -> App {
         last_subagent_backfill_attempt: None,
         primary_session_configured: None,
         pending_primary_events: VecDeque::new(),
+        pending_workflow_compact_followups: VecDeque::new(),
         pending_app_server_requests: PendingAppServerRequests::default(),
         pending_plugin_enabled_writes: HashMap::new(),
         pending_hook_enabled_writes: HashMap::new(),
+        workflow_thread_notification_channels: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        workflow_file_watch: None,
+        workflow_scheduler: WorkflowSchedulerState::default(),
+        workflow_history: WorkflowHistoryState::default(),
+        btw_session: None,
+        clawbot_controls_destination: ClawbotControlsDestination::default(),
+        clawbot_workspace_root: None,
+        clawbot_provider_task: None,
+        clawbot_pending_turns: HashMap::new(),
+        clawbot_outbound_messages: Vec::new(),
+        clawbot_outbound_reactions: Vec::new(),
+        clawbot_removed_outbound_reactions: Vec::new(),
     }
 }
 
-async fn make_test_app_with_channels() -> (
+pub(crate) async fn make_test_app_with_channels() -> (
     App,
     tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     tokio::sync::mpsc::UnboundedReceiver<Op>,
@@ -3943,6 +3971,8 @@ async fn make_test_app_with_channels() -> (
             status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            key_chord: KeyChordState::default(),
+            display_preferences: DisplayPreferences::default(),
             backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
             feedback_audience: FeedbackAudience::External,
@@ -3962,9 +3992,24 @@ async fn make_test_app_with_channels() -> (
             last_subagent_backfill_attempt: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            pending_workflow_compact_followups: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
+            workflow_thread_notification_channels: Arc::new(
+                tokio::sync::Mutex::new(HashMap::new()),
+            ),
+            workflow_file_watch: None,
+            workflow_scheduler: WorkflowSchedulerState::default(),
+            workflow_history: WorkflowHistoryState::default(),
+            btw_session: None,
+            clawbot_controls_destination: ClawbotControlsDestination::default(),
+            clawbot_workspace_root: None,
+            clawbot_provider_task: None,
+            clawbot_pending_turns: HashMap::new(),
+            clawbot_outbound_messages: Vec::new(),
+            clawbot_outbound_reactions: Vec::new(),
+            clawbot_removed_outbound_reactions: Vec::new(),
         },
         rx,
         op_rx,
@@ -4825,6 +4870,7 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
 
     let replacement = ChatWidget::new_with_app_event(ChatWidgetInit {
         config: app.config.clone(),
+        display_preferences: app.display_preferences.clone(),
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         app_event_tx: app.app_event_tx.clone(),
         workspace_command_runner: None,
@@ -4983,7 +5029,10 @@ async fn queued_rollback_syncs_overlay_and_clears_deferred_history() {
         app.transcript_cells.clone(),
         app.keymap.pager.clone(),
     ));
-    app.deferred_history_lines = vec![Line::from("stale buffered line")];
+    app.deferred_history_lines = vec![(
+        vec![Line::from("stale buffered line")],
+        ScrollbackWrapMode::Adaptive,
+    )];
     app.backtrack.overlay_preview_active = true;
     app.backtrack.nth_user_message = 1;
 
@@ -5222,7 +5271,10 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
         app.transcript_cells.clone(),
         crate::keymap::RuntimeKeymap::defaults().pager,
     ));
-    app.deferred_history_lines = vec![Line::from("stale buffered line")];
+    app.deferred_history_lines = vec![(
+        vec![Line::from("stale buffered line")],
+        ScrollbackWrapMode::Adaptive,
+    )];
     app.has_emitted_history_lines = true;
     app.backtrack.primed = true;
     app.backtrack.overlay_preview_active = true;

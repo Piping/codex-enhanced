@@ -314,7 +314,9 @@ pub(super) async fn handle_model_migration_prompt_if_needed(
                     token_usage: TokenUsage::default(),
                     thread_id: None,
                     thread_name: None,
+                    respawn_target: None,
                     update_action: None,
+                    respawn_with_yolo: false,
                     exit_reason: ExitReason::UserRequested,
                 });
             }

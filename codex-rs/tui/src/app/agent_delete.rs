@@ -276,6 +276,7 @@ mod tests {
         let view = ListSelectionView::new(
             delete_agent_picker_params(&app, /*initial_selected_idx*/ None),
             tx,
+            crate::keymap::RuntimeKeymap::defaults().list,
         );
 
         assert_snapshot!(
@@ -293,6 +294,7 @@ mod tests {
         let view = ListSelectionView::new(
             delete_agent_confirmation_params(thread_id, "Scout [worker]"),
             tx,
+            crate::keymap::RuntimeKeymap::defaults().list,
         );
 
         assert_snapshot!(

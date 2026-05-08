@@ -79,6 +79,8 @@ impl App {
             approval_policy,
             approvals_reviewer,
             sandbox_policy,
+            permission_profile,
+            environments,
             model,
             effort,
             summary,
@@ -100,6 +102,8 @@ impl App {
                     approval_policy,
                     approvals_reviewer,
                     sandbox_policy,
+                    permission_profile,
+                    environments,
                     model,
                     effort,
                     summary,
@@ -172,6 +176,8 @@ impl App {
                 approval_policy,
                 approvals_reviewer,
                 sandbox_policy,
+                permission_profile,
+                environments,
                 model,
                 effort,
                 summary,
@@ -377,9 +383,12 @@ impl App {
             None
         })?;
         let cwd = session.cwd.clone();
-        let mut approval_policy = session.approval_policy;
+        let mut approval_policy = session.approval_policy.to_core();
         let mut approvals_reviewer = session.approvals_reviewer;
-        let mut sandbox_policy = session.sandbox_policy.clone();
+        let permission_profile = session.permission_profile.clone();
+        let mut sandbox_policy = permission_profile
+            .to_legacy_sandbox_policy(session.cwd.as_path())
+            .unwrap_or(codex_protocol::protocol::SandboxPolicy::DangerFullAccess);
         if execution_strategy == WorkflowExecutionStrategy::OverrideYolo {
             approval_policy = codex_protocol::protocol::AskForApproval::Never;
             approvals_reviewer = codex_protocol::config_types::ApprovalsReviewer::User;
@@ -387,7 +396,7 @@ impl App {
         }
         let model = session.model.clone();
         let effort = session.reasoning_effort;
-        let service_tier = session.service_tier.map(Some);
+        let service_tier = session.service_tier.clone().map(Some);
 
         Some(Op::UserTurn {
             items: vec![UserInput::Text {
@@ -398,6 +407,8 @@ impl App {
             approval_policy,
             approvals_reviewer: Some(approvals_reviewer),
             sandbox_policy,
+            permission_profile: Some(permission_profile),
+            environments: None,
             model,
             effort,
             summary: None,

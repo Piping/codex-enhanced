@@ -150,6 +150,7 @@ pub(crate) fn core_profile_fallback_action(info: &CodexErrorInfo) -> Option<Prof
         }
         CodexErrorInfo::ContextWindowExceeded
         | CodexErrorInfo::BadRequest
+        | CodexErrorInfo::CyberPolicy
         | CodexErrorInfo::SandboxError
         | CodexErrorInfo::ActiveTurnNotSteerable { .. }
         | CodexErrorInfo::ThreadRollbackFailed
@@ -182,6 +183,7 @@ pub(crate) fn app_server_profile_fallback_action(
         | AppServerCodexErrorInfo::BadRequest
         | AppServerCodexErrorInfo::ThreadRollbackFailed
         | AppServerCodexErrorInfo::SandboxError
+        | AppServerCodexErrorInfo::CyberPolicy
         | AppServerCodexErrorInfo::ActiveTurnNotSteerable { .. }
         | AppServerCodexErrorInfo::Other => None,
     }

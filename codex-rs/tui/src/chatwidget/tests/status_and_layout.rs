@@ -2172,6 +2172,7 @@ async fn completed_turn_history_renders_timestamp_separator_snapshot() {
             last_agent_message: Some("Timestamp rendered.".into()),
             completed_at: Some(2),
             duration_ms: Some(2_000),
+            time_to_first_token_ms: None,
         }),
     });
 

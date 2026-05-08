@@ -12,10 +12,11 @@ use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::UserInput;
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::AskForApproval;
+use codex_protocol::models::ActivePermissionProfile;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::user_input::UserInput;
 use uuid::Uuid;
 
 use super::App;
@@ -37,8 +38,10 @@ pub(crate) struct BtwSessionState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct BtwPermissions {
-    pub(super) approval_policy: AskForApproval,
+    pub(super) approval_policy: codex_app_server_protocol::AskForApproval,
     pub(super) approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
+    pub(super) permission_profile: PermissionProfile,
+    pub(super) active_permission_profile: Option<ActivePermissionProfile>,
     pub(super) sandbox_policy: SandboxPolicy,
 }
 
@@ -81,15 +84,21 @@ impl App {
         let turn_result = app_server
             .turn_start(
                 thread_id,
-                btw_turn_input(trimmed_prompt),
+                btw_turn_input(trimmed_prompt)
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
                 self.btw_turn_cwd_path(app_server),
-                permissions.approval_policy,
+                permissions.approval_policy.into(),
                 permissions.approvals_reviewer,
-                permissions.sandbox_policy.clone(),
+                permissions.permission_profile.clone(),
+                permissions.active_permission_profile.clone(),
                 self.chat_widget.current_model().to_string(),
                 self.chat_widget.current_reasoning_effort(),
                 /*summary*/ None,
-                self.chat_widget.current_service_tier().map(Some),
+                self.chat_widget
+                    .current_service_tier()
+                    .map(|service_tier| Some(service_tier.request_value().to_string())),
                 /*collaboration_mode*/ None,
                 self.config.personality,
                 /*output_schema*/ None,
@@ -155,26 +164,41 @@ impl App {
         {
             let store = channel.store.lock().await;
             if let Some(session) = store.session.as_ref() {
+                let permission_profile = session.permission_profile.clone();
                 return BtwPermissions {
                     approval_policy: session.approval_policy,
                     approvals_reviewer: session.approvals_reviewer,
-                    sandbox_policy: session.sandbox_policy.clone(),
+                    permission_profile: permission_profile.clone(),
+                    active_permission_profile: session.active_permission_profile.clone(),
+                    sandbox_policy: permission_profile
+                        .to_legacy_sandbox_policy(session.cwd.as_path())
+                        .unwrap_or(SandboxPolicy::DangerFullAccess),
                 };
             }
         }
 
         if let Some(session) = self.primary_session_configured.as_ref() {
+            let permission_profile = session.permission_profile.clone();
             return BtwPermissions {
                 approval_policy: session.approval_policy,
                 approvals_reviewer: session.approvals_reviewer,
-                sandbox_policy: session.sandbox_policy.clone(),
+                permission_profile: permission_profile.clone(),
+                active_permission_profile: session.active_permission_profile.clone(),
+                sandbox_policy: permission_profile
+                    .to_legacy_sandbox_policy(session.cwd.as_path())
+                    .unwrap_or(SandboxPolicy::DangerFullAccess),
             };
         }
 
+        let permission_profile = self.config.permissions.permission_profile();
         BtwPermissions {
-            approval_policy: self.config.permissions.approval_policy.value(),
+            approval_policy: self.config.permissions.approval_policy.value().into(),
             approvals_reviewer: self.config.approvals_reviewer,
-            sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
+            permission_profile: permission_profile.clone(),
+            active_permission_profile: self.config.permissions.active_permission_profile(),
+            sandbox_policy: permission_profile
+                .to_legacy_sandbox_policy(self.config.cwd.as_path())
+                .unwrap_or(SandboxPolicy::DangerFullAccess),
         }
     }
 

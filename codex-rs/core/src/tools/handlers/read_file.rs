@@ -5,6 +5,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_tools::ToolName;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 use std::path::Path;
@@ -82,6 +83,10 @@ struct ReadFileArgs {
 
 impl ToolHandler for ReadFileHandler {
     type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("read_file")
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function

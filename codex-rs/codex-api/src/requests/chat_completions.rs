@@ -146,8 +146,8 @@ impl<'a> ChatCompletionsRequestBuilder<'a> {
                 | ResponseItem::ToolSearchOutput { .. }
                 | ResponseItem::WebSearchCall { .. }
                 | ResponseItem::ImageGenerationCall { .. }
-                | ResponseItem::GhostSnapshot { .. }
                 | ResponseItem::Compaction { .. }
+                | ResponseItem::ContextCompaction { .. }
                 | ResponseItem::Other => {}
             }
         }
@@ -185,8 +185,8 @@ fn reasoning_by_anchor_index(input: &[ResponseItem]) -> HashMap<usize, String> {
             | ResponseItem::ToolSearchOutput { .. }
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
-            | ResponseItem::GhostSnapshot { .. }
             | ResponseItem::Compaction { .. }
+            | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other => {}
         }
     }
@@ -255,8 +255,8 @@ fn reasoning_by_anchor_index(input: &[ResponseItem]) -> HashMap<usize, String> {
                 | ResponseItem::ToolSearchOutput { .. }
                 | ResponseItem::WebSearchCall { .. }
                 | ResponseItem::ImageGenerationCall { .. }
-                | ResponseItem::GhostSnapshot { .. }
                 | ResponseItem::Compaction { .. }
+                | ResponseItem::ContextCompaction { .. }
                 | ResponseItem::Other => false,
             };
             if can_attach {
@@ -293,7 +293,7 @@ fn content_to_chat_value(role: &str, content: &[ContentItem]) -> (String, Value)
                     "text": chunk,
                 }));
             }
-            ContentItem::InputImage { image_url } => {
+            ContentItem::InputImage { image_url, .. } => {
                 saw_image = true;
                 items.push(json!({
                     "type": "image_url",
@@ -388,7 +388,6 @@ mod tests {
             content: vec![ContentItem::InputText {
                 text: text.to_string(),
             }],
-            end_turn: None,
             phase: None,
         }
     }
@@ -400,7 +399,6 @@ mod tests {
             content: vec![ContentItem::OutputText {
                 text: text.to_string(),
             }],
-            end_turn: None,
             phase: None,
         }
     }

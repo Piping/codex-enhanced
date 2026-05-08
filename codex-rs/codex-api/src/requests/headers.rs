@@ -13,6 +13,10 @@ pub fn build_session_headers(session_id: Option<String>, thread_id: Option<Strin
     headers
 }
 
+pub fn build_conversation_headers(conversation_id: Option<String>) -> HeaderMap {
+    build_session_headers(conversation_id, None)
+}
+
 pub(crate) fn subagent_header(source: &Option<SessionSource>) -> Option<String> {
     let SessionSource::SubAgent(sub) = source.as_ref()? else {
         return None;

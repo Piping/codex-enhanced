@@ -593,6 +593,10 @@ impl HistoryCell for ReasoningRawContentCell {
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.display_lines(width)
     }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        raw_lines_from_source(self.content.trim())
+    }
 }
 
 #[derive(Debug)]
@@ -3959,6 +3963,7 @@ mod tests {
             "call-raw".to_string(),
             invocation,
             /*animations_enabled*/ false,
+            DisplayPreferences::default(),
         );
         assert!(
             cell.complete(Duration::from_millis(1), Ok(result))
@@ -3982,6 +3987,7 @@ mod tests {
                 arguments: Some(json!({"path": "README.md"})),
             },
             /*animations_enabled*/ false,
+            DisplayPreferences::default(),
         );
         assert!(
             tool_cell

@@ -622,18 +622,25 @@ impl ThreadManager {
         let (inherited_shell_snapshot, inherited_exec_policy) = self
             .inherited_resources_for_source(&session_source, &config)
             .await;
+        let thread_source = initial_history.get_resumed_thread_source();
+        let environments = default_thread_environment_selections(
+            self.state.environment_manager.as_ref(),
+            &config.cwd,
+        );
         Box::pin(self.state.spawn_thread_with_source(
             config,
             initial_history,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
             session_source,
+            thread_source,
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
             inherited_shell_snapshot,
             inherited_exec_policy,
             parent_trace,
+            environments,
             /*user_shell_override*/ None,
         ))
         .await
@@ -912,21 +919,32 @@ impl ThreadManager {
                     InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
                 };
                 if snapshot_state.ends_mid_turn {
-                    append_interrupted_boundary(history, snapshot_state.active_turn_id)
+                    append_interrupted_boundary(
+                        history,
+                        snapshot_state.active_turn_id,
+                        InterruptedTurnHistoryMarker::from_config(&config),
+                    )
                 } else {
                     history
                 }
             }
         };
+        let environments = default_thread_environment_selections(
+            self.state.environment_manager.as_ref(),
+            &config.cwd,
+        );
+        let thread_source = history.get_resumed_thread_source();
         Box::pin(self.state.fork_thread_with_source(
             config,
             history,
             self.agent_control(),
             session_source,
+            thread_source,
             persist_extended_history,
             inherited_shell_snapshot,
             inherited_exec_policy,
             parent_trace,
+            Some(environments),
         ))
         .await
     }
@@ -1168,7 +1186,6 @@ impl ThreadManagerState {
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
             inherited_exec_policy,
-            /*parent_trace*/ None,
             parent_trace,
             environments,
             /*user_shell_override*/ None,

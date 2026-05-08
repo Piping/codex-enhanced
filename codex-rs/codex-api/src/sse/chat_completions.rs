@@ -48,7 +48,10 @@ pub fn spawn_chat_completions_stream(
         }
         process_chat_sse(stream_response.bytes, tx_event, idle_timeout, telemetry).await;
     });
-    ResponseStream { rx_event }
+    ResponseStream {
+        rx_event,
+        upstream_request_id: None,
+    }
 }
 
 pub async fn process_chat_sse(
@@ -221,6 +224,7 @@ pub async fn process_chat_sse(
                         .send(Ok(ResponseEvent::Completed {
                             response_id: String::new(),
                             token_usage: None,
+                            end_turn: None,
                         }))
                         .await;
                     completed_sent = true;
@@ -299,7 +303,6 @@ async fn append_assistant_text(
             id: None,
             role: "assistant".to_string(),
             content: Vec::new(),
-            end_turn: None,
             phase: None,
         };
         *assistant_item = Some(item.clone());
@@ -369,6 +372,7 @@ async fn flush_and_complete(
         .send(Ok(ResponseEvent::Completed {
             response_id: String::new(),
             token_usage: None,
+            end_turn: None,
         }))
         .await;
 }
@@ -503,6 +507,7 @@ mod tests {
             [ResponseEvent::Completed {
                 response_id,
                 token_usage: None,
+                ..
             }] if response_id.is_empty()
         );
     }

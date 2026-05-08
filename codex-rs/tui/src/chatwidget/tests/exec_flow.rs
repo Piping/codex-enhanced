@@ -735,11 +735,7 @@ async fn unified_exec_wait_status_hides_tool_activity_when_disabled() {
         recent_chunks: Vec::new(),
     });
 
-    chat.on_terminal_interaction(TerminalInteractionEvent {
-        call_id: "call-1".to_string(),
-        process_id: "proc-1".to_string(),
-        stdin: String::new(),
-    });
+    chat.on_terminal_interaction("proc-1".to_string(), String::new());
 
     assert_eq!(chat.current_status.header, "Working");
     let status = chat
@@ -1514,13 +1510,13 @@ async fn apply_patch_hidden_diff_history_snapshot() {
     let mut apply_changes = HashMap::new();
     apply_changes.insert(
         test_project_path().join("src").join("lib.rs"),
-        FileChange::Add {
+        codex_protocol::protocol::FileChange::Add {
             content: "pub fn hidden() {}\n".to_string(),
         },
     );
     apply_changes.insert(
         test_project_path().join("README.md"),
-        FileChange::Add {
+        codex_protocol::protocol::FileChange::Add {
             content: "# hidden patch\n".to_string(),
         },
     );

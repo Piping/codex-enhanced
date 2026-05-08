@@ -166,6 +166,23 @@ use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as UpdatePlanItemStatus;
+#[cfg(test)]
+use codex_protocol::protocol::AgentMessageEvent;
+#[cfg(test)]
+use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
+#[cfg(test)]
+use codex_protocol::protocol::Event;
+#[cfg(test)]
+use codex_protocol::protocol::EventMsg;
+#[cfg(test)]
+use codex_protocol::protocol::PatchApplyBeginEvent;
+use codex_protocol::protocol::SandboxPolicy;
+#[cfg(test)]
+use codex_protocol::protocol::SessionConfiguredEvent;
+#[cfg(test)]
+use codex_protocol::protocol::ThreadRolledBackEvent;
+#[cfg(test)]
+use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
@@ -3910,9 +3927,9 @@ impl ChatWidget {
         }
     }
 
-    fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
+    fn on_patch_apply_begin(&mut self, changes: HashMap<PathBuf, FileChange>) {
         self.add_to_history(history_cell::new_patch_event(
-            event.changes,
+            changes,
             &self.config.cwd,
             self.display_preferences.clone(),
         ));
@@ -4494,12 +4511,11 @@ impl ChatWidget {
                 // Reset the flag even if we don't show separator (no work was done)
                 self.needs_final_message_separator = false;
             }
-            self.stream_controller =
-                Some(StreamController::new(
-                    self.current_stream_width(/*reserved_cols*/ 2),
-                    &self.config.cwd,
-                    self.history_render_mode(),
-                ));
+            self.stream_controller = Some(StreamController::new(
+                self.current_stream_width(/*reserved_cols*/ 2),
+                &self.config.cwd,
+                self.history_render_mode(),
+            ));
         }
         if let Some(controller) = self.stream_controller.as_mut()
             && controller.push(&delta)
@@ -4965,7 +4981,7 @@ impl ChatWidget {
             _ => {
                 self.flush_active_cell();
                 let mut cell = history_cell::new_active_mcp_tool_call(
-                    call_id,
+                    id,
                     invocation,
                     self.config.animations,
                     self.display_preferences.clone(),
@@ -5652,372 +5668,9 @@ impl ChatWidget {
     }
 
     pub(crate) fn copy_latest_output_to_clipboard(&mut self) {
-        let Some(text) = self.last_copyable_output.as_deref() else {
-            self.add_info_message(
-                "`/copy` is unavailable before the first Codex output or right after a rollback."
-                    .to_string(),
-                /*hint*/ None,
-            );
-            return;
-        };
-
-        match clipboard_text::copy_text_to_clipboard(text) {
-            Ok(()) => {
-                let hint = self.agent_turn_running.then_some(
-                    "Current turn is still running; copied the latest completed output (not the in-progress response)."
-                        .to_string(),
-                );
-                self.add_info_message("Copied latest Codex output to clipboard.".to_string(), hint);
-            }
-            Err(err) => self.add_error_message(format!("Failed to copy to clipboard: {err}")),
-        }
+        self.copy_last_agent_markdown();
     }
 
-    fn dispatch_command(&mut self, cmd: SlashCommand) {
-        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
-            let message = format!(
-                "'/{}' is disabled while a task is in progress.",
-                cmd.command()
-            );
-            self.add_to_history(history_cell::new_error_event(message));
-            self.bottom_pane.drain_pending_submission_state();
-            self.request_redraw();
-            return;
-        }
-        match cmd {
-            SlashCommand::Feedback => {
-                if !self.config.feedback_enabled {
-                    let params = crate::bottom_pane::feedback_disabled_params();
-                    self.bottom_pane.show_selection_view(params);
-                    self.request_redraw();
-                    return;
-                }
-                // Step 1: pick a category (UI built in feedback_view)
-                let params =
-                    crate::bottom_pane::feedback_selection_params(self.app_event_tx.clone());
-                self.bottom_pane.show_selection_view(params);
-                self.request_redraw();
-            }
-            SlashCommand::New => {
-                self.app_event_tx.send(AppEvent::NewSession);
-            }
-            SlashCommand::Clear => {
-                self.app_event_tx.send(AppEvent::ClearUi);
-            }
-            SlashCommand::Resume => {
-                self.app_event_tx.send(AppEvent::OpenResumePicker);
-            }
-            SlashCommand::Fork => {
-                self.app_event_tx.send(AppEvent::ForkCurrentSession);
-            }
-            SlashCommand::Thread => {
-                self.app_event_tx.send(AppEvent::OpenThreadPanel);
-            }
-            SlashCommand::Profile => {
-                self.app_event_tx.send(AppEvent::OpenProfileManagementPanel);
-            }
-            SlashCommand::Init => {
-                let init_target = match self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME) {
-                    Ok(path) => path,
-                    Err(err) => {
-                        self.add_error_message(format!(
-                            "Failed to prepare {DEFAULT_PROJECT_DOC_FILENAME}: {err}",
-                        ));
-                        return;
-                    }
-                };
-                if init_target.exists() {
-                    let message = format!(
-                        "{DEFAULT_PROJECT_DOC_FILENAME} already exists here. Skipping /init to avoid overwriting it."
-                    );
-                    self.add_info_message(message, /*hint*/ None);
-                    return;
-                }
-                const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
-                self.submit_user_message(INIT_PROMPT.to_string().into());
-            }
-            SlashCommand::Compact => {
-                self.clear_token_usage();
-                if !self.bottom_pane.is_task_running() {
-                    self.bottom_pane.set_task_running(/*running*/ true);
-                }
-                self.app_event_tx.compact();
-            }
-            SlashCommand::Review => {
-                self.open_review_popup();
-            }
-            SlashCommand::Rename => {
-                self.session_telemetry
-                    .counter("codex.thread.rename", /*inc*/ 1, &[]);
-                self.show_rename_prompt();
-            }
-            SlashCommand::Model => {
-                self.open_model_popup();
-            }
-            SlashCommand::Fast => {
-                let next_tier = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
-                    None
-                } else {
-                    Some(ServiceTier::Fast)
-                };
-                self.set_service_tier_selection(next_tier);
-            }
-            SlashCommand::Realtime => {
-                if !self.realtime_conversation_enabled() {
-                    return;
-                }
-                if self.realtime_conversation.is_live() {
-                    self.stop_realtime_conversation_from_ui();
-                } else {
-                    self.start_realtime_conversation();
-                }
-            }
-            SlashCommand::Settings => {
-                self.open_settings_popup();
-            }
-            SlashCommand::Clawbot => {
-                self.app_event_tx.send(AppEvent::OpenClawbotManagement);
-            }
-            SlashCommand::Personality => {
-                self.open_personality_popup();
-            }
-            SlashCommand::Plan => {
-                if !self.collaboration_modes_enabled() {
-                    self.add_info_message(
-                        "Collaboration modes are disabled.".to_string(),
-                        Some("Enable collaboration modes to use /plan.".to_string()),
-                    );
-                    return;
-                }
-                if let Some(mask) = collaboration_modes::plan_mask(self.model_catalog.as_ref()) {
-                    self.set_collaboration_mask(mask);
-                } else {
-                    self.add_info_message(
-                        "Plan mode unavailable right now.".to_string(),
-                        /*hint*/ None,
-                    );
-                }
-            }
-            SlashCommand::Collab => {
-                if !self.collaboration_modes_enabled() {
-                    self.add_info_message(
-                        "Collaboration modes are disabled.".to_string(),
-                        Some("Enable collaboration modes to use /collab.".to_string()),
-                    );
-                    return;
-                }
-                self.open_collaboration_modes_popup();
-            }
-            SlashCommand::Agent | SlashCommand::MultiAgents => {
-                self.app_event_tx.send(AppEvent::OpenAgentPicker);
-            }
-            SlashCommand::Approvals => {
-                self.open_permissions_popup();
-            }
-            SlashCommand::Permissions => {
-                self.open_permissions_popup();
-            }
-            SlashCommand::ElevateSandbox => {
-                #[cfg(target_os = "windows")]
-                {
-                    let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
-                    let windows_degraded_sandbox_enabled =
-                        matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken);
-                    if !windows_degraded_sandbox_enabled
-                        || !codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-                    {
-                        // This command should not be visible/recognized outside degraded mode,
-                        // but guard anyway in case something dispatches it directly.
-                        return;
-                    }
-
-                    let Some(preset) = builtin_approval_presets()
-                        .into_iter()
-                        .find(|preset| preset.id == "auto")
-                    else {
-                        // Avoid panicking in interactive UI; treat this as a recoverable
-                        // internal error.
-                        self.add_error_message(
-                            "Internal error: missing the 'auto' approval preset.".to_string(),
-                        );
-                        return;
-                    };
-
-                    if let Err(err) = self
-                        .config
-                        .permissions
-                        .approval_policy
-                        .can_set(&preset.approval)
-                    {
-                        self.add_error_message(err.to_string());
-                        return;
-                    }
-
-                    self.session_telemetry.counter(
-                        "codex.windows_sandbox.setup_elevated_sandbox_command",
-                        /*inc*/ 1,
-                        &[],
-                    );
-                    self.app_event_tx
-                        .send(AppEvent::BeginWindowsSandboxElevatedSetup { preset });
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    let _ = &self.session_telemetry;
-                    // Not supported; on non-Windows this command should never be reachable.
-                };
-            }
-            SlashCommand::SandboxReadRoot => {
-                self.add_error_message(
-                    "Usage: /sandbox-add-read-dir <absolute-directory-path>".to_string(),
-                );
-            }
-            SlashCommand::Experimental => {
-                self.open_experimental_popup();
-            }
-            SlashCommand::Quit | SlashCommand::Exit => {
-                self.request_quit_without_confirmation();
-            }
-            SlashCommand::Logout => {
-                if let Err(e) = codex_login::logout(
-                    &self.config.codex_home,
-                    self.config.cli_auth_credentials_store_mode,
-                ) {
-                    tracing::error!("failed to logout: {e}");
-                }
-                self.request_quit_without_confirmation();
-            }
-            // SlashCommand::Undo => {
-            //     self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
-            // }
-            SlashCommand::Diff => {
-                self.add_diff_in_progress();
-                let tx = self.app_event_tx.clone();
-                tokio::spawn(async move {
-                    let text = match get_git_diff().await {
-                        Ok((is_git_repo, diff_text)) => {
-                            if is_git_repo {
-                                diff_text
-                            } else {
-                                "`/diff` — _not inside a git repository_".to_string()
-                            }
-                        }
-                        Err(e) => format!("Failed to compute diff: {e}"),
-                    };
-                    tx.send(AppEvent::DiffResult(text));
-                });
-            }
-            SlashCommand::Copy => {
-                self.copy_latest_output_to_clipboard();
-            }
-            SlashCommand::Mention => {
-                self.insert_str("@");
-            }
-            SlashCommand::Skills => {
-                self.open_skills_menu();
-            }
-            SlashCommand::Status => {
-                if self.should_prefetch_rate_limits() {
-                    let request_id = self.next_status_refresh_request_id;
-                    self.next_status_refresh_request_id =
-                        self.next_status_refresh_request_id.wrapping_add(1);
-                    self.add_status_output(/*refreshing_rate_limits*/ true, Some(request_id));
-                    self.app_event_tx
-                        .send(AppEvent::RefreshRateLimits { request_id });
-                } else {
-                    self.add_status_output(
-                        /*refreshing_rate_limits*/ false, /*request_id*/ None,
-                    );
-                }
-            }
-            SlashCommand::Insight => {
-                self.add_info_message(insight::start_message(), /*hint*/ None);
-                insight::spawn_report_generation(self.config.clone(), self.app_event_tx.clone());
-            }
-            SlashCommand::DebugConfig => {
-                self.add_debug_config_output();
-            }
-            SlashCommand::Title => {
-                self.open_terminal_title_setup();
-            }
-            SlashCommand::Statusline => {
-                self.open_status_line_setup();
-            }
-            SlashCommand::Theme => {
-                self.open_theme_picker();
-            }
-            SlashCommand::Ps => {
-                self.add_ps_output();
-            }
-            SlashCommand::Stop => {
-                self.clean_background_terminals();
-            }
-            SlashCommand::MemoryDrop => {
-                self.add_app_server_stub_message("Memory maintenance");
-            }
-            SlashCommand::MemoryUpdate => {
-                self.add_app_server_stub_message("Memory maintenance");
-            }
-            SlashCommand::Mcp => {
-                self.add_mcp_output();
-            }
-            SlashCommand::Apps => {
-                self.add_connectors_output();
-            }
-            SlashCommand::Plugins => {
-                self.add_plugins_output();
-            }
-            SlashCommand::Workflow => {
-                self.app_event_tx.send(AppEvent::OpenWorkflowControls);
-            }
-            SlashCommand::Btw => {
-                self.add_error_message("Usage: /btw <temporary discussion prompt>".to_string());
-            }
-            SlashCommand::Rollout => {
-                if let Some(path) = self.rollout_path() {
-                    self.add_info_message(
-                        format!("Current rollout path: {}", path.display()),
-                        /*hint*/ None,
-                    );
-                } else {
-                    self.add_info_message(
-                        "Rollout path is not available yet.".to_string(),
-                        /*hint*/ None,
-                    );
-                }
-            }
-            SlashCommand::TestApproval => {
-                use std::collections::HashMap;
-
-                use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
-                use codex_protocol::protocol::FileChange;
-
-                self.on_apply_patch_approval_request(
-                    "1".to_string(),
-                    ApplyPatchApprovalRequestEvent {
-                        call_id: "1".to_string(),
-                        turn_id: "turn-1".to_string(),
-                        changes: HashMap::from([
-                            (
-                                PathBuf::from("/tmp/test.txt"),
-                                FileChange::Add {
-                                    content: "test".to_string(),
-                                },
-                            ),
-                            (
-                                PathBuf::from("/tmp/test2.txt"),
-                                FileChange::Update {
-                                    unified_diff: "+test\n-test2".to_string(),
-                                    move_path: None,
-                                },
-                            ),
-                        ]),
-                        reason: None,
-                        grant_root: Some(PathBuf::from("/tmp")),
-                    },
-                );
-            }
-        }
     /// Copy the last agent response as plain text to the system clipboard.
     pub(crate) fn copy_last_agent_plain_text(&mut self) {
         self.copy_last_agent_plain_text_with(crate::clipboard_copy::copy_to_clipboard);
@@ -7280,122 +6933,33 @@ impl ChatWidget {
     #[cfg(test)]
     fn replay_initial_messages(&mut self, events: Vec<EventMsg>) {
         for msg in events {
-            if matches!(
-                msg,
-                EventMsg::SessionConfigured(_) | EventMsg::ThreadNameUpdated(_)
-            ) {
+            if matches!(msg, EventMsg::SessionConfigured(_)) {
                 continue;
             }
-            // `id: None` indicates a synthetic/fake id coming from replay.
-            self.dispatch_event_msg(
-                /*id*/ None,
-                msg,
-                Some(ReplayKind::ResumeInitialMessages),
-            );
+            self.dispatch_event_msg(msg, Some(ReplayKind::ResumeInitialMessages));
         }
     }
 
     #[cfg(test)]
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
-        let Event { id, msg } = event;
-        self.dispatch_event_msg(Some(id), msg, /*replay_kind*/ None);
+        self.dispatch_event_msg(event.msg, /*replay_kind*/ None);
     }
 
     #[cfg(test)]
     pub(crate) fn handle_codex_event_replay(&mut self, event: Event) {
-        let Event { msg, .. } = event;
-        if matches!(msg, EventMsg::ShutdownComplete) {
-            return;
-        }
-        self.dispatch_event_msg(/*id*/ None, msg, Some(ReplayKind::ThreadSnapshot));
+        self.dispatch_event_msg(event.msg, Some(ReplayKind::ThreadSnapshot));
     }
 
-    /// Dispatch a protocol `EventMsg` to the appropriate handler.
-    ///
-    /// `id` is `Some` for live events and `None` for replayed events from
-    /// `replay_initial_messages()`. Callers should treat `None` as a "fake" id
-    /// that must not be used to correlate follow-up actions.
     #[cfg(test)]
-    fn dispatch_event_msg(
-        &mut self,
-        id: Option<String>,
-        msg: EventMsg,
-        replay_kind: Option<ReplayKind>,
-    ) {
+    fn dispatch_event_msg(&mut self, msg: EventMsg, replay_kind: Option<ReplayKind>) {
         let from_replay = replay_kind.is_some();
-        let is_resume_initial_replay =
-            matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages));
-        let is_stream_error = matches!(&msg, EventMsg::StreamError(_));
-        if !is_resume_initial_replay && !is_stream_error {
-            self.restore_retry_status_header_if_present();
-        }
-
         match msg {
-            EventMsg::AgentMessageDelta(_)
-            | EventMsg::PlanDelta(_)
-            | EventMsg::AgentReasoningDelta(_)
-            | EventMsg::TerminalInteraction(_)
-            | EventMsg::PatchApplyUpdated(_)
-            | EventMsg::ExecCommandOutputDelta(_) => {}
-            _ => {
-                tracing::trace!("handle_codex_event: {:?}", msg);
-            }
-        }
-
-        match msg {
-            EventMsg::SessionConfigured(e) => self.on_session_configured(e),
-            EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
-            // NOTE: All three AgentMessage arms feed `record_agent_markdown` even
-            // when the message is otherwise not rendered (thread-snapshot replay,
-            // non-review live messages). This ensures the copy source stays
-            // populated across replay, resume, and live paths.
-            EventMsg::AgentMessage(AgentMessageEvent { message, .. })
-                if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
-                    && !self.is_review_mode =>
-            {
-                if !message.is_empty() {
-                    self.record_agent_markdown(&message);
-                }
-            }
-            EventMsg::AgentMessage(AgentMessageEvent { message, .. })
-                if from_replay || self.is_review_mode =>
-            {
-                if !message.is_empty() {
-                    self.record_agent_markdown(&message);
-                }
-                // TODO(ccunningham): stop relying on legacy AgentMessage in review mode,
-                // including thread-snapshot replay, and forward
-                // ItemCompleted(TurnItem::AgentMessage(_)) instead.
-                self.on_agent_message(message)
+            EventMsg::SessionConfigured(event) => {
+                self.handle_thread_session(Self::thread_session_state_from_event(event));
             }
             EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
                 if !message.is_empty() {
                     self.record_agent_markdown(&message);
-                }
-            }
-            EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
-                self.on_agent_message_delta(delta)
-            }
-            EventMsg::PlanDelta(event) => self.on_plan_delta(event.delta),
-            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }) => {
-                self.on_agent_reasoning_delta(delta)
-            }
-            EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
-                delta,
-            }) => self.on_raw_reasoning_delta(delta),
-            EventMsg::AgentReasoning(AgentReasoningEvent { .. }) => self.on_agent_reasoning_final(),
-            EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
-                self.on_raw_reasoning_delta(text);
-                self.on_agent_reasoning_final();
-            }
-            EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
-            EventMsg::TurnStarted(event) => {
-                let turn_id = event.turn_id;
-                let model_context_window = event.model_context_window;
-                self.last_turn_id = Some(turn_id);
-                if !is_resume_initial_replay {
-                    self.apply_turn_started_context_window(model_context_window);
-                    self.on_task_started();
                 }
             }
             EventMsg::TurnComplete(TurnCompleteEvent {
@@ -7405,250 +6969,62 @@ impl ChatWidget {
             }) => {
                 self.on_task_complete(last_agent_message, duration_ms, from_replay);
             }
-            EventMsg::TokenCount(ev) => {
-                self.set_token_info(ev.info);
-                self.on_rate_limit_snapshot(ev.rate_limits);
-            }
-            EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
-            EventMsg::GuardianAssessment(ev) => self.on_guardian_assessment(ev),
-            EventMsg::ModelReroute(_) => {}
-            EventMsg::Error(ErrorEvent {
-                message,
-                codex_error_info,
-            }) => {
-                if codex_error_info
-                    .as_ref()
-                    .is_some_and(|info| self.handle_steer_rejected_error(info))
-                {
-                } else if let Some(action) = codex_error_info
-                    .as_ref()
-                    .filter(|_| self.has_retryable_user_turn())
-                    .and_then(core_profile_fallback_action)
-                {
-                    self.session_telemetry.counter(
-                        "codex.profile_fallback.core",
-                        /*inc*/ 1,
-                        &[("action", profile_fallback_action_label(action))],
-                    );
-                    self.app_event_tx
-                        .send(AppEvent::RetryLastUserTurnWithProfileFallback {
-                            action,
-                            error_message: message,
-                        });
-                } else if let Some(kind) = codex_error_info
-                    .as_ref()
-                    .and_then(core_rate_limit_error_kind)
-                {
-                    match kind {
-                        RateLimitErrorKind::ServerOverloaded => {
-                            self.on_server_overloaded_error(message)
-                        }
-                        RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                            self.on_error(message)
-                        }
-                    }
-                } else {
-                    self.on_error(message);
-                }
-            }
-            EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
-            EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
-            EventMsg::TurnAborted(ev) => match ev.reason {
-                TurnAbortReason::Interrupted => {
-                    self.on_interrupted_turn(ev.reason);
-                }
-                TurnAbortReason::Replaced => {
-                    self.submit_pending_steers_after_interrupt = false;
-                    self.pending_steers.clear();
-                    self.refresh_pending_input_preview();
-                    self.on_error("Turn aborted: replaced by a new task".to_owned())
-                }
-                TurnAbortReason::ReviewEnded => {
-                    self.on_interrupted_turn(ev.reason);
-                }
-            },
-            EventMsg::PlanUpdate(update) => self.on_plan_update(update),
-            EventMsg::ExecApprovalRequest(ev) => {
-                // For replayed events, synthesize an empty id (these should not occur).
-                self.on_exec_approval_request(id.unwrap_or_default(), ev)
-            }
-            EventMsg::ApplyPatchApprovalRequest(ev) => {
-                self.on_apply_patch_approval_request(id.unwrap_or_default(), ev)
-            }
-            EventMsg::ElicitationRequest(ev) => {
-                self.on_elicitation_request(ev);
-            }
-            EventMsg::RequestUserInput(ev) => {
-                self.on_request_user_input(ev);
-            }
-            EventMsg::RequestPermissions(ev) => {
-                self.on_request_permissions(ev);
-            }
-            EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
-            EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
-            EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
-            EventMsg::PatchApplyBegin(ev) => self.on_patch_apply_begin(ev),
-            EventMsg::PatchApplyEnd(ev) => self.on_patch_apply_end(ev),
-            EventMsg::ExecCommandEnd(ev) => self.on_exec_command_end(ev),
-            EventMsg::ViewImageToolCall(ev) => self.on_view_image_tool_call(ev),
-            EventMsg::ImageGenerationBegin(ev) => self.on_image_generation_begin(ev),
-            EventMsg::ImageGenerationEnd(ev) => self.on_image_generation_end(ev),
-            EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
-            EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
-            EventMsg::WebSearchBegin(ev) => self.on_web_search_begin(ev),
-            EventMsg::WebSearchEnd(ev) => self.on_web_search_end(ev),
-            EventMsg::GetHistoryEntryResponse(ev) => self.handle_history_entry_response(ev),
-            EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
-            EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
-            EventMsg::SkillsUpdateAvailable => {
-                self.refresh_skills_for_current_cwd(/*force_reload*/ true);
-            }
-            EventMsg::ShutdownComplete => self.on_shutdown_complete(),
-            EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
-            EventMsg::DeprecationNotice(ev) => self.on_deprecation_notice(ev),
-            EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
-                self.on_background_event(message)
-            }
-            EventMsg::UndoStarted(ev) => self.on_undo_started(ev),
-            EventMsg::UndoCompleted(ev) => self.on_undo_completed(ev),
-            EventMsg::StreamError(StreamErrorEvent {
-                message,
-                additional_details,
-                ..
-            }) => {
-                if !is_resume_initial_replay {
-                    self.on_stream_error(message, additional_details);
-                }
-            }
-            EventMsg::UserMessage(ev) => {
-                if from_replay || self.should_render_realtime_user_message_event(&ev) {
-                    self.on_user_message_event(ev);
-                }
-            }
-            EventMsg::EnteredReviewMode(review_request) => {
-                self.on_entered_review_mode(review_request, from_replay)
-            }
-            EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            EventMsg::ContextCompacted(_) => {}
-            EventMsg::CollabAgentSpawnBegin(CollabAgentSpawnBeginEvent {
-                call_id,
-                model,
-                reasoning_effort,
-                ..
-            }) => {
-                self.pending_collab_spawn_requests.insert(
-                    call_id,
-                    multi_agents::SpawnRequestSummary {
-                        model,
-                        reasoning_effort,
-                    },
+            EventMsg::PatchApplyBegin(ev) => self.on_patch_apply_begin(
+                ev.changes
+                    .into_iter()
+                    .map(|(path, change)| {
+                        let change = match change {
+                            codex_protocol::protocol::FileChange::Add { content } => {
+                                FileChange::Add { content }
+                            }
+                            codex_protocol::protocol::FileChange::Delete { content } => {
+                                FileChange::Delete { content }
+                            }
+                            codex_protocol::protocol::FileChange::Update {
+                                unified_diff,
+                                move_path,
+                            } => FileChange::Update {
+                                unified_diff,
+                                move_path,
+                            },
+                        };
+                        (path, change)
+                    })
+                    .collect(),
+            ),
+            EventMsg::ThreadRolledBack(rollback) => {
+                self.truncate_agent_copy_history_to_user_turn_count(
+                    self.visible_user_turn_count
+                        .saturating_sub(rollback.num_turns as usize),
                 );
             }
-            EventMsg::CollabAgentSpawnEnd(ev) => {
-                let spawn_request = self.pending_collab_spawn_requests.remove(&ev.call_id);
-                self.on_collab_event(multi_agents::spawn_end(ev, spawn_request.as_ref()));
-            }
-            EventMsg::CollabAgentInteractionBegin(_) => {}
-            EventMsg::CollabAgentInteractionEnd(ev) => {
-                self.on_collab_event(multi_agents::interaction_end(ev))
-            }
-            EventMsg::CollabWaitingBegin(ev) => {
-                self.on_collab_event(multi_agents::waiting_begin(ev))
-            }
-            EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(multi_agents::waiting_end(ev)),
-            EventMsg::CollabCloseBegin(_) => {}
-            EventMsg::CollabCloseEnd(ev) => self.on_collab_event(multi_agents::close_end(ev)),
-            EventMsg::CollabResumeBegin(ev) => self.on_collab_event(multi_agents::resume_begin(ev)),
-            EventMsg::CollabResumeEnd(ev) => self.on_collab_event(multi_agents::resume_end(ev)),
-            EventMsg::ThreadRolledBack(rollback) => {
-                self.last_agent_markdown = None;
-                self.saw_copy_source_this_turn = false;
-                if from_replay {
-                    self.app_event_tx.send(AppEvent::ApplyThreadRollback {
-                        num_turns: rollback.num_turns,
-                    });
-                }
-            }
-            EventMsg::RawResponseItem(_)
-            | EventMsg::ItemStarted(_)
-            | EventMsg::AgentMessageContentDelta(_)
-            | EventMsg::PatchApplyUpdated(_)
-            | EventMsg::ReasoningContentDelta(_)
-            | EventMsg::ReasoningRawContentDelta(_)
-            | EventMsg::DynamicToolCallRequest(_)
-            | EventMsg::DynamicToolCallResponse(_)
-            | EventMsg::RealtimeConversationListVoicesResponse(_) => {}
-            EventMsg::HookStarted(event) => self.on_hook_started(event.run),
-            EventMsg::HookCompleted(event) => self.on_hook_completed(event.run),
-            EventMsg::RealtimeConversationStarted(ev) => {
-                if !from_replay {
-                    self.on_realtime_conversation_started(ev);
-                }
-            }
-            EventMsg::RealtimeConversationSdp(ev) => {
-                if !from_replay {
-                    self.on_realtime_conversation_sdp(ev.sdp);
-                }
-            }
-            EventMsg::RealtimeConversationRealtime(ev) => {
-                if !from_replay {
-                    self.on_realtime_conversation_realtime(ev);
-                }
-            }
-            EventMsg::RealtimeConversationClosed(ev) => {
-                if !from_replay {
-                    self.on_realtime_conversation_closed(ev);
-                }
-            }
-            EventMsg::ItemCompleted(event) => {
-                let item = event.item;
-                if !from_replay && let codex_protocol::items::TurnItem::UserMessage(item) = &item {
-                    let EventMsg::UserMessage(event) = item.as_legacy_event() else {
-                        unreachable!("user message item should convert to a legacy user message");
-                    };
-                    let rendered = Self::rendered_user_message_event_from_event(&event);
-                    let compare_key = Self::pending_steer_compare_key_from_item(item);
-                    if self
-                        .pending_steers
-                        .front()
-                        .is_some_and(|pending| pending.compare_key == compare_key)
-                    {
-                        if let Some(pending) = self.pending_steers.pop_front() {
-                            self.refresh_pending_input_preview();
-                            let pending_event = UserMessageEvent {
-                                message: pending.user_message.text,
-                                images: Some(pending.user_message.remote_image_urls),
-                                local_images: pending
-                                    .user_message
-                                    .local_images
-                                    .into_iter()
-                                    .map(|image| image.path)
-                                    .collect(),
-                                text_elements: pending.user_message.text_elements,
-                            };
-                            self.on_user_message_event(pending_event);
-                        } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered)
-                        {
-                            tracing::warn!(
-                                "pending steer matched compare key but queue was empty when rendering committed user message"
-                            );
-                            self.on_user_message_event(event);
-                        }
-                    } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered) {
-                        self.on_user_message_event(event);
-                    }
-                }
-                if let codex_protocol::items::TurnItem::Plan(plan_item) = &item {
-                    self.on_plan_item_completed(plan_item.text.clone());
-                }
-                if let codex_protocol::items::TurnItem::AgentMessage(item) = item {
-                    self.on_agent_message_item_completed(item);
-                }
-            }
+            unsupported => panic!("unsupported test event: {unsupported:?}"),
         }
+    }
 
-        if !from_replay && self.agent_turn_running {
-            self.refresh_runtime_metrics();
+    #[cfg(test)]
+    fn thread_session_state_from_event(event: SessionConfiguredEvent) -> ThreadSessionState {
+        ThreadSessionState {
+            thread_id: event.thread_id,
+            forked_from_id: event.forked_from_id,
+            fork_parent_title: None,
+            thread_name: event.thread_name,
+            model: event.model,
+            model_provider_id: event.model_provider_id,
+            service_tier: event.service_tier,
+            approval_policy: event.approval_policy.into(),
+            approvals_reviewer: event.approvals_reviewer,
+            permission_profile: event.permission_profile,
+            active_permission_profile: event.active_permission_profile,
+            cwd: event.cwd,
+            instruction_source_paths: Vec::new(),
+            reasoning_effort: event.reasoning_effort,
+            message_history: None,
+            network_proxy: event.network_proxy.map(|proxy| SessionNetworkProxyRuntime {
+                http_addr: proxy.http_addr,
+                socks_addr: proxy.socks_addr,
+            }),
+            rollout_path: event.rollout_path,
         }
     }
     fn enter_review_mode_with_hint(&mut self, hint: String, from_replay: bool) {
@@ -10164,7 +9540,11 @@ impl ChatWidget {
     pub(crate) fn clear_windows_sandbox_setup_status(&mut self) {}
 
     /// Set the approval policy in the widget's config copy.
-    pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
+    pub(crate) fn set_approval_policy<P>(&mut self, policy: P)
+    where
+        P: Into<AskForApproval>,
+    {
+        let policy = policy.into();
         if let Err(err) = self
             .config
             .permissions
@@ -10182,6 +9562,18 @@ impl ChatWidget {
         profile: PermissionProfile,
     ) -> ConstraintResult<()> {
         self.config.permissions.set_permission_profile(profile)
+    }
+
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn set_sandbox_policy(
+        &mut self,
+        sandbox_policy: SandboxPolicy,
+    ) -> ConstraintResult<()> {
+        let profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+            &sandbox_policy,
+            self.config.cwd.as_path(),
+        );
+        self.set_permission_profile(profile)
     }
 
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -11758,15 +11150,11 @@ impl ChatWidget {
     pub(crate) fn sync_config_for_profile_switch(&mut self, config: &Config) {
         self.config = config.clone();
         self.set_approval_policy(self.config.permissions.approval_policy.value());
-        if let Err(err) =
-            self.set_sandbox_policy(self.config.permissions.sandbox_policy.get().clone())
-        {
-            tracing::warn!(%err, "failed to set sandbox policy after profile switch");
-        }
+        let _ = self.set_permission_profile(self.config.permissions.permission_profile());
         self.set_approvals_reviewer(self.config.approvals_reviewer);
         self.set_reasoning_effort(self.config.model_reasoning_effort);
         self.set_plan_mode_reasoning_effort(self.config.plan_mode_reasoning_effort);
-        self.set_service_tier(self.config.service_tier);
+        self.set_service_tier(self.configured_service_tier());
         if let Some(model) = self.config.model.clone() {
             self.set_model(&model);
         }

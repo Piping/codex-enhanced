@@ -299,6 +299,7 @@ fn source_fields(
             source.get_agent_path().map(|path| path.to_string()),
         ),
         SessionSource::Custom(other) => (None, None, other.clone(), None, None, None),
+        SessionSource::Internal(_) => (None, None, "internal".to_string(), None, None, None),
         SessionSource::Unknown => (None, None, "unknown".to_string(), None, None, None),
     }
 }

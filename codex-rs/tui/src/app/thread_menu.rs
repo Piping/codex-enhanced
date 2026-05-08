@@ -184,6 +184,7 @@ mod tests {
                 /*task_running*/ false, /*initial_selected_idx*/ None,
             ),
             tx,
+            crate::keymap::RuntimeKeymap::defaults().list,
         );
 
         assert_snapshot!(
@@ -222,6 +223,7 @@ mod tests {
         let view = ListSelectionView::new(
             jump_to_message_panel_params(&cells, /*initial_selected_idx*/ None),
             tx,
+            crate::keymap::RuntimeKeymap::defaults().list,
         );
 
         assert_snapshot!(
@@ -238,6 +240,7 @@ mod tests {
         let view = ListSelectionView::new(
             jump_to_message_panel_params(&cells, /*initial_selected_idx*/ None),
             tx,
+            crate::keymap::RuntimeKeymap::defaults().list,
         );
 
         assert_snapshot!(

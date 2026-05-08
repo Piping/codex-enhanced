@@ -40,6 +40,72 @@ impl App {
         }
     }
 
+    pub(super) async fn apply_runtime_config_change(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        next_config: Config,
+        reload_live_thread: bool,
+    ) -> std::result::Result<(), String> {
+        if !reload_live_thread || self.chat_widget.thread_id().is_none() {
+            self.active_profile = next_config.active_profile.clone();
+            self.config = next_config;
+            self.display_preferences.sync_from_config(&self.config);
+            self.chat_widget
+                .sync_config_for_profile_switch(&self.config);
+            tui.set_notification_settings(
+                self.config.tui_notifications.method,
+                self.config.tui_notifications.condition,
+            );
+            self.file_search
+                .update_search_dir(self.config.cwd.to_path_buf());
+            return Ok(());
+        }
+
+        if self.chat_widget.is_task_running() {
+            return Err("Cannot switch API profile while a task is in progress.".to_string());
+        }
+
+        let input_state = self.chat_widget.capture_thread_input_state();
+        let can_resume_live_thread = self
+            .chat_widget
+            .rollout_path()
+            .as_ref()
+            .is_some_and(|path| path.exists());
+        let thread_id = self
+            .chat_widget
+            .thread_id()
+            .ok_or_else(|| "No active thread to reload after switching profiles.".to_string())?;
+        self.close_active_thread_for_profile_reload(app_server, thread_id)
+            .await?;
+        let next_thread = if can_resume_live_thread {
+            app_server
+                .resume_thread(next_config.clone(), thread_id)
+                .await
+                .map_err(|err| {
+                    format!("Failed to reload current session after switching profiles: {err}")
+                })?
+        } else {
+            app_server.start_thread(&next_config).await.map_err(|err| {
+                format!("Failed to start a fresh session after switching profiles: {err}")
+            })?
+        };
+        self.active_profile = next_config.active_profile.clone();
+        self.config = next_config;
+        self.display_preferences.sync_from_config(&self.config);
+        tui.set_notification_settings(
+            self.config.tui_notifications.method,
+            self.config.tui_notifications.condition,
+        );
+        self.file_search
+            .update_search_dir(self.config.cwd.to_path_buf());
+        self.replace_chat_widget_with_app_server_thread(tui, app_server, next_thread, None)
+            .await
+            .map_err(|err| err.to_string())?;
+        self.chat_widget.restore_thread_input_state(input_state);
+        Ok(())
+    }
+
     pub(super) async fn rebuild_config_for_resume_or_fallback(
         &mut self,
         current_cwd: &Path,
@@ -65,7 +131,7 @@ impl App {
 
     pub(super) fn apply_runtime_policy_overrides(&mut self, config: &mut Config) {
         if let Some(policy) = self.runtime_approval_policy_override.as_ref()
-            && let Err(err) = config.permissions.approval_policy.set(policy.to_core())
+            && let Err(err) = config.permissions.approval_policy.set(*policy)
         {
             tracing::warn!(%err, "failed to carry forward approval policy override");
             self.chat_widget.add_error_message(format!(
@@ -94,7 +160,7 @@ impl App {
         user_message_prefix: &str,
         log_message: &str,
     ) -> bool {
-        if let Err(err) = config.permissions.approval_policy.set(policy.to_core()) {
+        if let Err(err) = config.permissions.approval_policy.set(policy) {
             tracing::warn!(error = %err, "{log_message}");
             self.chat_widget
                 .add_error_message(format!("{user_message_prefix}: {err}"));
@@ -328,7 +394,7 @@ impl App {
             // sessions or turns recreated from disk.
             let op = AppCommand::override_turn_context(
                 /*cwd*/ None,
-                approval_policy_override,
+                approval_policy_override.map(Into::into),
                 approvals_reviewer_override,
                 permission_profile_override,
                 /*windows_sandbox_level*/ None,
@@ -641,7 +707,7 @@ mod tests {
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 service_tier: None,
-                approval_policy: AskForApproval::Never,
+                approval_policy: AskForApproval::Never.into(),
                 approvals_reviewer: ApprovalsReviewer::User,
                 permission_profile: PermissionProfile::read_only(),
                 active_permission_profile: None,

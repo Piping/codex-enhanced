@@ -282,7 +282,7 @@ pub(crate) fn tool_call_history_cell(
     }
 }
 
-fn spawn_end(
+pub(crate) fn spawn_end(
     new_thread_id: Option<ThreadId>,
     prompt: &str,
     spawn_request: Option<&SpawnRequestSummary>,
@@ -304,7 +304,7 @@ fn spawn_end(
     collab_event(title, details)
 }
 
-fn interaction_end(
+pub(crate) fn interaction_end(
     receiver_thread_id: ThreadId,
     prompt: &str,
     agent_metadata: &mut impl FnMut(ThreadId) -> AgentMetadata,
@@ -322,7 +322,7 @@ fn interaction_end(
     collab_event(title, details)
 }
 
-fn waiting_begin(
+pub(crate) fn waiting_begin(
     receiver_thread_ids: &[String],
     agent_metadata: &mut impl FnMut(ThreadId) -> AgentMetadata,
 ) -> PlainHistoryCell {
@@ -354,7 +354,7 @@ fn waiting_begin(
     collab_event(title, details)
 }
 
-fn waiting_end(
+pub(crate) fn waiting_end(
     receiver_thread_ids: &[String],
     agents_states: &std::collections::HashMap<String, CollabAgentState>,
     agent_metadata: &mut impl FnMut(ThreadId) -> AgentMetadata,
@@ -363,7 +363,7 @@ fn waiting_end(
     collab_event(title_text("Finished waiting"), details)
 }
 
-fn close_end(
+pub(crate) fn close_end(
     receiver_thread_id: ThreadId,
     agent_metadata: &mut impl FnMut(ThreadId) -> AgentMetadata,
 ) -> PlainHistoryCell {
@@ -377,7 +377,7 @@ fn close_end(
     )
 }
 
-fn resume_begin(
+pub(crate) fn resume_begin(
     receiver_thread_id: ThreadId,
     agent_metadata: &mut impl FnMut(ThreadId) -> AgentMetadata,
 ) -> PlainHistoryCell {
@@ -391,7 +391,7 @@ fn resume_begin(
     )
 }
 
-fn resume_end(
+pub(crate) fn resume_end(
     receiver_thread_id: ThreadId,
     status: Option<&CollabAgentState>,
     fallback_error: &str,

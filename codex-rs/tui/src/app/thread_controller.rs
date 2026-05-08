@@ -66,7 +66,9 @@ impl ThreadController {
                         Ok(forked) => {
                             app.shutdown_current_thread(app_server).await;
                             match app
-                                .replace_chat_widget_with_app_server_thread(tui, app_server, forked)
+                                .replace_chat_widget_with_app_server_thread(
+                                    tui, app_server, forked, None,
+                                )
                                 .await
                             {
                                 Ok(()) => {

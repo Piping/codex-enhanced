@@ -27,6 +27,7 @@ use super::InitialHistoryReplayBuffer;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
 use crate::insert_history::HistoryLineWrapPolicy;
+use crate::pager_overlay::Overlay;
 use crate::transcript_reflow::TRANSCRIPT_REFLOW_DEBOUNCE;
 use crate::tui;
 
@@ -104,6 +105,20 @@ impl App {
         } else {
             tui.insert_history_lines_with_wrap_policy(display, self.history_line_wrap_policy());
         }
+    }
+
+    pub(super) fn insert_visible_history_cell(
+        &mut self,
+        tui: &mut tui::Tui,
+        cell: Arc<dyn HistoryCell>,
+    ) {
+        if let Some(Overlay::Transcript(transcript)) = &mut self.overlay {
+            transcript.insert_cell(cell.clone());
+            tui.frame_requester().schedule_frame();
+        }
+        self.transcript_cells.push(cell.clone());
+        let width = tui.terminal.last_known_screen_size.width;
+        self.insert_history_cell_lines(tui, cell.as_ref(), width);
     }
 
     pub(super) fn terminal_resize_reflow_enabled(&self) -> bool {

@@ -12,10 +12,10 @@ use super::workflow_history::WorkflowReplySource;
 use super::workflow_history::workflow_result_cell;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
-use crate::app_server_session::ThreadSessionState;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
 use crate::legacy_core::config::Config;
+use crate::session_state::ThreadSessionState;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::ClientRequest;
@@ -416,9 +416,15 @@ impl WorkflowRuntimeClient for AppServerWorkflowRuntimeClient {
                         approval_policy: Some(execution_config.approval_policy.into()),
                         approvals_reviewer: Some(execution_config.approvals_reviewer.into()),
                         sandbox_policy: Some(execution_config.sandbox_policy.into()),
+                        permissions: None,
+                        environments: None,
                         model: Some(execution_config.model),
                         responsesapi_client_metadata: None,
-                        service_tier: Some(execution_config.service_tier),
+                        service_tier: Some(
+                            execution_config
+                                .service_tier
+                                .map(|service_tier| service_tier.request_value().to_string()),
+                        ),
                         effort: execution_config.reasoning_effort,
                         summary: self.config.model_reasoning_summary,
                         personality: None,
@@ -584,10 +590,16 @@ impl AppServerWorkflowRuntimeClient {
         let mut execution_config = WorkflowExecutionConfig {
             model: session.model.clone(),
             model_provider_id: session.model_provider_id.clone(),
-            service_tier: session.service_tier,
-            approval_policy: session.approval_policy,
+            service_tier: session
+                .service_tier
+                .as_deref()
+                .and_then(codex_protocol::config_types::ServiceTier::from_request_value),
+            approval_policy: session.approval_policy.to_core(),
             approvals_reviewer: session.approvals_reviewer,
-            sandbox_policy: session.sandbox_policy.clone(),
+            sandbox_policy: session
+                .permission_profile
+                .to_legacy_sandbox_policy(session.cwd.as_path())
+                .unwrap_or(SandboxPolicy::DangerFullAccess),
             cwd: session.cwd.to_path_buf(),
             reasoning_effort: session.reasoning_effort,
         };
@@ -1719,19 +1731,25 @@ fn workflow_thread_start_params(
     ThreadStartParams {
         model: Some(execution_config.model.clone()),
         model_provider: (!is_remote).then_some(execution_config.model_provider_id.clone()),
-        service_tier: Some(execution_config.service_tier),
+        service_tier: Some(
+            execution_config
+                .service_tier
+                .map(|service_tier| service_tier.request_value().to_string()),
+        ),
         cwd: workflow_thread_cwd(execution_config, is_remote, remote_cwd_override),
         approval_policy: Some(execution_config.approval_policy.into()),
         approvals_reviewer: Some(AppServerApprovalsReviewer::from(
             execution_config.approvals_reviewer,
         )),
         sandbox: sandbox_mode_from_policy(execution_config.sandbox_policy.clone()),
+        permissions: None,
         config: active_profile.map(|profile| {
             HashMap::from([(
                 "profile".to_string(),
                 serde_json::Value::String(profile.to_string()),
             )])
         }),
+        environments: None,
         ephemeral: Some(true),
         persist_extended_history: true,
         ..ThreadStartParams::default()
@@ -1749,13 +1767,18 @@ fn workflow_thread_fork_params(
         thread_id: thread_id.to_string(),
         model: Some(execution_config.model.clone()),
         model_provider: (!is_remote).then_some(execution_config.model_provider_id.clone()),
-        service_tier: Some(execution_config.service_tier),
+        service_tier: Some(
+            execution_config
+                .service_tier
+                .map(|service_tier| service_tier.request_value().to_string()),
+        ),
         cwd: workflow_thread_cwd(execution_config, is_remote, remote_cwd_override),
         approval_policy: Some(execution_config.approval_policy.into()),
         approvals_reviewer: Some(AppServerApprovalsReviewer::from(
             execution_config.approvals_reviewer,
         )),
         sandbox: sandbox_mode_from_policy(execution_config.sandbox_policy.clone()),
+        permissions: None,
         config: active_profile.map(|profile| {
             HashMap::from([(
                 "profile".to_string(),
@@ -2487,6 +2510,7 @@ jobs:
                     },
                     thread_id: thread.thread_id.clone(),
                     turn_id: "turn-1".to_string(),
+                    completed_at_ms: 0,
                 },
             ))
             .expect("item completed notification");
@@ -2497,6 +2521,7 @@ jobs:
                     turn: codex_app_server_protocol::Turn {
                         id: "turn-1".to_string(),
                         items: Vec::new(),
+                        items_view: Default::default(),
                         error: None,
                         status: TurnStatus::Completed,
                         started_at: None,
@@ -2575,6 +2600,7 @@ jobs:
                     },
                     thread_id: thread.thread_id.clone(),
                     turn_id: "turn-1".to_string(),
+                    completed_at_ms: 0,
                 },
             ))
             .expect("item completed notification");
@@ -2585,6 +2611,7 @@ jobs:
                     turn: codex_app_server_protocol::Turn {
                         id: "turn-1".to_string(),
                         items: Vec::new(),
+                        items_view: Default::default(),
                         error: None,
                         status: TurnStatus::Completed,
                         started_at: None,

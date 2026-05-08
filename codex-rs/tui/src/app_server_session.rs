@@ -75,6 +75,8 @@ use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioResponse;
+use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
+use codex_app_server_protocol::ThreadRealtimeAppendTextResponse;
 use codex_app_server_protocol::ThreadRealtimeAudioChunk;
 use codex_app_server_protocol::ThreadRealtimeStartParams;
 use codex_app_server_protocol::ThreadRealtimeStartResponse;
@@ -115,6 +117,10 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::protocol::ConversationAudioParams;
+use codex_protocol::protocol::ConversationStartParams as CoreConversationStartParams;
+use codex_protocol::protocol::ConversationStartTransport as CoreConversationStartTransport;
+use codex_protocol::protocol::ConversationTextParams as CoreConversationTextParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::Result;
@@ -907,11 +913,10 @@ impl AppServerSession {
     pub(crate) async fn thread_realtime_start(
         &mut self,
         thread_id: ThreadId,
-        transport: Option<ThreadRealtimeStartTransport>,
-        voice: Option<serde_json::Value>,
+        params: CoreConversationStartParams,
     ) -> Result<()> {
         let request_id = self.next_request_id();
-        let params = thread_realtime_start_params(thread_id, transport, voice)?;
+        let params = thread_realtime_start_params(thread_id, params)?;
         let _: ThreadRealtimeStartResponse = self
             .client
             .request_typed(ClientRequest::ThreadRealtimeStart { request_id, params })
@@ -923,7 +928,7 @@ impl AppServerSession {
     pub(crate) async fn thread_realtime_audio(
         &mut self,
         thread_id: ThreadId,
-        frame: ThreadRealtimeAudioChunk,
+        params: ConversationAudioParams,
     ) -> Result<()> {
         let request_id = self.next_request_id();
         let _: ThreadRealtimeAppendAudioResponse = self
@@ -932,11 +937,31 @@ impl AppServerSession {
                 request_id,
                 params: ThreadRealtimeAppendAudioParams {
                     thread_id: thread_id.to_string(),
-                    audio: frame,
+                    audio: params.frame.into(),
                 },
             })
             .await
             .wrap_err("thread/realtime/appendAudio failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_realtime_text(
+        &mut self,
+        thread_id: ThreadId,
+        params: CoreConversationTextParams,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadRealtimeAppendTextResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadRealtimeAppendText {
+                request_id,
+                params: ThreadRealtimeAppendTextParams {
+                    thread_id: thread_id.to_string(),
+                    text: params.text,
+                },
+            })
+            .await
+            .wrap_err("thread/realtime/appendText failed in TUI")?;
         Ok(())
     }
 
@@ -988,8 +1013,7 @@ impl AppServerSession {
 
 fn thread_realtime_start_params(
     thread_id: ThreadId,
-    transport: Option<ThreadRealtimeStartTransport>,
-    voice: Option<serde_json::Value>,
+    params: CoreConversationStartParams,
 ) -> Result<ThreadRealtimeStartParams> {
     let mut value = serde_json::Map::new();
     value.insert(
@@ -998,16 +1022,42 @@ fn thread_realtime_start_params(
     );
     value.insert(
         "outputModality".to_string(),
-        serde_json::Value::String("audio".to_string()),
+        serde_json::Value::String(match params.output_modality {
+            codex_protocol::protocol::RealtimeOutputModality::Text => "text".to_string(),
+            codex_protocol::protocol::RealtimeOutputModality::Audio => "audio".to_string(),
+        }),
     );
-    if let Some(transport) = transport {
+    if let Some(transport) = params.transport {
         value.insert(
             "transport".to_string(),
-            serde_json::to_value(transport).wrap_err("serializing realtime transport")?,
+            serde_json::to_value(match transport {
+                CoreConversationStartTransport::Websocket => {
+                    ThreadRealtimeStartTransport::Websocket
+                }
+                CoreConversationStartTransport::Webrtc { sdp } => {
+                    ThreadRealtimeStartTransport::Webrtc { sdp }
+                }
+            })
+            .wrap_err("serializing realtime transport")?,
         );
     }
-    if let Some(voice) = voice {
-        value.insert("voice".to_string(), voice);
+    if let Some(voice) = params.voice {
+        value.insert(
+            "voice".to_string(),
+            serde_json::to_value(voice).wrap_err("serializing realtime voice")?,
+        );
+    }
+    if let Some(prompt) = params.prompt {
+        value.insert(
+            "prompt".to_string(),
+            serde_json::to_value(prompt).wrap_err("serializing realtime prompt")?,
+        );
+    }
+    if let Some(realtime_session_id) = params.realtime_session_id {
+        value.insert(
+            "realtimeSessionId".to_string(),
+            serde_json::Value::String(realtime_session_id),
+        );
     }
 
     serde_json::from_value(serde_json::Value::Object(value))

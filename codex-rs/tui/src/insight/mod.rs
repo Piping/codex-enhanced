@@ -117,6 +117,7 @@ mod tests {
                     originator: "codex".to_string(),
                     cli_version: "0.0.0".to_string(),
                     source: SessionSource::Cli,
+                    thread_source: None,
                     agent_nickname: None,
                     agent_role: None,
                     agent_path: None,
@@ -160,6 +161,7 @@ mod tests {
                 call_id: "call-1".to_string(),
                 process_id: None,
                 turn_id: "turn-1".to_string(),
+                completed_at_ms: 0,
                 command: vec!["rg".to_string(), "todo".to_string()],
                 cwd: PathBuf::from("/repo").abs(),
                 parsed_cmd: Vec::new(),
@@ -181,6 +183,7 @@ mod tests {
                 last_agent_message: Some("done".to_string()),
                 completed_at: Some(2),
                 duration_ms: Some(2_000),
+                time_to_first_token_ms: None,
             })),
         };
 

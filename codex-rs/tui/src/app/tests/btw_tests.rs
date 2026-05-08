@@ -53,7 +53,7 @@ async fn btw_thread_start_params_inherit_visible_thread_permissions() -> Result<
     let session = ThreadSessionState {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
-        sandbox_policy: SandboxPolicy::DangerFullAccess,
+        permission_profile: PermissionProfile::Disabled,
         ..test_thread_session(thread_id, test_path_buf("/tmp/project"))
     };
     app.primary_thread_id = Some(thread_id);
@@ -82,7 +82,8 @@ async fn btw_thread_start_params_inherit_visible_thread_permissions() -> Result<
 
     assert_eq!(permissions.approval_policy, session.approval_policy);
     assert_eq!(permissions.approvals_reviewer, session.approvals_reviewer);
-    assert_eq!(permissions.sandbox_policy, session.sandbox_policy);
+    assert_eq!(permissions.permission_profile, session.permission_profile);
+    assert_eq!(permissions.sandbox_policy, SandboxPolicy::DangerFullAccess);
     assert_eq!(params.approval_policy, Some(session.approval_policy.into()));
     assert_eq!(
         params.approvals_reviewer,
@@ -126,15 +127,14 @@ async fn btw_thread_fork_params_create_persistent_subagent_thread() -> Result<()
 #[tokio::test]
 async fn btw_permissions_fall_back_to_config_when_thread_session_is_missing() -> Result<()> {
     let mut app = make_test_app().await;
-    app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     app.config
         .permissions
         .approval_policy
-        .set(AskForApproval::OnRequest)?;
+        .set(AskForApproval::OnRequest.to_core())?;
     app.config
         .permissions
-        .sandbox_policy
-        .set(SandboxPolicy::new_workspace_write_policy())?;
+        .set_permission_profile(PermissionProfile::workspace_write())?;
 
     let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
         .await
@@ -150,7 +150,7 @@ async fn btw_permissions_fall_back_to_config_when_thread_session_is_missing() ->
     assert_eq!(permissions.approval_policy, AskForApproval::OnRequest);
     assert_eq!(
         permissions.approvals_reviewer,
-        ApprovalsReviewer::GuardianSubagent
+        ApprovalsReviewer::AutoReview
     );
     assert_eq!(
         permissions.sandbox_policy,
@@ -162,7 +162,7 @@ async fn btw_permissions_fall_back_to_config_when_thread_session_is_missing() ->
     );
     assert_eq!(
         params.approvals_reviewer,
-        Some(AppServerApprovalsReviewer::GuardianSubagent)
+        Some(AppServerApprovalsReviewer::AutoReview)
     );
     assert_eq!(params.sandbox, Some(SandboxMode::WorkspaceWrite));
     assert_eq!(params.subagent_spawn, None);

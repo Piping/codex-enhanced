@@ -754,6 +754,7 @@ mod tests {
                 /*initial_selected_idx*/ None,
             ),
             tx,
+            crate::keymap::RuntimeKeymap::defaults().list,
         );
 
         assert_snapshot!(
@@ -1013,6 +1014,7 @@ mod tests {
                 /*initial_selected_idx*/ None,
             ),
             tx,
+            crate::keymap::RuntimeKeymap::defaults().list,
         );
 
         assert_snapshot!(

@@ -7,7 +7,7 @@
 use super::*;
 use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
 
-pub(super) async fn make_test_app() -> App {
+pub(crate) async fn make_test_app() -> App {
     let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
@@ -40,6 +40,8 @@ pub(super) async fn make_test_app() -> App {
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         backtrack: BacktrackState::default(),
+        key_chord: KeyChordState::default(),
+        display_preferences: DisplayPreferences::default(),
         backtrack_render_pending: false,
         feedback: codex_feedback::CodexFeedback::new(),
         feedback_audience: FeedbackAudience::External,
@@ -59,9 +61,22 @@ pub(super) async fn make_test_app() -> App {
         last_subagent_backfill_attempt: None,
         primary_session_configured: None,
         pending_primary_events: VecDeque::new(),
+        pending_workflow_compact_followups: VecDeque::new(),
         pending_app_server_requests: PendingAppServerRequests::default(),
         pending_plugin_enabled_writes: HashMap::new(),
         pending_hook_enabled_writes: HashMap::new(),
+        workflow_thread_notification_channels: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        workflow_file_watch: None,
+        workflow_scheduler: WorkflowSchedulerState::default(),
+        workflow_history: WorkflowHistoryState::default(),
+        btw_session: None,
+        clawbot_controls_destination: ClawbotControlsDestination::default(),
+        clawbot_workspace_root: None,
+        clawbot_provider_task: None,
+        clawbot_pending_turns: HashMap::new(),
+        clawbot_outbound_messages: Vec::new(),
+        clawbot_outbound_reactions: Vec::new(),
+        clawbot_removed_outbound_reactions: Vec::new(),
     }
 }
 

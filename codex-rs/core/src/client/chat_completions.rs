@@ -33,8 +33,7 @@ pub(super) async fn stream_chat_completions(
 
     let mut auth_recovery = session
         .client
-        .state
-        .auth_manager
+        .auth_manager()
         .as_ref()
         .map(codex_login::AuthManager::unauthorized_recovery);
     let mut pending_retry = super::PendingUnauthorizedRetry::default();
@@ -47,7 +46,7 @@ pub(super) async fn stream_chat_completions(
         } = session.client.current_client_setup().await?;
         let auth_context = super::AuthRequestTelemetryContext::new(
             auth.as_ref().map(CodexAuth::auth_mode),
-            &api_auth,
+            api_auth.as_ref(),
             pending_retry,
         );
         let transport = ReqwestTransport::new(build_reqwest_client());
@@ -66,14 +65,18 @@ pub(super) async fn stream_chat_completions(
             &prompt.get_formatted_input(),
             &tools,
         )
-        .conversation_id(Some(session.client.state.conversation_id.to_string()))
+        .conversation_id(Some(session.client.state.thread_id.to_string()))
         .session_source(Some(session.client.state.session_source.clone()))
         .build();
 
         let stream_result = client.stream_request(request).await;
         match stream_result {
             Ok(stream) => {
-                let (stream, _) = super::map_response_stream(stream, session_telemetry.clone());
+                let (stream, _) = super::map_response_stream(
+                    stream,
+                    session_telemetry.clone(),
+                    codex_rollout_trace::InferenceTraceAttempt::disabled(),
+                );
                 return Ok(stream);
             }
             Err(codex_api::ApiError::Transport(

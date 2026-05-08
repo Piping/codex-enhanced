@@ -3,11 +3,12 @@
 //! This module owns global key bindings that sit above ChatWidget, including transcript overlay
 //! entry, Ctrl-L clear, external editor launch, and agent navigation shortcuts.
 
+use super::agent_navigation::AgentNavigationDirection;
 use super::*;
 
 impl App {
     pub(super) async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {
-        let editor_cmd = match external_editor::resolve_editor_command() {
+        let editor_cmd = match external_editor::resolve_editor_commands() {
             Ok(cmd) => cmd,
             Err(external_editor::EditorError::MissingEditor) => {
                 self.chat_widget
@@ -264,6 +265,48 @@ impl App {
     pub(super) fn refresh_status_line(&mut self) {
         self.chat_widget.refresh_status_line();
     }
+}
+
+fn previous_agent_shortcut_matches(key_event: KeyEvent, allow_word_motion_fallback: bool) -> bool {
+    matches!(
+        key_event,
+        KeyEvent {
+            code: KeyCode::Left,
+            modifiers: KeyModifiers::ALT,
+            kind: KeyEventKind::Press | KeyEventKind::Repeat,
+            ..
+        }
+    ) || (allow_word_motion_fallback
+        && matches!(
+            key_event,
+            KeyEvent {
+                code: KeyCode::Char('b'),
+                modifiers: KeyModifiers::ALT,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }
+        ))
+}
+
+fn next_agent_shortcut_matches(key_event: KeyEvent, allow_word_motion_fallback: bool) -> bool {
+    matches!(
+        key_event,
+        KeyEvent {
+            code: KeyCode::Right,
+            modifiers: KeyModifiers::ALT,
+            kind: KeyEventKind::Press | KeyEventKind::Repeat,
+            ..
+        }
+    ) || (allow_word_motion_fallback
+        && matches!(
+            key_event,
+            KeyEvent {
+                code: KeyCode::Char('f'),
+                modifiers: KeyModifiers::ALT,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }
+        ))
 }
 
 #[cfg(test)]

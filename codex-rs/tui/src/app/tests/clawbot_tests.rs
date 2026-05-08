@@ -2,6 +2,7 @@ use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event::ClawbotControlsDestination;
 use crate::app_event::ClawbotForwardingChannel;
+use crate::chatwidget::tests::render_bottom_popup;
 use codex_clawbot::ClawbotRuntime;
 use codex_clawbot::ClawbotStore;
 use codex_clawbot::ClawbotTurnMode;
@@ -185,7 +186,7 @@ async fn noninteractive_clawbot_request_user_input_builds_auto_response() {
             assert_eq!(id, "turn-1");
             assert_eq!(
                 response,
-                &codex_protocol::request_user_input::RequestUserInputResponse {
+                &codex_app_server_protocol::ToolRequestUserInputResponse {
                     answers: HashMap::new(),
                 }
             );
@@ -216,6 +217,7 @@ async fn noninteractive_clawbot_permissions_request_builds_auto_response() {
             thread_id: thread_id.to_string(),
             turn_id: "turn-1".to_string(),
             item_id: "call-approval".to_string(),
+            cwd: app.config.cwd.clone(),
             reason: Some("Need access".to_string()),
             permissions: codex_app_server_protocol::RequestPermissionProfile {
                 network: None,
@@ -236,6 +238,7 @@ async fn noninteractive_clawbot_permissions_request_builds_auto_response() {
                 &codex_protocol::request_permissions::RequestPermissionsResponse {
                     permissions: Default::default(),
                     scope: codex_protocol::request_permissions::PermissionGrantScope::Turn,
+                    strict_auto_review: false,
                 }
             );
         }
@@ -290,12 +293,7 @@ async fn clawbot_turn_completed_forwards_reply_and_drains_next_message() -> Resu
 
     app.enqueue_thread_notification(
         thread_id,
-        turn_completed_notification_with_agent_message(
-            thread_id,
-            &first_turn_id,
-            TurnStatus::Completed,
-            "forwarded reply",
-        ),
+        turn_completed_notification(thread_id, &first_turn_id, TurnStatus::Completed),
     )
     .await?;
     app.handle_clawbot_turn_completed(

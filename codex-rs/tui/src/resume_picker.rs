@@ -289,6 +289,16 @@ pub enum SessionPickerOrder {
     LocalGroupFirst,
 }
 
+impl From<bool> for SessionPickerOrder {
+    fn from(show_all: bool) -> Self {
+        if show_all {
+            Self::GlobalTime
+        } else {
+            Self::LocalGroupFirst
+        }
+    }
+}
+
 struct SessionPickerRunOptions {
     show_all: bool,
     filter_cwd: Option<PathBuf>,
@@ -333,6 +343,7 @@ pub async fn run_resume_picker_with_app_server(
         include_non_interactive,
         app_server,
         SessionPickerLaunchContext::Startup,
+        order,
     )
     .await
 }
@@ -353,6 +364,7 @@ pub async fn run_resume_picker_from_existing_session_with_app_server(
         include_non_interactive,
         app_server,
         SessionPickerLaunchContext::ExistingSession,
+        order,
     )
     .await
 }
@@ -365,6 +377,7 @@ async fn run_resume_picker_with_launch_context(
     include_non_interactive: bool,
     app_server: AppServerSession,
     launch_context: SessionPickerLaunchContext,
+    order: SessionPickerOrder,
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
     let is_remote = app_server.is_remote();
@@ -375,7 +388,7 @@ async fn run_resume_picker_with_launch_context(
     let pager_keymap = picker_pager_keymap(config)?;
     let options = SessionPickerRunOptions {
         show_all,
-        filter_cwd: cwd_filter,
+        filter_cwd: cwd_filter.clone(),
         local_filter_cwd,
         action: SessionPickerAction::Resume,
         launch_context,
@@ -458,7 +471,11 @@ async fn run_session_picker_with_loader(
         alt.tui.frame_requester(),
         picker_loader,
         options.provider_filter,
-        options.show_all,
+        if options.show_all {
+            SessionPickerOrder::GlobalTime
+        } else {
+            SessionPickerOrder::LocalGroupFirst
+        },
         options.filter_cwd,
         options.action,
     );
@@ -968,10 +985,11 @@ impl PickerState {
         requester: FrameRequester,
         picker_loader: PickerLoader,
         provider_filter: ProviderFilter,
-        show_all: bool,
+        order: impl Into<SessionPickerOrder>,
         filter_cwd: Option<PathBuf>,
         action: SessionPickerAction,
     ) -> Self {
+        let order = order.into();
         Self {
             requester,
             relative_time_reference: None,
@@ -997,12 +1015,8 @@ impl PickerState {
             view_width: None,
             provider_filter,
             filter_mode: SessionFilterMode::All,
-            order: if show_all {
-                SessionPickerOrder::GlobalTime
-            } else {
-                SessionPickerOrder::LocalGroupFirst
-            },
-            filter_cwd,
+            order,
+            filter_cwd: filter_cwd.clone(),
             local_filter_cwd: filter_cwd.clone(),
             toolbar_focus: ToolbarControl::Filter,
             density: SessionListDensity::Comfortable,
@@ -3346,7 +3360,9 @@ mod tests {
     ) -> PickerPage {
         PickerPage {
             rows,
-            next_cursor: next_cursor.map(|cursor| PageCursor::AppServer(cursor.to_string())),
+            next_cursor: next_cursor.map(|cursor| {
+                PageCursor::AppServer(AppServerPageCursor::Global(Some(cursor.to_string())))
+            }),
             num_scanned_files,
             reached_scan_cap,
         }
@@ -4230,7 +4246,9 @@ mod tests {
             })
             .collect();
         state.selected = 2;
-        state.pagination.next_cursor = Some(PageCursor::AppServer(String::from("cursor-1")));
+        state.pagination.next_cursor = Some(PageCursor::AppServer(AppServerPageCursor::Global(
+            Some(String::from("cursor-1")),
+        )));
 
         let label = picker_footer_progress_label(&state, /*list_height*/ 6, /*width*/ 80);
 
@@ -4259,7 +4277,9 @@ mod tests {
             .collect();
         state.selected = 9;
         state.scroll_top = 9;
-        state.pagination.next_cursor = Some(PageCursor::AppServer(String::from("cursor-1")));
+        state.pagination.next_cursor = Some(PageCursor::AppServer(AppServerPageCursor::Global(
+            Some(String::from("cursor-1")),
+        )));
         state.pagination.loading = LoadingState::Pending(PendingLoad {
             request_token: 1,
             search_token: None,

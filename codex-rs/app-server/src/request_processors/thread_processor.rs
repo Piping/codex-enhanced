@@ -805,6 +805,7 @@ impl ThreadRequestProcessor {
             thread_source,
             environments,
             persist_extended_history,
+            subagent_spawn: _subagent_spawn,
         } = params;
         if sandbox.is_some() && permissions.is_some() {
             return Err(invalid_request(
@@ -2946,6 +2947,7 @@ impl ThreadRequestProcessor {
             thread_source,
             exclude_turns,
             persist_extended_history,
+            subagent_spawn: _subagent_spawn,
         } = params;
         let include_turns = !exclude_turns;
         if sandbox.is_some() && permissions.is_some() {

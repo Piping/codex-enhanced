@@ -3,9 +3,12 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::ToolRequestUserInputResponse;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::UserInput as AppServerUserInput;
 use codex_clawbot::CachedUnreadMessage;
 use codex_clawbot::ClawbotRuntime;
 use codex_clawbot::ClawbotStore;
@@ -21,20 +24,17 @@ use codex_clawbot::ProviderSessionRef;
 use codex_clawbot::append_diagnostic_event;
 use codex_clawbot::feishu_failure_reply_text;
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
-use codex_protocol::request_user_input::RequestUserInputResponse;
-use codex_protocol::user_input::UserInput;
+use codex_protocol::user_input::UserInput as CoreUserInput;
 use tokio::sync::mpsc;
 
 use super::App;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
-use crate::app_server_session::ThreadSessionState;
+use crate::session_state::ThreadSessionState;
 
 const FEISHU_AUTO_ACK_EMOJI_TYPE: &str = "TONGUE";
 
@@ -646,19 +646,25 @@ impl App {
             .with_context(|| {
                 format!("missing live thread session for clawbot thread {thread_id}")
             })?;
+        let permission_profile = session.permission_profile.clone();
+        let sandbox_policy = permission_profile
+            .to_legacy_sandbox_policy(session.cwd.as_path())
+            .unwrap_or(codex_protocol::protocol::SandboxPolicy::DangerFullAccess);
         let op: AppCommand = Op::UserTurn {
-            items: vec![UserInput::Text {
+            items: vec![CoreUserInput::Text {
                 text: trimmed.clone(),
                 text_elements: Vec::new(),
             }],
             cwd: session.cwd.to_path_buf(),
-            approval_policy: clawbot_approval_policy(session.approval_policy, turn_mode),
+            approval_policy: clawbot_approval_policy(session.approval_policy, turn_mode).to_core(),
             approvals_reviewer: Some(session.approvals_reviewer),
-            sandbox_policy: session.sandbox_policy.clone(),
+            permission_profile: Some(permission_profile.clone()),
+            sandbox_policy,
             model: session.model.clone(),
             effort: session.reasoning_effort,
             summary: None,
-            service_tier: Some(session.service_tier),
+            environments: None,
+            service_tier: Some(session.service_tier.clone()),
             final_output_json_schema: None,
             collaboration_mode: None,
             personality: self.config.personality,
@@ -668,18 +674,19 @@ impl App {
         let response = app_server
             .turn_start(
                 thread_id,
-                vec![UserInput::Text {
+                vec![AppServerUserInput::Text {
                     text: trimmed,
                     text_elements: Vec::new(),
                 }],
                 session.cwd.to_path_buf(),
-                clawbot_approval_policy(session.approval_policy, turn_mode),
+                clawbot_approval_policy(session.approval_policy, turn_mode).into(),
                 session.approvals_reviewer,
-                session.sandbox_policy,
+                permission_profile,
+                session.active_permission_profile.clone(),
                 session.model,
                 session.reasoning_effort,
                 /*summary*/ None,
-                Some(session.service_tier),
+                Some(session.service_tier.clone()),
                 /*collaboration_mode*/ None,
                 self.config.personality,
                 /*output_schema*/ None,
@@ -948,7 +955,7 @@ impl App {
                 }
                 Some(AppCommand::user_input_answer(
                     params.turn_id.clone(),
-                    RequestUserInputResponse {
+                    ToolRequestUserInputResponse {
                         answers: HashMap::new(),
                     },
                 ))
@@ -963,6 +970,7 @@ impl App {
                     RequestPermissionsResponse {
                         permissions: Default::default(),
                         scope: PermissionGrantScope::Turn,
+                        strict_auto_review: false,
                     },
                 ))
             }
@@ -1012,13 +1020,13 @@ fn clawbot_approval_policy(
         return existing_policy;
     }
 
-    AskForApproval::Granular(GranularApprovalConfig {
+    AskForApproval::Granular {
         sandbox_approval: false,
         rules: false,
         skill_approval: false,
         request_permissions: false,
         mcp_elicitations: false,
-    })
+    }
 }
 
 fn clawbot_outbound_text_for_turn(turn: &codex_app_server_protocol::Turn) -> Option<String> {
@@ -1123,6 +1131,7 @@ mod tests {
                     memory_citation: None,
                 },
             ],
+            items_view: Default::default(),
             error: None,
             started_at: None,
             completed_at: None,
@@ -1160,6 +1169,7 @@ mod tests {
                     memory_citation: None,
                 },
             ],
+            items_view: Default::default(),
             error: None,
             started_at: None,
             completed_at: None,

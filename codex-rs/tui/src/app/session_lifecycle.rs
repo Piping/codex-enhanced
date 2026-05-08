@@ -4,6 +4,7 @@
 //! resuming/forking saved sessions, replacing ChatWidget instances, and maintaining the agent picker
 //! cache used for multi-agent navigation.
 
+use super::agent_navigation::AgentNavigationDirection;
 use super::*;
 
 impl App {
@@ -19,7 +20,11 @@ impl App {
                 continue;
             }
             if !self
-                .refresh_agent_picker_thread_liveness(app_server, thread_id)
+                .refresh_agent_picker_thread_liveness(
+                    app_server,
+                    thread_id,
+                    ThreadLivenessRefreshMode::Picker,
+                )
                 .await
             {
                 continue;
@@ -95,6 +100,18 @@ impl App {
         Self::is_terminal_thread_read_error(err) || existing_is_closed.unwrap_or(false)
     }
 
+    pub(super) fn closed_state_for_thread_read_status(
+        status: &codex_app_server_protocol::ThreadStatus,
+        mode: ThreadLivenessRefreshMode,
+    ) -> bool {
+        match mode {
+            ThreadLivenessRefreshMode::Picker => {
+                matches!(status, codex_app_server_protocol::ThreadStatus::NotLoaded)
+            }
+            ThreadLivenessRefreshMode::Selection => false,
+        }
+    }
+
     pub(super) fn can_fallback_from_include_turns_error(err: &color_eyre::Report) -> bool {
         err.chain().any(|cause| {
             let message = cause.to_string();
@@ -133,10 +150,36 @@ impl App {
         self.sync_active_agent_label();
     }
 
+    pub(super) fn is_archived_thread_rollout_path(&self, rollout_path: Option<&Path>) -> bool {
+        rollout_path.is_some_and(|path| {
+            path.starts_with(self.config.codex_home.join(ARCHIVED_SESSIONS_SUBDIR))
+        })
+    }
+
+    pub(super) async fn forget_live_subagent_thread(&mut self, thread_id: ThreadId) {
+        if self.primary_thread_id == Some(thread_id) {
+            return;
+        }
+
+        self.abort_thread_event_listener(thread_id);
+        self.thread_event_channels.remove(&thread_id);
+        if self.active_thread_id == Some(thread_id) {
+            self.clear_active_thread().await;
+            if let Some(primary_thread_id) = self.primary_thread_id {
+                self.app_event_tx
+                    .send(AppEvent::SelectAgentThread(primary_thread_id));
+            }
+        }
+        self.agent_navigation.remove(thread_id);
+        self.sync_active_agent_label();
+        self.refresh_pending_thread_approvals().await;
+    }
+
     pub(super) async fn refresh_agent_picker_thread_liveness(
         &mut self,
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
+        mode: ThreadLivenessRefreshMode,
     ) -> bool {
         let existing_entry = self.agent_navigation.get(&thread_id).cloned();
         let has_replay_channel = self.thread_event_channels.contains_key(&thread_id);
@@ -145,6 +188,16 @@ impl App {
             .await
         {
             Ok(thread) => {
+                if self.is_archived_thread_rollout_path(thread.path.as_deref()) {
+                    self.forget_live_subagent_thread(thread_id).await;
+                    return false;
+                }
+                if matches!(
+                    (&mode, &existing_entry, has_replay_channel),
+                    (ThreadLivenessRefreshMode::Selection, None, false)
+                ) {
+                    return true;
+                }
                 self.upsert_agent_picker_thread(
                     thread_id,
                     thread.agent_nickname.or_else(|| {
@@ -157,17 +210,29 @@ impl App {
                             .as_ref()
                             .and_then(|entry| entry.agent_role.clone())
                     }),
-                    matches!(
-                        thread.status,
-                        codex_app_server_protocol::ThreadStatus::NotLoaded
-                    ),
+                    Self::closed_state_for_thread_read_status(&thread.status, mode),
                 );
                 true
             }
             Err(err) => {
                 if Self::is_terminal_thread_read_error(&err) && !has_replay_channel {
-                    self.agent_navigation.remove(thread_id);
-                    return false;
+                    match mode {
+                        ThreadLivenessRefreshMode::Picker => {
+                            self.agent_navigation.remove(thread_id);
+                            return false;
+                        }
+                        ThreadLivenessRefreshMode::Selection => {
+                            if let Some(entry) = existing_entry {
+                                self.upsert_agent_picker_thread(
+                                    thread_id,
+                                    entry.agent_nickname,
+                                    entry.agent_role,
+                                    /*is_closed*/ false,
+                                );
+                            }
+                            return true;
+                        }
+                    }
                 }
                 let is_closed = Self::closed_state_for_thread_read_error(
                     &err,
@@ -290,7 +355,11 @@ impl App {
         }
 
         if !self
-            .refresh_agent_picker_thread_liveness(app_server, thread_id)
+            .refresh_agent_picker_thread_liveness(
+                app_server,
+                thread_id,
+                ThreadLivenessRefreshMode::Selection,
+            )
             .await
         {
             self.chat_widget
@@ -507,6 +576,17 @@ impl App {
             initial_user_message,
         );
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
+        self.enqueue_primary_thread_session(started.session, started.turns)
+            .await?;
+        self.backfill_loaded_subagent_threads(app_server).await;
+        Ok(())
+    }
+
+    pub(super) async fn restore_started_thread_state(
+        &mut self,
+        app_server: &mut AppServerSession,
+        started: AppServerStartedThread,
+    ) -> Result<()> {
         self.enqueue_primary_thread_session(started.session, started.turns)
             .await?;
         self.backfill_loaded_subagent_threads(app_server).await;

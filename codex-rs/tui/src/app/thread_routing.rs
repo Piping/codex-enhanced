@@ -157,7 +157,18 @@ impl App {
     /// navigation both follow what the user is actually looking at, not whichever thread most
     /// recently began switching.
     pub(super) fn current_displayed_thread_id(&self) -> Option<ThreadId> {
-        self.active_thread_id.or(self.chat_widget.thread_id())
+        self.chat_widget.thread_id().or(self.active_thread_id)
+    }
+
+    pub(super) async fn current_displayed_thread_respawn_target(&self) -> Option<String> {
+        if let Some(thread_id) = self.current_displayed_thread_id() {
+            return Some(thread_id.to_string());
+        }
+
+        self.chat_widget
+            .thread_name()
+            .as_deref()
+            .and_then(crate::legacy_core::util::normalize_thread_name)
     }
 
     pub(super) fn ignore_same_thread_resume(
@@ -348,7 +359,11 @@ impl App {
             return;
         }
         self.chat_widget
-            .add_to_history(history_cell::new_patch_event(changes.clone(), cwd));
+            .add_to_history(history_cell::new_patch_event(
+                changes.clone(),
+                cwd,
+                self.display_preferences.clone(),
+            ));
     }
 
     pub(super) async fn pending_inactive_thread_requests(&self) -> Vec<(ThreadId, ServerRequest)> {
@@ -518,6 +533,7 @@ impl App {
                 final_output_json_schema,
                 collaboration_mode,
                 personality,
+                ..
             } => {
                 let mut should_start_turn = true;
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
@@ -660,9 +676,9 @@ impl App {
                     .await?;
                 Ok(true)
             }
-            AppCommand::RealtimeConversationStart { transport, voice } => {
+            AppCommand::RealtimeConversationStart(params) => {
                 app_server
-                    .thread_realtime_start(thread_id, transport.clone(), voice.clone())
+                    .thread_realtime_start(thread_id, params.clone())
                     .await?;
                 Ok(true)
             }

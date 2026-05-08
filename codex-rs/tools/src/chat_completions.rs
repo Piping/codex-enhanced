@@ -1,8 +1,9 @@
+use crate::JsonSchema;
 use crate::ResponsesApiTool;
 use crate::ToolSpec;
-use crate::create_apply_patch_json_tool;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::BTreeMap;
 
 /// Returns JSON values that are compatible with function calling in the
 /// Chat Completions API.
@@ -17,8 +18,22 @@ pub fn create_tools_json_for_chat_completions_api(
                 tools_json.push(function_tool_to_chat_json(function)?);
             }
             ToolSpec::Freeform(freeform) if freeform.name == "apply_patch" => {
-                let ToolSpec::Function(function) = create_apply_patch_json_tool() else {
-                    unreachable!("apply_patch json tool must be a function tool");
+                let function = ResponsesApiTool {
+                    name: freeform.name.clone(),
+                    description: freeform.description.clone(),
+                    strict: false,
+                    defer_loading: None,
+                    parameters: JsonSchema::object(
+                        BTreeMap::from([(
+                            "input".to_string(),
+                            JsonSchema::string(Some(
+                                "The entire contents of the apply_patch command".to_string(),
+                            )),
+                        )]),
+                        Some(vec!["input".to_string()]),
+                        Some(false.into()),
+                    ),
+                    output_schema: None,
                 };
                 tools_json.push(function_tool_to_chat_json(&function)?);
             }

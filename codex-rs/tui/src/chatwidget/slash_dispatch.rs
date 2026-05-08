@@ -924,7 +924,6 @@ impl ChatWidget {
             fast_command_enabled: self.fast_mode_enabled(),
             personality_command_enabled: self.config.features.enabled(Feature::Personality),
             realtime_conversation_enabled: self.realtime_conversation_enabled(),
-            audio_device_selection_enabled: self.realtime_audio_device_selection_enabled(),
             allow_elevate_sandbox,
             side_conversation_active: self.active_side_conversation,
         }
@@ -961,6 +960,9 @@ impl ChatWidget {
             | SlashCommand::Init
             | SlashCommand::Compact
             | SlashCommand::Review
+            | SlashCommand::Thread
+            | SlashCommand::Profile
+            | SlashCommand::Approvals
             | SlashCommand::Model
             | SlashCommand::Realtime
             | SlashCommand::Settings
@@ -986,7 +988,13 @@ impl ChatWidget {
             | SlashCommand::Hooks
             | SlashCommand::Title
             | SlashCommand::Statusline
-            | SlashCommand::Theme => QueueDrain::Stop,
+            | SlashCommand::Theme
+            | SlashCommand::Workflow
+            | SlashCommand::Respawn
+            | SlashCommand::Btw
+            | SlashCommand::Clawbot
+            | SlashCommand::DelAgent
+            | SlashCommand::Insight => QueueDrain::Stop,
         }
     }
 

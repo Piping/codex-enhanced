@@ -1100,6 +1100,12 @@ impl ShortcutDescriptor {
             ShortcutId::HistorySearch => state.key_hints.history_search,
             ShortcutId::ReasoningDown => state.key_hints.reasoning_down,
             ShortcutId::ReasoningUp => state.key_hints.reasoning_up,
+            ShortcutId::UndoLastUserMessage
+            | ShortcutId::SwitchAgentThread
+            | ShortcutId::CopyLatestOutput
+            | ShortcutId::CopyLatestOutputPlainText => {
+                self.binding_for(state).map(|binding| binding.key)
+            }
             ShortcutId::Commands
             | ShortcutId::ShellCommands
             | ShortcutId::FilePaths
@@ -1313,6 +1319,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
             condition: DisplayCondition::Always,
         }],
         prefix: "",
+        display_label: None,
         label: " reasoning down",
     },
     ShortcutDescriptor {
@@ -1322,6 +1329,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
             condition: DisplayCondition::Always,
         }],
         prefix: "",
+        display_label: None,
         label: " reasoning up",
     },
 ];

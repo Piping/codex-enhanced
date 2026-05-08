@@ -5,6 +5,7 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
+use super::App;
 use super::workflow_runtime::BackgroundWorkflowRunTarget;
 use super::workflow_runtime::OwnedWorkflowPhaseContext;
 
@@ -149,5 +150,23 @@ impl WorkflowSchedulerState {
         }
         self.queued_trigger_runs.clear();
         stopped_count
+    }
+}
+
+impl App {
+    pub(crate) fn background_workflow_labels(&self) -> Vec<String> {
+        self.workflow_scheduler.background_workflow_labels()
+    }
+
+    pub(crate) fn queued_trigger_labels(&self) -> Vec<String> {
+        self.workflow_scheduler.queued_trigger_labels()
+    }
+
+    pub(crate) fn sync_background_workflow_status(&mut self) {
+        self.chat_widget.sync_background_workflow_status(
+            self.background_workflow_labels(),
+            self.queued_trigger_labels(),
+        );
+        self.refresh_workflow_controls_if_active();
     }
 }

@@ -1538,6 +1538,7 @@ async fn slash_copy_tracks_replayed_legacy_agent_message_when_turn_complete_omit
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
     let _ = drain_insert_history(&mut rx);
@@ -1554,10 +1555,13 @@ async fn slash_copy_state_clears_on_thread_rollback() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnComplete(turn_complete_event(
-            "turn-1",
-            Some("Reply that will be rolled back"),
-        )),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: Some("Reply that will be rolled back".to_string()),
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        }),
     });
     chat.handle_codex_event(Event {
         id: "rollback-1".into(),
@@ -1593,6 +1597,7 @@ async fn slash_insight_generates_report_and_announces_path() {
                         originator: "codex".to_string(),
                         cli_version: "0.0.0".to_string(),
                         source: SessionSource::Cli,
+                        thread_source: None,
                         agent_nickname: None,
                         agent_role: None,
                         agent_path: None,
@@ -1622,15 +1627,15 @@ async fn slash_insight_generates_report_and_announces_path() {
             timestamp: "2026-04-08T12:00:10Z".to_string(),
             item: codex_protocol::protocol::RolloutItem::EventMsg(EventMsg::TokenCount(
                 TokenCountEvent {
-                    info: Some(TokenUsageInfo {
-                        total_token_usage: TokenUsage {
+                    info: Some(CoreTokenUsageInfo {
+                        total_token_usage: CoreTokenUsage {
                             input_tokens: 80,
                             cached_input_tokens: 0,
                             output_tokens: 20,
                             reasoning_output_tokens: 5,
                             total_tokens: 100,
                         },
-                        last_token_usage: TokenUsage::default(),
+                        last_token_usage: CoreTokenUsage::default(),
                         model_context_window: Some(128000),
                     }),
                     rate_limits: None,
@@ -1645,10 +1650,11 @@ async fn slash_insight_generates_report_and_announces_path() {
                     call_id: "call-1".to_string(),
                     process_id: None,
                     turn_id: "turn-1".to_string(),
+                    completed_at_ms: 0,
                     command: vec!["rg".to_string(), "insight".to_string()],
                     cwd: PathBuf::from("/repo").abs(),
                     parsed_cmd: Vec::new(),
-                    source: ExecCommandSource::Agent,
+                    source: CoreExecCommandSource::Agent,
                     interaction_input: None,
                     stdout: String::new(),
                     stderr: String::new(),
@@ -1721,6 +1727,7 @@ async fn slash_copy_is_unavailable_when_legacy_agent_message_is_not_repeated_on_
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
     let _ = drain_insert_history(&mut rx);
