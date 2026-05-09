@@ -8,6 +8,14 @@ use super::*;
 
 const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
 
+fn exit_mode_for_event(event: &AppEvent) -> Option<ExitMode> {
+    match event {
+        AppEvent::Exit(mode) => Some(*mode),
+        AppEvent::RespawnRequested => Some(ExitMode::RespawnImmediate),
+        _ => None,
+    }
+}
+
 impl App {
     pub(super) async fn handle_event(
         &mut self,
@@ -15,6 +23,10 @@ impl App {
         app_server: &mut AppServerSession,
         event: AppEvent,
     ) -> Result<AppRunControl> {
+        if let Some(mode) = exit_mode_for_event(&event) {
+            return Ok(self.handle_exit_mode(app_server, mode).await);
+        }
+
         match event {
             AppEvent::NewSession => {
                 self.start_fresh_session_with_summary_hint(
@@ -354,9 +366,6 @@ impl App {
             }
             AppEvent::CommitTick => {
                 self.chat_widget.on_commit_tick();
-            }
-            AppEvent::Exit(mode) => {
-                return Ok(self.handle_exit_mode(app_server, mode).await);
             }
             AppEvent::Logout => match app_server.logout_account().await {
                 Ok(()) => {
@@ -1162,7 +1171,7 @@ impl App {
                                 self.app_event_tx.send(AppEvent::CodexOp(
                                     AppCommand::override_turn_context(
                                         /*cwd*/ None,
-                                        Some(AskForApproval::from(preset.approval)),
+                                        Some(AskForApproval::from(preset.approval).into()),
                                         Some(self.config.approvals_reviewer),
                                         Some(preset.permission_profile.clone()),
                                         #[cfg(target_os = "windows")]
@@ -1176,7 +1185,7 @@ impl App {
                                     ),
                                 ));
                                 self.app_event_tx.send(AppEvent::UpdateAskForApprovalPolicy(
-                                    AskForApproval::from(preset.approval),
+                                    AskForApproval::from(preset.approval).into(),
                                 ));
                                 self.app_event_tx.send(AppEvent::UpdatePermissionProfile(
                                     preset.permission_profile.clone(),
@@ -2216,5 +2225,28 @@ impl App {
                 AppRunControl::Exit(ExitReason::RespawnRequested)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::exit_mode_for_event;
+    use crate::app_event::AppEvent;
+    use crate::app_event::ExitMode;
+
+    #[test]
+    fn respawn_requested_maps_to_respawn_immediate_exit_mode() {
+        assert_eq!(
+            exit_mode_for_event(&AppEvent::RespawnRequested),
+            Some(ExitMode::RespawnImmediate)
+        );
+    }
+
+    #[test]
+    fn exit_event_preserves_requested_exit_mode() {
+        assert_eq!(
+            exit_mode_for_event(&AppEvent::Exit(ExitMode::ShutdownFirst)),
+            Some(ExitMode::ShutdownFirst)
+        );
     }
 }
