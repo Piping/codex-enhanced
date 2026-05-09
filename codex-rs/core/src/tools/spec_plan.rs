@@ -8,11 +8,13 @@ use crate::tools::handlers::CreateGoalHandler;
 use crate::tools::handlers::DynamicToolHandler;
 use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::GetGoalHandler;
+use crate::tools::handlers::GrepFilesHandler;
 use crate::tools::handlers::ListMcpResourceTemplatesHandler;
 use crate::tools::handlers::ListMcpResourcesHandler;
 use crate::tools::handlers::LocalShellHandler;
 use crate::tools::handlers::McpHandler;
 use crate::tools::handlers::PlanHandler;
+use crate::tools::handlers::ReadFileHandler;
 use crate::tools::handlers::ReadMcpResourceHandler;
 use crate::tools::handlers::RequestPermissionsHandler;
 use crate::tools::handlers::RequestPluginInstallHandler;
@@ -76,6 +78,8 @@ use crate::tools::handlers::shell_spec::create_shell_command_tool;
 use crate::tools::handlers::shell_spec::create_shell_tool;
 use crate::tools::handlers::shell_spec::create_write_stdin_tool;
 use crate::tools::handlers::shell_spec::request_permissions_tool_description;
+use crate::tools::handlers::test_sync_spec::create_grep_files_tool;
+use crate::tools::handlers::test_sync_spec::create_read_file_tool;
 use crate::tools::handlers::test_sync_spec::create_test_sync_tool;
 use crate::tools::handlers::tool_search_spec::create_tool_search_tool;
 use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
@@ -405,6 +409,32 @@ pub fn build_tool_registry_builder(
             config.code_mode_enabled,
         );
         builder.register_handler(Arc::new(TestSyncHandler));
+    }
+
+    if config
+        .experimental_supported_tools
+        .iter()
+        .any(|tool| tool == "read_file")
+    {
+        builder.push_spec(
+            create_read_file_tool(),
+            /*supports_parallel_tool_calls*/ true,
+            config.code_mode_enabled,
+        );
+        builder.register_handler(Arc::new(ReadFileHandler));
+    }
+
+    if config
+        .experimental_supported_tools
+        .iter()
+        .any(|tool| tool == "grep_files")
+    {
+        builder.push_spec(
+            create_grep_files_tool(),
+            /*supports_parallel_tool_calls*/ true,
+            config.code_mode_enabled,
+        );
+        builder.register_handler(Arc::new(GrepFilesHandler));
     }
 
     if let Some(web_search_tool) = create_web_search_tool(WebSearchToolOptions {

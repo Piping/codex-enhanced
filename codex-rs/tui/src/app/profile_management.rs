@@ -11,6 +11,7 @@ use crate::app_server_session::AppServerSession;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+#[cfg(test)]
 use crate::legacy_core::config::Config;
 use crate::profile_router::DefaultProfileRouter;
 use crate::profile_router::PROFILE_ROUTER_STATE_RELATIVE_PATH;
@@ -76,6 +77,7 @@ impl App {
         ProfileRouterStore::new(self.config.codex_home.to_path_buf())
     }
 
+    #[cfg(test)]
     pub(super) fn routed_profile_runtime_changed(
         current_config: &Config,
         next_config: &Config,

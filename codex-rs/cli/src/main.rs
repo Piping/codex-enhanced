@@ -736,9 +736,6 @@ fn extend_tui_cli_respawn_args(args: &mut Vec<OsString>, interactive: &TuiCli) {
             approval_mode_cli_arg_name(approval_policy),
         );
     }
-    if interactive.full_auto {
-        args.push("--full-auto".into());
-    }
     if interactive.dangerously_bypass_approvals_and_sandbox {
         args.push("--yolo".into());
     }

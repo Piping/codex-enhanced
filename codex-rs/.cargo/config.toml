@@ -6,7 +6,7 @@ codegen-backend = true
 
 [profile.dev]
 debug = 0
-codegen-backend = "cranelift"
+codegen-backend = "llvm"
 
 [profile.dev.build-override]
 codegen-backend = "llvm"

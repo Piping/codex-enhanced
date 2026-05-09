@@ -26,7 +26,6 @@ use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeOutputModality;
-use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
@@ -246,6 +245,7 @@ impl AppCommand {
         })
     }
 
+    #[allow(dead_code)]
     pub(crate) fn realtime_conversation_text(text: String) -> Self {
         Self::RealtimeConversationText(ConversationTextParams { text })
     }
@@ -532,6 +532,7 @@ impl AppCommand {
         matches!(self, Self::Review { .. })
     }
 
+    #[allow(dead_code)]
     pub(crate) fn view(&self) -> AppCommandView<'_> {
         match self {
             Self::Interrupt => AppCommandView::Interrupt,

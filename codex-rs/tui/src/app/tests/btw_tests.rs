@@ -84,7 +84,7 @@ async fn btw_thread_start_params_inherit_visible_thread_permissions() -> Result<
     assert_eq!(permissions.approvals_reviewer, session.approvals_reviewer);
     assert_eq!(permissions.permission_profile, session.permission_profile);
     assert_eq!(permissions.sandbox_policy, SandboxPolicy::DangerFullAccess);
-    assert_eq!(params.approval_policy, Some(session.approval_policy.into()));
+    assert_eq!(params.approval_policy, Some(session.approval_policy));
     assert_eq!(
         params.approvals_reviewer,
         Some(AppServerApprovalsReviewer::from(session.approvals_reviewer))
@@ -156,10 +156,7 @@ async fn btw_permissions_fall_back_to_config_when_thread_session_is_missing() ->
         permissions.sandbox_policy,
         SandboxPolicy::new_workspace_write_policy()
     );
-    assert_eq!(
-        params.approval_policy,
-        Some(AskForApproval::OnRequest.into())
-    );
+    assert_eq!(params.approval_policy, Some(AskForApproval::OnRequest));
     assert_eq!(
         params.approvals_reviewer,
         Some(AppServerApprovalsReviewer::AutoReview)

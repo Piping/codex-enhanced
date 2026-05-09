@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::AfterTurnContext;
 use super::App;
 use super::workflow_definition::WorkflowExecutionStrategy;

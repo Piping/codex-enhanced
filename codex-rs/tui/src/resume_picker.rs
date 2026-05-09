@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
@@ -1017,7 +1019,7 @@ impl PickerState {
             filter_mode: SessionFilterMode::All,
             order,
             filter_cwd: filter_cwd.clone(),
-            local_filter_cwd: filter_cwd.clone(),
+            local_filter_cwd: filter_cwd,
             toolbar_focus: ToolbarControl::Filter,
             density: SessionListDensity::Comfortable,
             launch_context: SessionPickerLaunchContext::Startup,
@@ -1277,28 +1279,26 @@ impl PickerState {
             KeyEvent {
                 code: KeyCode::Home,
                 ..
-            } => {
-                if !self.filtered_rows.is_empty() {
+            }
+                if !self.filtered_rows.is_empty() => {
                     self.selected = 0;
                     self.ensure_selected_visible();
                     self.request_frame();
                 }
-            }
             KeyEvent {
                 code: KeyCode::End, ..
-            } => {
-                if !self.filtered_rows.is_empty() {
+            }
+                if !self.filtered_rows.is_empty() => {
                     self.selected = self.filtered_rows.len().saturating_sub(1);
                     self.ensure_selected_visible();
                     self.maybe_load_more_for_scroll();
                     self.request_frame();
                 }
-            }
             KeyEvent {
                 code: KeyCode::PageDown,
                 ..
-            } => {
-                if !self.filtered_rows.is_empty() {
+            }
+                if !self.filtered_rows.is_empty() => {
                     let step = self.view_rows.unwrap_or(10).max(1);
                     let target = self.selected.saturating_add(step);
                     let max_index = self.filtered_rows.len().saturating_sub(1);
@@ -1312,7 +1312,6 @@ impl PickerState {
                     }
                     self.request_frame();
                 }
-            }
             KeyEvent {
                 code: KeyCode::Tab, ..
             } => {
@@ -1349,16 +1348,15 @@ impl PickerState {
                 code: KeyCode::Char(c),
                 modifiers,
                 ..
-            } => {
+            }
                 // basic text input for search
                 if !modifiers.contains(KeyModifiers::CONTROL)
                     && !modifiers.contains(KeyModifiers::ALT)
-                {
+                => {
                     let mut new_query = self.query.clone();
                     new_query.push(c);
                     self.set_query(new_query);
                 }
-            }
             _ => {}
         }
         Ok(None)

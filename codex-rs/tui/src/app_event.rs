@@ -263,6 +263,7 @@ pub(crate) enum AppEvent {
     },
 
     /// Submit a workflow-generated follow-up back to the primary thread.
+    #[allow(dead_code)]
     SubmitWorkflowFollowup {
         thread_id: ThreadId,
         op: Op,
@@ -691,6 +692,7 @@ pub(crate) enum AppEvent {
     ConsolidateProposedPlan(String),
 
     /// Replay stored workflow-only transcript cells for a specific thread after its turn replay.
+    #[allow(dead_code)]
     ReplayWorkflowHistory {
         thread_id: ThreadId,
     },
@@ -784,6 +786,7 @@ pub(crate) enum AppEvent {
         profile_id: Option<String>,
         history_message: String,
     },
+    #[allow(dead_code)]
     ClawbotTurnCompleted {
         thread_id: ThreadId,
         turn: AppServerTurn,

@@ -84,12 +84,9 @@ impl App {
         let turn_result = app_server
             .turn_start(
                 thread_id,
-                btw_turn_input(trimmed_prompt)
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
+                btw_turn_input(trimmed_prompt).into_iter().collect(),
                 self.btw_turn_cwd_path(app_server),
-                permissions.approval_policy.into(),
+                permissions.approval_policy,
                 permissions.approvals_reviewer,
                 permissions.permission_profile.clone(),
                 permissions.active_permission_profile.clone(),
@@ -316,7 +313,7 @@ pub(super) fn btw_thread_start_params(
         model: Some(app.chat_widget.current_model().to_string()),
         model_provider: (!app_server.is_remote()).then_some(app.config.model_provider_id.clone()),
         cwd: app.btw_thread_cwd(app_server),
-        approval_policy: Some(permissions.approval_policy.into()),
+        approval_policy: Some(permissions.approval_policy),
         approvals_reviewer: Some(AppServerApprovalsReviewer::from(
             permissions.approvals_reviewer,
         )),
@@ -344,7 +341,7 @@ pub(super) fn btw_thread_fork_params(
         model: Some(app.chat_widget.current_model().to_string()),
         model_provider: (!app_server.is_remote()).then_some(app.config.model_provider_id.clone()),
         cwd: app.btw_thread_cwd(app_server),
-        approval_policy: Some(permissions.approval_policy.into()),
+        approval_policy: Some(permissions.approval_policy),
         approvals_reviewer: Some(AppServerApprovalsReviewer::from(
             permissions.approvals_reviewer,
         )),

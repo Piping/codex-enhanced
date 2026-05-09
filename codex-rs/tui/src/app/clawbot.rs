@@ -679,7 +679,7 @@ impl App {
                     text_elements: Vec::new(),
                 }],
                 session.cwd.to_path_buf(),
-                clawbot_approval_policy(session.approval_policy, turn_mode).into(),
+                clawbot_approval_policy(session.approval_policy, turn_mode),
                 session.approvals_reviewer,
                 permission_profile,
                 session.active_permission_profile.clone(),
@@ -930,6 +930,7 @@ impl App {
             .remove_pending_turn(&thread_id.to_string(), turn_id)
     }
 
+    #[allow(dead_code)]
     fn clawbot_turn_mode_for_turn(
         &self,
         thread_id: ThreadId,
@@ -942,6 +943,7 @@ impl App {
             .map(|pending| pending.turn_mode)
     }
 
+    #[allow(dead_code)]
     pub(super) fn clawbot_auto_response_op_for_server_request(
         &self,
         thread_id: ThreadId,
@@ -978,6 +980,7 @@ impl App {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) async fn maybe_auto_resolve_clawbot_server_request(
         &mut self,
         app_server: &AppServerSession,

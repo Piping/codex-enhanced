@@ -360,9 +360,8 @@ impl App {
             self.set_approvals_reviewer_in_app_and_widget(self.config.approvals_reviewer);
         }
         if approval_policy_override.is_some() {
-            self.chat_widget.set_approval_policy(AskForApproval::from(
-                self.config.permissions.approval_policy.value(),
-            ));
+            self.chat_widget
+                .set_approval_policy(self.config.permissions.approval_policy.value());
         }
         if permission_profile_override.is_some()
             && let Err(err) = self

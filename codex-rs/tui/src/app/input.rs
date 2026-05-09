@@ -4,6 +4,8 @@
 //! entry, Ctrl-L clear, external editor launch, and agent navigation shortcuts.
 
 use super::agent_navigation::AgentNavigationDirection;
+use super::key_chord::KeyChordAction;
+use super::key_chord::KeyChordResolution;
 use super::*;
 
 impl App {
@@ -189,6 +191,10 @@ impl App {
             return;
         }
 
+        let Some(key_event) = self.handle_key_chord_key_event(key_event) else {
+            return;
+        };
+
         if matches!(key_event.code, KeyCode::Esc)
             && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
         {
@@ -250,6 +256,39 @@ impl App {
                 self.chat_widget.handle_key_event(key_event);
             }
         };
+    }
+
+    pub(super) fn handle_key_chord_key_event(&mut self, key_event: KeyEvent) -> Option<KeyEvent> {
+        match self.key_chord.handle_key_event(key_event) {
+            KeyChordResolution::NoMatch => Some(key_event),
+            KeyChordResolution::Forward(key_event) => Some(key_event),
+            KeyChordResolution::AwaitingSecondKey | KeyChordResolution::Cancelled => None,
+            KeyChordResolution::Matched(action) => {
+                match action {
+                    KeyChordAction::SelectAgentSlot(slot) => {
+                        if let Some(thread_id) = self
+                            .agent_navigation
+                            .thread_id_for_slot(self.primary_thread_id, slot)
+                        {
+                            self.app_event_tx
+                                .send(AppEvent::SelectAgentThread(thread_id));
+                        }
+                    }
+                    KeyChordAction::RespawnCodex => {
+                        if self.chat_widget.can_run_respawn_now() {
+                            self.app_event_tx.send(AppEvent::RespawnRequested);
+                        }
+                    }
+                    KeyChordAction::UndoLastUserMessage => {
+                        self.app_event_tx.send(AppEvent::UndoLastUserMessage);
+                    }
+                    KeyChordAction::CopyLatestOutputPlainText => {
+                        self.chat_widget.copy_latest_output_to_clipboard();
+                    }
+                }
+                None
+            }
+        }
     }
 
     pub(super) fn should_handle_backtrack_esc(&self, key_event: KeyEvent) -> bool {

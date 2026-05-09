@@ -163,7 +163,8 @@ fn question_options_policy(tool_name: &str) -> QuestionOptionsPolicy {
     }
 }
 
-pub fn normalize_request_user_input_args(
+#[cfg(test)]
+fn normalize_request_user_input_args(
     args: RequestUserInputArgs,
 ) -> Result<RequestUserInputArgs, String> {
     normalize_request_user_input_args_for_tool(REQUEST_USER_INPUT_TOOL_NAME, args)

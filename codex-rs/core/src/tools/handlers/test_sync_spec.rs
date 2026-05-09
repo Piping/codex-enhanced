@@ -3,7 +3,8 @@ use codex_tools::ResponsesApiTool;
 use codex_tools::ToolSpec;
 use std::collections::BTreeMap;
 
-pub fn create_list_dir_tool() -> ToolSpec {
+#[cfg(test)]
+fn create_list_dir_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "dir_path".to_string(),

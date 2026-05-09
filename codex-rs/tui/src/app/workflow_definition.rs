@@ -68,6 +68,7 @@ pub(crate) enum WorkflowAfterTurnCondition {
 }
 
 impl WorkflowAfterTurnCondition {
+    #[allow(dead_code)]
     pub(crate) fn matches_turn_status(self, status: &TurnStatus) -> bool {
         match (self, status) {
             (Self::TurnFinished, TurnStatus::Completed | TurnStatus::Failed) => true,

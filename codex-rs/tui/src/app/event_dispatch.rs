@@ -124,6 +124,55 @@ impl App {
                     }
                 }
             }
+            event @ (AppEvent::OpenProfileManagementPanel
+            | AppEvent::EditProfileFallbackConfig
+            | AppEvent::SwitchRuntimeProfile { .. }
+            | AppEvent::RetryLastUserTurnWithProfileFallback { .. }
+            | AppEvent::ExecuteProfileFallbackRetry { .. }
+            | AppEvent::OpenThreadPanel
+            | AppEvent::OpenJumpToMessagePanel
+            | AppEvent::JumpToTranscriptCell { .. }
+            | AppEvent::UndoLastUserMessage
+            | AppEvent::OpenDeleteAgentPicker
+            | AppEvent::OpenDeleteAgentConfirmation { .. }
+            | AppEvent::ArchiveAgentThread { .. }
+            | AppEvent::StartBtwDiscussion { .. }
+            | AppEvent::OpenWorkflowControls
+            | AppEvent::OpenWorkflowControlView { .. }
+            | AppEvent::CreateDefaultWorkflowTemplate
+            | AppEvent::EditWorkflowFile { .. }
+            | AppEvent::ToggleWorkflowTriggerEnabled { .. }
+            | AppEvent::ToggleWorkflowJobEnabled { .. }
+            | AppEvent::CycleWorkflowJobContextStrategy { .. }
+            | AppEvent::CycleWorkflowJobExecutionStrategy { .. }
+            | AppEvent::CycleWorkflowJobResponse { .. }
+            | AppEvent::EditWorkflowJobField { .. }
+            | AppEvent::SetWorkflowTriggerType { .. }
+            | AppEvent::EditWorkflowTriggerField { .. }
+            | AppEvent::WorkflowWorkspaceFilesChanged { .. }
+            | AppEvent::StartManualWorkflowTrigger { .. }
+            | AppEvent::StartManualWorkflowJob { .. }
+            | AppEvent::ShowWorkflowBackgroundTasks
+            | AppEvent::ReplayWorkflowHistory { .. }
+            | AppEvent::BackgroundWorkflowRunCompleted { .. }
+            | AppEvent::ClawbotProviderEvent { .. }
+            | AppEvent::ClawbotTurnCompleted { .. }
+            | AppEvent::OpenClawbotManagement
+            | AppEvent::OpenClawbotManagementView { .. }
+            | AppEvent::OpenClawbotFeishuConfigPrompt { .. }
+            | AppEvent::SaveClawbotFeishuConfigValue { .. }
+            | AppEvent::BindClawbotDiscoveredSession { .. }
+            | AppEvent::BindClawbotSessionAndPreempt { .. }
+            | AppEvent::ClawbotSetTurnMode { .. }
+            | AppEvent::ClawbotSetThreadForwarding { .. }
+            | AppEvent::ScanClawbotFeishuSessions
+            | AppEvent::ClearClawbotFeishuSessions
+            | AppEvent::RetryClawbotFeishuConnection
+            | AppEvent::ToggleClawbotForceConnect
+            | AppEvent::ClawbotDisconnectThread { .. }
+            | AppEvent::EditClawbotStateFile { .. }) => {
+                self.dispatch_feature_event(tui, app_server, event).await;
+            }
             AppEvent::ForkCurrentSession => {
                 self.session_telemetry.counter(
                     "codex.thread.fork",
@@ -1377,8 +1426,7 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 self.config = config;
-                let approval_policy =
-                    AskForApproval::from(self.config.permissions.approval_policy.value());
+                let approval_policy = self.config.permissions.approval_policy.value();
                 self.runtime_approval_policy_override = Some(approval_policy);
                 self.chat_widget.set_approval_policy(approval_policy);
                 self.sync_active_thread_permission_settings_to_cached_session()
@@ -1479,6 +1527,31 @@ impl App {
             }
             AppEvent::UpdateFeatureFlags { updates } => {
                 self.update_feature_flags(updates).await;
+            }
+            AppEvent::ToggleDisplayPreference(key) => {
+                let enabled = !self.display_preferences.is_enabled(key);
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits([display_preference_edit(key, enabled)])
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        set_display_preference_in_config(&mut self.config, key, enabled);
+                        self.display_preferences.set_enabled(key, enabled);
+                        if let Err(err) = self.reflow_transcript_now(tui) {
+                            tracing::warn!(
+                                error = %err,
+                                "failed to reflow transcript after display preference toggle"
+                            );
+                        }
+                        tui.frame_requester().schedule_frame();
+                    }
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to update display preference: {err}"
+                        ));
+                    }
+                }
             }
             AppEvent::UpdateMemorySettings {
                 use_memories,
@@ -1615,6 +1688,13 @@ impl App {
             }
             AppEvent::OpenApprovalsPopup => {
                 self.chat_widget.open_approvals_popup();
+            }
+            AppEvent::OpenDisplayPreferencesPanel => {
+                self.chat_widget
+                    .show_selection_view(display_preferences_panel_params(
+                        &self.display_preferences,
+                        /*initial_selected_idx*/ None,
+                    ));
             }
             AppEvent::OpenAgentPicker => {
                 self.open_agent_picker(app_server).await;

@@ -14,16 +14,6 @@ use codex_app_server_protocol::CollabAgentToolCallStatus;
 use codex_app_server_protocol::ThreadItem;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::protocol::AgentStatus;
-use codex_protocol::protocol::CollabAgentInteractionEndEvent;
-use codex_protocol::protocol::CollabAgentRef;
-use codex_protocol::protocol::CollabAgentSpawnEndEvent;
-use codex_protocol::protocol::CollabAgentStatusEntry;
-use codex_protocol::protocol::CollabCloseEndEvent;
-use codex_protocol::protocol::CollabResumeBeginEvent;
-use codex_protocol::protocol::CollabResumeEndEvent;
-use codex_protocol::protocol::CollabWaitingBeginEvent;
-use codex_protocol::protocol::CollabWaitingEndEvent;
 #[cfg(test)]
 use crossterm::event::KeyCode;
 #[cfg(test)]
@@ -532,7 +522,7 @@ fn wait_complete_lines(
                 .then(|| (parsed_thread_id, agent_metadata(parsed_thread_id), status))
         })
         .collect::<Vec<_>>();
-    extras.sort_by(|left, right| left.0.to_string().cmp(&right.0.to_string()));
+    extras.sort_by_key(|left| left.0.to_string());
     entries.extend(extras);
 
     if entries.is_empty() {

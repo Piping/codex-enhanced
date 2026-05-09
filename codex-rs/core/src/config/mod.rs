@@ -53,7 +53,6 @@ use codex_config::types::SessionPickerViewMode;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverable;
-use codex_config::types::Tui;
 use codex_config::types::TuiDisplayPreferences;
 use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;

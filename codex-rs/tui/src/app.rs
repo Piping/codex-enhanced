@@ -5,7 +5,6 @@
 
 use crate::app_backtrack::BacktrackState;
 use crate::app_command::AppCommand;
-use crate::app_command::AppCommandView;
 use crate::app_event::AppEvent;
 use crate::app_event::ClawbotControlsDestination;
 use crate::app_event::ExitMode;
@@ -35,7 +34,6 @@ use crate::diff_render::DiffSummary;
 use crate::display_preferences::DisplayPreferences;
 use crate::display_preferences::display_preference_edit;
 use crate::display_preferences::set_display_preference_in_config;
-use crate::display_preferences_menu::DISPLAY_PREFERENCES_SELECTION_VIEW_ID;
 use crate::display_preferences_menu::display_preferences_panel_params;
 use crate::exec_command::split_command_string;
 use crate::exec_command::strip_bash_lc_and_escape;
@@ -68,8 +66,6 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
 use crate::resume_picker::SessionTarget;
-use crate::session_resume::cwds_differ;
-use crate::session_resume::read_session_model;
 use crate::session_state::ThreadSessionState;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
@@ -123,12 +119,9 @@ use codex_app_server_protocol::SkillErrorInfo;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadItem;
-use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadMemoryMode;
 use codex_app_server_protocol::ThreadRollbackResponse;
-use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
-use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
@@ -136,6 +129,7 @@ use codex_app_server_protocol::TurnStatus;
 use codex_clawbot::PendingClawbotTurn;
 #[cfg(test)]
 use codex_clawbot::ProviderOutboundReaction;
+#[cfg(test)]
 use codex_clawbot::ProviderOutboundTextMessage;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::types::ApprovalsReviewer;
@@ -160,15 +154,12 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 #[cfg(target_os = "windows")]
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::FinalOutput;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::protocol::SessionSource;
 use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use codex_rollout::StateDbHandle;
 use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_path as path_utils;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
@@ -199,8 +190,6 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinHandle;
-#[cfg(test)]
-use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
 use uuid::Uuid;
 mod agent_delete;
@@ -252,8 +241,6 @@ mod workflow_yaml;
 use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
 use self::btw::BtwSessionState;
-use self::key_chord::KeyChordAction;
-use self::key_chord::KeyChordResolution;
 use self::key_chord::KeyChordState;
 use self::loaded_threads::find_loaded_subagent_threads_for_primary;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
@@ -305,40 +292,8 @@ fn collab_receiver_thread_ids(notification: &ServerNotification) -> Option<&[Str
     }
 }
 
-fn workflow_after_turn_last_agent_message(
-    primary_thread_id: Option<ThreadId>,
-    thread_id: ThreadId,
-    notification: &ServerNotification,
-) -> Option<AfterTurnContext> {
-    if primary_thread_id != Some(thread_id) {
-        return None;
-    }
-    let ServerNotification::TurnCompleted(notification) = notification else {
-        return None;
-    };
-    if !matches!(
-        notification.turn.status,
-        TurnStatus::Completed | TurnStatus::Failed
-    ) {
-        return None;
-    }
-    Some(AfterTurnContext {
-        last_agent_message: last_agent_message_for_turn(&notification.turn),
-        status: notification.turn.status.clone(),
-    })
-}
-
-fn last_agent_message_for_turn(turn: &Turn) -> Option<String> {
-    turn.items.iter().fold(None, |_, item| match item {
-        ThreadItem::AgentMessage { text, .. } => {
-            let trimmed = text.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_string())
-        }
-        _ => None,
-    })
-}
-
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub(super) struct AfterTurnContext {
     last_agent_message: Option<String>,
     status: TurnStatus,
@@ -901,6 +856,7 @@ struct WindowsSandboxState {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct PendingWorkflowCompactFollowup {
     thread_id: ThreadId,
     op: Op,

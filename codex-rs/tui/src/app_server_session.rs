@@ -77,7 +77,6 @@ use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
 use codex_app_server_protocol::ThreadRealtimeAppendTextResponse;
-use codex_app_server_protocol::ThreadRealtimeAudioChunk;
 use codex_app_server_protocol::ThreadRealtimeStartParams;
 use codex_app_server_protocol::ThreadRealtimeStartResponse;
 use codex_app_server_protocol::ThreadRealtimeStartTransport;
@@ -945,6 +944,7 @@ impl AppServerSession {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn thread_realtime_text(
         &mut self,
         thread_id: ThreadId,

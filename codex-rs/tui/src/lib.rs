@@ -30,7 +30,6 @@ use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode as AppServerAuthMode;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::Thread as AppServerThread;
-use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;

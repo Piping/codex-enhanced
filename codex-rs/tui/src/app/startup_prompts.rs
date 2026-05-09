@@ -2,6 +2,7 @@
 //!
 //! These helpers run before or during `App::run` bootstrap. They translate configuration and model
 //! catalog state into one-time TUI prompts or warning cells without owning the main event loop.
+#![allow(dead_code)]
 
 use super::*;
 

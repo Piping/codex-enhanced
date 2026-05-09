@@ -28,10 +28,6 @@ pub(crate) enum KeyChordResolution {
 }
 
 impl KeyChordState {
-    pub(crate) fn clear(&mut self) {
-        *self = Self::Idle;
-    }
-
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) -> KeyChordResolution {
         match self {
             Self::Idle => handle_idle_key_event(self, key_event),

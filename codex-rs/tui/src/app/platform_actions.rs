@@ -5,6 +5,7 @@
 
 use super::*;
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[derive(Default)]
 pub(super) struct WindowsSandboxState {
     pub(super) setup_started_at: Option<Instant>,

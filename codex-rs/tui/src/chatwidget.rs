@@ -72,8 +72,6 @@ use crate::multi_agents;
 use crate::multi_agents::AgentMetadata;
 use crate::profile_router::ProfileFallbackAction;
 use crate::profile_router::app_server_profile_fallback_action;
-#[cfg(test)]
-use crate::profile_router::core_profile_fallback_action;
 use crate::session_state::SessionNetworkProxyRuntime;
 use crate::session_state::ThreadSessionState;
 use crate::status::RateLimitWindowDisplay;
@@ -174,13 +172,9 @@ use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::Event;
 #[cfg(test)]
 use codex_protocol::protocol::EventMsg;
-#[cfg(test)]
-use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::SandboxPolicy;
 #[cfg(test)]
 use codex_protocol::protocol::SessionConfiguredEvent;
-#[cfg(test)]
-use codex_protocol::protocol::ThreadRolledBackEvent;
 #[cfg(test)]
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
@@ -328,8 +322,6 @@ use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::ChatKeymap;
 use crate::keymap::RuntimeKeymap;
-#[cfg(test)]
-use crate::markdown::append_markdown;
 use crate::markdown_plain_text::markdown_to_plain_text;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
@@ -4216,6 +4208,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    #[allow(dead_code)]
     fn on_background_event(&mut self, message: String) {
         debug!("BackgroundEvent: {message}");
         self.bottom_pane.ensure_status_indicator();
@@ -5668,7 +5661,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn copy_latest_output_to_clipboard(&mut self) {
-        self.copy_last_agent_markdown();
+        self.copy_last_agent_plain_text();
     }
 
     /// Copy the last agent response as plain text to the system clipboard.
