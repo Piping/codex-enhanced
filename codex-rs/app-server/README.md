@@ -326,7 +326,7 @@ Like `thread/resume`, experimental clients can pass `excludeTurns: true` to `thr
 When present, the new thread is created with `source = { "subAgent": { "threadSpawn": ... } }`.
 The `parentThreadId` must reference a thread that is currently loaded in the app-server process.
 
-Experimental API: `thread/start`, `thread/resume`, and `thread/fork` accept `persistExtendedHistory: true` to persist a richer subset of ThreadItems for non-lossy history when calling `thread/read`, `thread/resume`, and `thread/fork` later. This does not backfill events that were not persisted previously.
+Older clients may still send `persistExtendedHistory`, but app-server ignores it and always uses limited history persistence.
 
 ### Example: List threads (with pagination & filters)
 

@@ -57,6 +57,72 @@ pub(crate) fn find_builtin_command(name: &str, flags: BuiltinCommandFlags) -> Op
     .then_some(cmd)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct UnavailableBuiltinCommand {
+    pub(crate) summary: &'static str,
+    pub(crate) hint: Option<&'static str>,
+}
+
+/// Return a user-facing reason when a built-in command exists but is currently
+/// unavailable because of feature or platform gating.
+pub(crate) fn unavailable_builtin_command(
+    name: &str,
+    flags: BuiltinCommandFlags,
+) -> Option<UnavailableBuiltinCommand> {
+    let cmd = SlashCommand::from_str(name).ok()?;
+    if find_builtin_command(name, flags).is_some() {
+        return None;
+    }
+
+    match cmd {
+        SlashCommand::Collab | SlashCommand::Plan if !flags.collaboration_modes_enabled => {
+            Some(UnavailableBuiltinCommand {
+                summary: "Collaboration modes are disabled.",
+                hint: Some("Enable collaboration modes to use this command."),
+            })
+        }
+        SlashCommand::Apps if !flags.connectors_enabled => Some(UnavailableBuiltinCommand {
+            summary: "Apps are disabled.",
+            hint: Some("Enable Apps support to use /apps."),
+        }),
+        SlashCommand::Plugins if !flags.plugins_command_enabled => {
+            Some(UnavailableBuiltinCommand {
+                summary: "Plugins are disabled.",
+                hint: Some("Enable Plugins in /experimental to use /plugins."),
+            })
+        }
+        SlashCommand::Fast if !flags.fast_command_enabled => Some(UnavailableBuiltinCommand {
+            summary: "Fast mode is disabled.",
+            hint: Some("Enable Fast mode to use /fast."),
+        }),
+        SlashCommand::Goal if !flags.goal_command_enabled => Some(UnavailableBuiltinCommand {
+            summary: "Goals are disabled.",
+            hint: Some("Enable Goals in /experimental to use /goal."),
+        }),
+        SlashCommand::Personality if !flags.personality_command_enabled => {
+            Some(UnavailableBuiltinCommand {
+                summary: "Personality selection is disabled.",
+                hint: Some("Enable Personality in /experimental to use /personality."),
+            })
+        }
+        SlashCommand::Realtime if !flags.realtime_conversation_enabled => {
+            Some(UnavailableBuiltinCommand {
+                summary: "Realtime conversation is disabled.",
+                hint: Some("Enable Realtime conversation in /experimental to use /realtime."),
+            })
+        }
+        SlashCommand::ElevateSandbox if !flags.allow_elevate_sandbox => {
+            Some(UnavailableBuiltinCommand {
+                summary: "Elevated sandbox setup is unavailable.",
+                hint: Some(
+                    "This command is only available when restricted Windows sandboxing is active.",
+                ),
+            })
+        }
+        _ => None,
+    }
+}
+
 /// Whether any visible built-in fuzzily matches the provided prefix.
 pub(crate) fn has_builtin_prefix(name: &str, flags: BuiltinCommandFlags) -> bool {
     builtins_for_input(flags)
@@ -125,6 +191,19 @@ mod tests {
         let mut flags = all_enabled_flags();
         flags.goal_command_enabled = false;
         assert_eq!(find_builtin_command("goal", flags), None);
+    }
+
+    #[test]
+    fn goal_command_reports_unavailable_reason_when_disabled() {
+        let mut flags = all_enabled_flags();
+        flags.goal_command_enabled = false;
+        assert_eq!(
+            unavailable_builtin_command("goal", flags),
+            Some(UnavailableBuiltinCommand {
+                summary: "Goals are disabled.",
+                hint: Some("Enable Goals in /experimental to use /goal."),
+            })
+        );
     }
 
     #[test]

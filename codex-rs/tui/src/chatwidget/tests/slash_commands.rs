@@ -477,6 +477,28 @@ async fn queued_unknown_slash_reports_error_when_dequeued() {
 }
 
 #[tokio::test]
+async fn goal_slash_command_reports_feature_gate_when_disabled() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/goal improve benchmark coverage");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Goals are disabled."),
+        "expected goals disabled message, got {rendered:?}"
+    );
+    assert!(
+        rendered.contains("Enable Goals in /experimental to use /goal."),
+        "expected enablement hint, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
 async fn ctrl_d_quits_without_prompt() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

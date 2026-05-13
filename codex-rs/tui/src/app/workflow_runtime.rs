@@ -1751,7 +1751,6 @@ fn workflow_thread_start_params(
         }),
         environments: None,
         ephemeral: Some(true),
-        persist_extended_history: true,
         ..ThreadStartParams::default()
     }
 }
@@ -1786,7 +1785,6 @@ fn workflow_thread_fork_params(
             )])
         }),
         ephemeral: true,
-        persist_extended_history: true,
         ..ThreadForkParams::default()
     }
 }

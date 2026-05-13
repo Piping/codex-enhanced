@@ -180,7 +180,7 @@ pub struct ThreadStartParams {
     /// continue sending the field while rollout persistence always uses the
     /// limited history policy.
     #[experimental("thread/start.persistFullHistory")]
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub persist_extended_history: bool,
 }
 
@@ -312,7 +312,7 @@ pub struct ThreadResumeParams {
     /// continue sending the field while rollout persistence always uses the
     /// limited history policy.
     #[experimental("thread/resume.persistFullHistory")]
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub persist_extended_history: bool,
 }
 
@@ -424,8 +424,56 @@ pub struct ThreadForkParams {
     /// continue sending the field while rollout persistence always uses the
     /// limited history policy.
     #[experimental("thread/fork.persistFullHistory")]
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub persist_extended_history: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn thread_start_params_omit_persist_extended_history_when_false() {
+        let params = ThreadStartParams::default();
+        let payload = serde_json::to_value(params).unwrap();
+        assert_eq!(
+            payload
+                .as_object()
+                .and_then(|object| object.get("persistExtendedHistory")),
+            None
+        );
+    }
+
+    #[test]
+    fn thread_resume_params_omit_persist_extended_history_when_false() {
+        let params = ThreadResumeParams::default();
+        let payload = serde_json::to_value(params).unwrap();
+        assert_eq!(
+            payload
+                .as_object()
+                .and_then(|object| object.get("persistExtendedHistory")),
+            None
+        );
+    }
+
+    #[test]
+    fn thread_fork_params_omit_persist_extended_history_when_false() {
+        let params = ThreadForkParams {
+            thread_id: "thr_123".to_string(),
+            ..ThreadForkParams::default()
+        };
+        let payload = serde_json::to_value(params).unwrap();
+        assert_eq!(
+            payload
+                .as_object()
+                .and_then(|object| object.get("persistExtendedHistory")),
+            None
+        );
+        assert_eq!(payload["threadId"], json!("thr_123"));
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]

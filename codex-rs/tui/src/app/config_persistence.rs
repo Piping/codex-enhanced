@@ -345,6 +345,9 @@ impl App {
 
         let memory_tool_was_enabled = self.config.features.enabled(Feature::MemoryTool);
         self.config = next_config;
+        if !feature_updates_to_apply.is_empty() {
+            self.chat_widget.submit_op(AppCommand::reload_user_config());
+        }
         let show_memory_enable_notice =
             feature_updates_to_apply.iter().any(|(feature, enabled)| {
                 *feature == Feature::MemoryTool && *enabled && !memory_tool_was_enabled

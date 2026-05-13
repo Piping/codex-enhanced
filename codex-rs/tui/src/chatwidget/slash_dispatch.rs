@@ -853,14 +853,23 @@ impl ChatWidget {
             return QueueDrain::Stop;
         }
 
-        let Some(cmd) = slash_commands::find_builtin_command(name, self.builtin_command_flags())
-        else {
-            self.add_info_message(
-                format!(
-                    r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
-                ),
-                /*hint*/ None,
-            );
+        let builtin_flags = self.builtin_command_flags();
+        let Some(cmd) = slash_commands::find_builtin_command(name, builtin_flags) else {
+            if let Some(unavailable) =
+                slash_commands::unavailable_builtin_command(name, builtin_flags)
+            {
+                self.add_info_message(
+                    unavailable.summary.to_string(),
+                    unavailable.hint.map(str::to_string),
+                );
+            } else {
+                self.add_info_message(
+                    format!(
+                        r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
+                    ),
+                    /*hint*/ None,
+                );
+            }
             return QueueDrain::Continue;
         };
 

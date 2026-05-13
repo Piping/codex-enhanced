@@ -2745,9 +2745,11 @@ impl ChatComposer {
         {
             let treat_as_plain_text = input_starts_with_space || name.contains('/');
             if !treat_as_plain_text {
+                let builtin_flags = self.builtin_command_flags();
                 let is_builtin =
-                    slash_commands::find_builtin_command(name, self.builtin_command_flags())
-                        .is_some();
+                    slash_commands::find_builtin_command(name, builtin_flags).is_some();
+                let unavailable_builtin =
+                    slash_commands::unavailable_builtin_command(name, builtin_flags);
                 let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
                 let is_known_prompt =
                     name.strip_prefix(&prompt_prefix)
@@ -2757,11 +2759,21 @@ impl ChatComposer {
                                 .any(|prompt| prompt.name == prompt_name)
                         });
                 if !is_builtin && !is_known_prompt {
-                    let message = format!(
-                        r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
-                    );
+                    let (message, hint) = if let Some(unavailable) = unavailable_builtin {
+                        (
+                            unavailable.summary.to_string(),
+                            unavailable.hint.map(str::to_string),
+                        )
+                    } else {
+                        (
+                            format!(
+                                r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
+                            ),
+                            None,
+                        )
+                    };
                     self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_info_event(message, /*hint*/ None),
+                        history_cell::new_info_event(message, hint),
                     )));
                     self.set_text_content_with_mention_bindings(
                         original_input.clone(),

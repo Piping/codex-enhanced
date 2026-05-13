@@ -324,7 +324,6 @@ pub(super) fn btw_thread_start_params(
         )),
         personality: app.config.personality,
         subagent_spawn: subagent_spawn.cloned(),
-        persist_extended_history: true,
         ..ThreadStartParams::default()
     }
 }
@@ -351,7 +350,6 @@ pub(super) fn btw_thread_fork_params(
             app.config.developer_instructions.as_deref(),
         )),
         subagent_spawn: subagent_spawn.cloned(),
-        persist_extended_history: true,
         ..ThreadForkParams::default()
     }
 }
