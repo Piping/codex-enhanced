@@ -1736,10 +1736,6 @@ impl ChatComposer {
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
-        let ActivePopup::Command(popup) = &mut self.active_popup else {
-            unreachable!();
-        };
-
         match key_event {
             KeyEvent {
                 code: KeyCode::Up, ..
@@ -1749,6 +1745,9 @@ impl ChatComposer {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
+                let ActivePopup::Command(popup) = &mut self.active_popup else {
+                    unreachable!();
+                };
                 popup.move_up();
                 (InputResult::None, true)
             }
@@ -1761,6 +1760,9 @@ impl ChatComposer {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
+                let ActivePopup::Command(popup) = &mut self.active_popup else {
+                    unreachable!();
+                };
                 popup.move_down();
                 (InputResult::None, true)
             }
@@ -1774,6 +1776,9 @@ impl ChatComposer {
             KeyEvent {
                 code: KeyCode::Tab, ..
             } => {
+                let ActivePopup::Command(popup) = &mut self.active_popup else {
+                    unreachable!();
+                };
                 let first_line = self.textarea.text().lines().next().unwrap_or("");
                 popup.on_composer_text_change(first_line.to_string());
                 let selected = popup.selected_item();
@@ -1827,6 +1832,9 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
+                let ActivePopup::Command(popup) = &mut self.active_popup else {
+                    unreachable!();
+                };
                 // Treat "/" as accepting the highlighted command as text completion
                 // while the slash-command popup is active.
                 let first_line = self.textarea.text().lines().next().unwrap_or("");
@@ -1906,7 +1914,15 @@ impl ChatComposer {
                     );
                 }
 
-                if let Some(selection) = popup.selected_item() {
+                if let Some(result) = self.try_dispatch_slash_command_with_args() {
+                    return (result, true);
+                }
+
+                let selection = match &self.active_popup {
+                    ActivePopup::Command(popup) => popup.selected_item(),
+                    _ => unreachable!(),
+                };
+                if let Some(selection) = selection {
                     match selection {
                         CommandItem::Builtin(cmd) => {
                             self.stage_selected_slash_command_history(cmd);
@@ -1915,7 +1931,11 @@ impl ChatComposer {
                             return (InputResult::Command(cmd), true);
                         }
                         CommandItem::UserPrompt(index) => {
-                            if let Some(prompt) = popup.prompt(index).cloned() {
+                            let prompt = match &self.active_popup {
+                                ActivePopup::Command(popup) => popup.prompt(index).cloned(),
+                                _ => unreachable!(),
+                            };
+                            if let Some(prompt) = prompt {
                                 match prompt_selection_action(
                                     &prompt,
                                     first_line,
@@ -7841,6 +7861,42 @@ mod tests {
             },
             _ => panic!("slash popup not active after typing '/res'"),
         }
+    }
+
+    #[test]
+    fn slash_popup_enter_prefers_inline_args_for_btw() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        composer.set_text_content(
+            "/btw compare the two approaches".to_string(),
+            Vec::new(),
+            Vec::new(),
+        );
+        assert!(
+            matches!(composer.active_popup, ActivePopup::Command(_)),
+            "slash popup should stay active for '/btw ...'"
+        );
+
+        let (result, redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(redraw);
+        assert_eq!(
+            result,
+            InputResult::CommandWithArgs(
+                SlashCommand::Btw,
+                "compare the two approaches".to_string(),
+                Vec::new(),
+            )
+        );
     }
 
     #[test]

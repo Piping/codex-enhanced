@@ -801,15 +801,8 @@ impl ChatWidget {
                     .send(AppEvent::ResumeSessionByIdOrName(args));
             }
             SlashCommand::Btw if !trimmed.is_empty() => {
-                let Some((prepared_args, _prepared_elements)) = self
-                    .bottom_pane
-                    .prepare_inline_args_submission(/*record_history*/ false)
-                else {
-                    return;
-                };
-                self.app_event_tx.send(AppEvent::StartBtwDiscussion {
-                    prompt: prepared_args,
-                });
+                self.app_event_tx
+                    .send(AppEvent::StartBtwDiscussion { prompt: args });
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
