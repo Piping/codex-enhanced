@@ -282,6 +282,9 @@ fn proto_string_map(values: HashMap<String, String>) -> proto::StringMap {
 #[cfg(test)]
 fn proto_wire_api(wire_api: WireApi) -> proto::WireApi {
     match wire_api {
+        WireApi::Chat => {
+            panic!("thread config proto does not support chat wire api")
+        }
         WireApi::Responses => proto::WireApi::Responses,
     }
 }

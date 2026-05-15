@@ -143,10 +143,7 @@ fn trim_trailing_horizontal_whitespace(plain_text: &mut String) {
 fn strip_parenthesized_absolute_paths(plain_text: &str) -> String {
     let mut sanitized = plain_text.trim().to_string();
 
-    loop {
-        let Some(captures) = PARENTHESIZED_ABSOLUTE_PATH_RE.captures(&sanitized) else {
-            break;
-        };
+    while let Some(captures) = PARENTHESIZED_ABSOLUTE_PATH_RE.captures(&sanitized) {
         let Some(full_match) = captures.get(0) else {
             break;
         };

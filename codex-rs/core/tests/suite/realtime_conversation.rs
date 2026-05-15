@@ -1832,16 +1832,6 @@ async fn conversation_startup_context_current_thread_selects_many_turns_by_budge
         "head detail ".repeat(120),
         "tail detail ".repeat(170),
     );
-    let mut user_turns = (1..=7)
-        .map(|index| {
-            format!(
-                "short-turn-{index}-start {} short-turn-{index}-end",
-                "detail ".repeat(86)
-            )
-        })
-        .collect::<Vec<_>>();
-    user_turns.push(latest_long_user_turn.clone());
-
     let mut builder = test_codex().with_config({
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
@@ -1854,8 +1844,14 @@ async fn conversation_startup_context_current_thread_selects_many_turns_by_budge
     // Seed completed turns through a resumed thread so this remains an
     // end-to-end startup-context test without paying for a model turn per
     // fixture entry in platform CI.
-    let history = user_turns
-        .into_iter()
+    let history = (1..=7)
+        .map(|index| {
+            format!(
+                "short-turn-{index}-start {} short-turn-{index}-end",
+                "detail ".repeat(86)
+            )
+        })
+        .chain([latest_long_user_turn.clone()])
         .enumerate()
         .flat_map(|(index, user_turn)| {
             let turn_number = index + 1;

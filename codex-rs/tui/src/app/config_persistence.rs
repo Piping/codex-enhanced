@@ -6,17 +6,43 @@
 
 use super::*;
 
+const CONFIG_REBUILD_THREAD_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
+
 impl App {
     pub(super) async fn rebuild_config_for_cwd(&self, cwd: PathBuf) -> Result<Config> {
         let mut overrides = self.harness_overrides.clone();
         overrides.cwd = Some(cwd.clone());
+        let codex_home = self.config.codex_home.to_path_buf();
+        let cli_kv_overrides = self.cli_kv_overrides.clone();
         let cwd_display = cwd.display().to_string();
-        ConfigBuilder::default()
-            .codex_home(self.config.codex_home.to_path_buf())
-            .cli_overrides(self.cli_kv_overrides.clone())
-            .harness_overrides(overrides)
-            .build()
-            .await
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        std::thread::Builder::new()
+            .name("config-rebuild".to_string())
+            .stack_size(CONFIG_REBUILD_THREAD_STACK_SIZE_BYTES)
+            .spawn(move || {
+                let result = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(std::io::Error::other)
+                    .and_then(|runtime| {
+                        runtime.block_on(async move {
+                            ConfigBuilder::default()
+                                .codex_home(codex_home)
+                                .cli_overrides(cli_kv_overrides)
+                                .harness_overrides(overrides)
+                                .build()
+                                .await
+                        })
+                    });
+                let _ = tx.send(result);
+            })
+            .wrap_err_with(|| {
+                format!("Failed to spawn config rebuild thread for cwd {cwd_display}")
+            })?;
+        rx.await
+            .wrap_err_with(|| {
+                format!("Config rebuild thread ended before returning cwd {cwd_display}")
+            })?
             .wrap_err_with(|| format!("Failed to rebuild config for cwd {cwd_display}"))
     }
 
@@ -750,6 +776,51 @@ terminal_resize_reflow_max_rows = 9000
             crate::legacy_core::config::TerminalResizeReflowMaxRows::Limit(9000)
         );
         Ok(())
+    }
+
+    #[test]
+    fn rebuild_config_for_cwd_uses_dedicated_large_stack_for_profile_override() -> Result<()> {
+        const WORKER_THREADS: usize = 1;
+        const TEST_STACK_SIZE_BYTES: usize = 2 * 1024 * 1024;
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(WORKER_THREADS)
+            .thread_stack_size(TEST_STACK_SIZE_BYTES)
+            .enable_all()
+            .build()?;
+
+        runtime.block_on(async {
+            let mut app = make_test_app().await;
+            let codex_home = tempdir()?;
+            let workdir = codex_home.path().join("work");
+            std::fs::create_dir_all(&workdir)?;
+            app.config.codex_home = codex_home.path().to_path_buf().abs();
+            app.harness_overrides.config_profile = Some("third".to_string());
+            std::fs::write(
+                codex_home.path().join("config.toml"),
+                format!(
+                    r#"profile = "secondary"
+
+[profiles.secondary]
+model = "gpt-5.2"
+
+[profiles.third]
+model = "gpt-5-mini"
+
+[projects."{}"]
+trust_level = "trusted"
+"#,
+                    workdir.display()
+                ),
+            )?;
+
+            let config = app.rebuild_config_for_cwd(workdir.clone()).await?;
+
+            assert_eq!(config.active_profile.as_deref(), Some("third"));
+            assert_eq!(config.model.as_deref(), Some("gpt-5-mini"));
+            assert_eq!(config.cwd.to_path_buf(), workdir);
+            Ok(())
+        })
     }
 
     #[tokio::test]

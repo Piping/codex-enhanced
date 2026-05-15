@@ -78,6 +78,7 @@ impl App {
     }
 
     #[cfg(test)]
+    #[expect(dead_code)]
     pub(super) fn routed_profile_runtime_changed(
         current_config: &Config,
         next_config: &Config,

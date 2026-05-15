@@ -276,7 +276,9 @@ impl AppCommand {
             legacy_compatible_permission_profile(&permission_profile, cwd.as_path());
         let sandbox_policy = permission_profile
             .to_legacy_sandbox_policy(cwd.as_path())
-            .expect("compatible permission profile must project to legacy sandbox policy");
+            .unwrap_or_else(|err| {
+                panic!("compatible permission profile must project to legacy sandbox policy: {err}")
+            });
 
         Self::UserTurn {
             items,
@@ -741,7 +743,7 @@ impl AppCommand {
             } => Op::ResolveElicitation {
                 server_name,
                 request_id: core_app_server_request_id_to_core_request_id(request_id),
-                decision: elicitation_action_to_core_elicitation_action(&decision),
+                decision: elicitation_action_to_core_elicitation_action(decision),
                 content,
                 meta,
             },
@@ -790,7 +792,7 @@ fn core_app_server_request_id_to_core_request_id(id: AppServerRequestId) -> Core
 }
 
 fn elicitation_action_to_core_elicitation_action(
-    decision: &McpServerElicitationAction,
+    decision: McpServerElicitationAction,
 ) -> ElicitationAction {
     match decision {
         McpServerElicitationAction::Accept => ElicitationAction::Accept,

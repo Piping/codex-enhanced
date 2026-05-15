@@ -192,7 +192,7 @@ impl ClawbotRuntime {
             .find(|binding| binding.session_ref() == *session)
         {
             binding.thread_id = thread_id.clone();
-            binding.owner_primary_thread_id = owner_primary_thread_id.clone();
+            binding.owner_primary_thread_id = owner_primary_thread_id;
             binding.updated_at = now;
         } else {
             bindings.push(SessionBinding {

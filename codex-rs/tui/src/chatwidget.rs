@@ -647,6 +647,7 @@ fn profile_fallback_action_label(action: ProfileFallbackAction) -> &'static str 
 }
 
 #[cfg(test)]
+#[expect(dead_code)]
 fn core_rate_limit_error_kind(info: &CoreCodexErrorInfo) -> Option<RateLimitErrorKind> {
     match info {
         CoreCodexErrorInfo::ServerOverloaded => Some(RateLimitErrorKind::ServerOverloaded),
@@ -6924,6 +6925,7 @@ impl ChatWidget {
     }
 
     #[cfg(test)]
+    #[expect(dead_code)]
     fn replay_initial_messages(&mut self, events: Vec<EventMsg>) {
         for msg in events {
             if matches!(msg, EventMsg::SessionConfigured(_)) {

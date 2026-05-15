@@ -96,12 +96,13 @@ mod tests {
     use codex_protocol::protocol::UserMessageEvent;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use pretty_assertions::assert_eq;
+    use std::path::Path;
     use tempfile::tempdir;
 
     use super::collector::collect_sessions;
     use super::generate_report;
 
-    fn write_rollout(codex_home: &PathBuf, relative_dir: &str, thread_id: ThreadId) {
+    fn write_rollout(codex_home: &Path, relative_dir: &str, thread_id: ThreadId) {
         let dir = codex_home.join(relative_dir);
         fs::create_dir_all(&dir).expect("create rollout dir");
         let path =

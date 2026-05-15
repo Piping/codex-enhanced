@@ -234,13 +234,12 @@ async fn analyze_rollout(path: PathBuf, archived: bool) -> anyhow::Result<Option
         .saturating_sub(metrics.exact_tool_runtime())
         .saturating_sub(metrics.estimated_user_wait);
 
-    let (parent_thread_id, depth, source_label, agent_nickname, agent_role, agent_path) =
-        source_fields(&session_meta.source);
+    let source_fields = source_fields(&session_meta.source);
 
     Ok(Some(CollectedThread {
         thread_id: session_meta.id,
-        parent_thread_id,
-        depth,
+        parent_thread_id: source_fields.parent_thread_id,
+        depth: source_fields.depth,
         title: if title.is_empty() {
             fallback_title(&path)
         } else {
@@ -249,10 +248,10 @@ async fn analyze_rollout(path: PathBuf, archived: bool) -> anyhow::Result<Option
         cwd: session_meta.cwd,
         rollout_path: path,
         archived,
-        source_label,
-        agent_nickname,
-        agent_role,
-        agent_path,
+        source_label: source_fields.source_label,
+        agent_nickname: source_fields.agent_nickname,
+        agent_role: source_fields.agent_role,
+        agent_path: source_fields.agent_path,
         created_at,
         updated_at,
         first_event_at,
@@ -261,46 +260,95 @@ async fn analyze_rollout(path: PathBuf, archived: bool) -> anyhow::Result<Option
     }))
 }
 
-fn source_fields(
-    source: &SessionSource,
-) -> (
-    Option<ThreadId>,
-    Option<i32>,
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-) {
+struct SourceFields {
+    parent_thread_id: Option<ThreadId>,
+    depth: Option<i32>,
+    source_label: String,
+    agent_nickname: Option<String>,
+    agent_role: Option<String>,
+    agent_path: Option<String>,
+}
+
+fn source_fields(source: &SessionSource) -> SourceFields {
     match source {
-        SessionSource::Cli => (None, None, "cli".to_string(), None, None, None),
-        SessionSource::VSCode => (None, None, "vscode".to_string(), None, None, None),
-        SessionSource::Exec => (None, None, "exec".to_string(), None, None, None),
-        SessionSource::Mcp => (None, None, "mcp".to_string(), None, None, None),
+        SessionSource::Cli => SourceFields {
+            parent_thread_id: None,
+            depth: None,
+            source_label: "cli".to_string(),
+            agent_nickname: None,
+            agent_role: None,
+            agent_path: None,
+        },
+        SessionSource::VSCode => SourceFields {
+            parent_thread_id: None,
+            depth: None,
+            source_label: "vscode".to_string(),
+            agent_nickname: None,
+            agent_role: None,
+            agent_path: None,
+        },
+        SessionSource::Exec => SourceFields {
+            parent_thread_id: None,
+            depth: None,
+            source_label: "exec".to_string(),
+            agent_nickname: None,
+            agent_role: None,
+            agent_path: None,
+        },
+        SessionSource::Mcp => SourceFields {
+            parent_thread_id: None,
+            depth: None,
+            source_label: "mcp".to_string(),
+            agent_nickname: None,
+            agent_role: None,
+            agent_path: None,
+        },
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id,
             depth,
             agent_path,
             agent_nickname,
             agent_role,
-        }) => (
-            Some(*parent_thread_id),
-            Some(*depth),
-            format!("subagent/thread_spawn:d{depth}"),
-            agent_nickname.clone(),
-            agent_role.clone(),
-            agent_path.clone().map(|path| path.to_string()),
-        ),
-        SessionSource::SubAgent(other) => (
-            None,
-            None,
-            format!("subagent/{other}"),
-            source.get_nickname(),
-            source.get_agent_role(),
-            source.get_agent_path().map(|path| path.to_string()),
-        ),
-        SessionSource::Custom(other) => (None, None, other.clone(), None, None, None),
-        SessionSource::Internal(_) => (None, None, "internal".to_string(), None, None, None),
-        SessionSource::Unknown => (None, None, "unknown".to_string(), None, None, None),
+        }) => SourceFields {
+            parent_thread_id: Some(*parent_thread_id),
+            depth: Some(*depth),
+            source_label: format!("subagent/thread_spawn:d{depth}"),
+            agent_nickname: agent_nickname.clone(),
+            agent_role: agent_role.clone(),
+            agent_path: agent_path.clone().map(|path| path.to_string()),
+        },
+        SessionSource::SubAgent(other) => SourceFields {
+            parent_thread_id: None,
+            depth: None,
+            source_label: format!("subagent/{other}"),
+            agent_nickname: source.get_nickname(),
+            agent_role: source.get_agent_role(),
+            agent_path: source.get_agent_path().map(|path| path.to_string()),
+        },
+        SessionSource::Custom(other) => SourceFields {
+            parent_thread_id: None,
+            depth: None,
+            source_label: other.clone(),
+            agent_nickname: None,
+            agent_role: None,
+            agent_path: None,
+        },
+        SessionSource::Internal(_) => SourceFields {
+            parent_thread_id: None,
+            depth: None,
+            source_label: "internal".to_string(),
+            agent_nickname: None,
+            agent_role: None,
+            agent_path: None,
+        },
+        SessionSource::Unknown => SourceFields {
+            parent_thread_id: None,
+            depth: None,
+            source_label: "unknown".to_string(),
+            agent_nickname: None,
+            agent_role: None,
+            agent_path: None,
+        },
     }
 }
 

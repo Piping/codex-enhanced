@@ -24,6 +24,7 @@ use axum::routing::get;
 use axum::routing::post;
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::AppServerEvent;
+use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::RemoteAppServerClient;
 use codex_app_server_client::RemoteAppServerConnectArgs;
@@ -57,7 +58,9 @@ use codex_protocol::protocol::RolloutItem;
 use codex_rollout::RolloutConfig;
 use codex_thread_store::ListThreadsParams;
 use codex_thread_store::LocalThreadStore;
+use codex_thread_store::LocalThreadStoreConfig;
 use codex_thread_store::ReadThreadParams;
+use codex_thread_store::SortDirection;
 use codex_thread_store::StoredThread;
 use codex_thread_store::ThreadSortKey;
 use codex_thread_store::ThreadStore;
@@ -96,7 +99,10 @@ impl AppState {
         let config = Config::load_with_cli_overrides(Vec::new())
             .await
             .context("failed to load Codex config")?;
-        let store = LocalThreadStore::new(RolloutConfig::from_view(&config));
+        let store = LocalThreadStore::new(
+            LocalThreadStoreConfig::from_config(&RolloutConfig::from_view(&config)),
+            /*state_db*/ None,
+        );
         let runtime = RemoteRuntime::start(config.clone()).await?;
         let server_name = gethostname().to_string_lossy().trim().to_string();
 
@@ -134,10 +140,13 @@ impl AppState {
                 page_size: 100,
                 cursor: None,
                 sort_key: ThreadSortKey::UpdatedAt,
+                sort_direction: SortDirection::Desc,
                 allowed_sources: Vec::new(),
                 model_providers: None,
                 archived: false,
                 search_term: None,
+                cwd_filters: None,
+                use_state_db_only: false,
             })
             .await
             .map_err(ApiError::from_thread_store)?;
@@ -576,10 +585,13 @@ async fn list_sessions(
             page_size: query.page_size.unwrap_or(50).clamp(1, 100),
             cursor: query.cursor,
             sort_key: parse_sort_key(query.sort.as_deref()),
+            sort_direction: SortDirection::Desc,
             allowed_sources: Vec::new(),
             model_providers: None,
             archived: query.archived.unwrap_or(false),
             search_term: normalize_query_text(query.search),
+            cwd_filters: None,
+            use_state_db_only: false,
         })
         .await
         .map_err(ApiError::from_thread_store)?;
@@ -844,6 +856,7 @@ fn push_message(messages: &mut Vec<SessionMessage>, role: &str, text: String) {
 
 struct RemoteRuntime {
     client: Arc<Mutex<AppServerClient>>,
+    request_handle: AppServerRequestHandle,
     _app_server: BackgroundAppServer,
     loaded_threads: Arc<RwLock<HashSet<String>>>,
     pending_approvals: Arc<RwLock<HashMap<String, Vec<PendingApprovalState>>>>,
@@ -863,8 +876,11 @@ impl RemoteRuntime {
             .await
             .with_context(|| format!("failed to connect to app-server at `{websocket_url}`"))?;
 
+        let client = AppServerClient::Remote(client);
+        let request_handle = client.request_handle();
         let runtime = Arc::new(Self {
-            client: Arc::new(Mutex::new(AppServerClient::Remote(client))),
+            client: Arc::new(Mutex::new(client)),
+            request_handle,
             _app_server: app_server,
             loaded_threads: Arc::new(RwLock::new(HashSet::new())),
             pending_approvals: Arc::new(RwLock::new(HashMap::new())),
@@ -887,7 +903,7 @@ impl RemoteRuntime {
                         &thread_id,
                         PendingApprovalState::Command {
                             request_id: String::new(),
-                            params,
+                            params: Box::new(params),
                         },
                         &request_id,
                     )
@@ -899,7 +915,7 @@ impl RemoteRuntime {
                         &thread_id,
                         PendingApprovalState::FileChange {
                             request_id: String::new(),
-                            params,
+                            params: Box::new(params),
                         },
                         &request_id,
                     )
@@ -989,8 +1005,7 @@ impl RemoteRuntime {
         T: serde::de::DeserializeOwned,
     {
         self.drain_events().await;
-        let client = self.client.lock().await;
-        client
+        self.request_handle
             .request_typed(request)
             .await
             .map_err(ApiError::from_app_server_request)
@@ -1002,8 +1017,7 @@ impl RemoteRuntime {
         result: serde_json::Value,
     ) -> Result<(), ApiError> {
         self.drain_events().await;
-        let client = self.client.lock().await;
-        client
+        self.request_handle
             .resolve_server_request(request_id, result)
             .await
             .map_err(|err| ApiError::internal(err.to_string()))
@@ -1014,13 +1028,13 @@ impl RemoteRuntime {
         request_id: RequestId,
         error: JSONRPCErrorError,
     ) -> Result<(), ApiError> {
-        let client = self.client.lock().await;
-        client
+        self.request_handle
             .reject_server_request(request_id, error)
             .await
             .map_err(|err| ApiError::internal(err.to_string()))
     }
 
+    #[allow(clippy::await_holding_invalid_type)]
     async fn drain_events(&self) {
         loop {
             let event = {
@@ -1028,7 +1042,7 @@ impl RemoteRuntime {
                 timeout(Duration::from_millis(5), client.next_event()).await
             };
             match event {
-                Ok(Some(event)) => self.handle_event(event.into()).await,
+                Ok(Some(event)) => self.handle_event(event).await,
                 Ok(None) => break,
                 Err(_) => break,
             }
@@ -1058,7 +1072,7 @@ impl RemoteRuntime {
             .cloned()
             .unwrap_or_default()
             .into_iter()
-            .map(|item| item.to_api())
+            .map(PendingApprovalState::into_api)
             .collect()
     }
 
@@ -1163,8 +1177,7 @@ async fn connect_remote_app_server(websocket_url: &str) -> anyhow::Result<Remote
     };
 
     Err(anyhow::anyhow!(
-        "timed out waiting for websocket app-server `{websocket_url}` to become ready: {}",
-        last_error
+        "timed out waiting for websocket app-server `{websocket_url}` to become ready: {last_error}"
     ))
 }
 
@@ -1333,11 +1346,11 @@ async fn apply_relay_command(
 enum PendingApprovalState {
     Command {
         request_id: String,
-        params: CommandExecutionRequestApprovalParams,
+        params: Box<CommandExecutionRequestApprovalParams>,
     },
     FileChange {
         request_id: String,
-        params: FileChangeRequestApprovalParams,
+        params: Box<FileChangeRequestApprovalParams>,
     },
 }
 
@@ -1356,7 +1369,7 @@ impl PendingApprovalState {
         }
     }
 
-    fn to_api(self) -> PendingApproval {
+    fn into_api(self) -> PendingApproval {
         match self {
             Self::Command { request_id, params } => PendingApproval {
                 request_id,

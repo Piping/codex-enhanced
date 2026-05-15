@@ -94,36 +94,6 @@ impl FeishuCoordinationConfig {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::FeishuCoordinationConfig;
-
-    #[test]
-    fn coordination_is_configured_with_base_token_only() {
-        let mut config = FeishuCoordinationConfig {
-            base_token: "bascn_test".to_string(),
-            ..FeishuCoordinationConfig::default()
-        };
-
-        assert!(config.is_configured());
-
-        config.base_token.clear();
-        assert!(!config.is_configured());
-    }
-
-    #[test]
-    fn coordination_ttl_is_at_least_twice_the_interval() {
-        let config = FeishuCoordinationConfig {
-            base_token: "bascn_test".to_string(),
-            heartbeat_interval_secs: 9,
-            heartbeat_ttl_secs: 5,
-            ..FeishuCoordinationConfig::default()
-        };
-
-        assert_eq!(config.heartbeat_ttl().as_secs(), 18);
-    }
-}
-
 impl FeishuConfig {
     pub fn has_api_credentials(&self) -> bool {
         !self.app_id.trim().is_empty() && !self.app_secret.trim().is_empty()
@@ -170,5 +140,35 @@ impl FeishuConfig {
                 .coordination
                 .as_ref()
                 .is_none_or(FeishuCoordinationConfig::is_empty)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FeishuCoordinationConfig;
+
+    #[test]
+    fn coordination_is_configured_with_base_token_only() {
+        let mut config = FeishuCoordinationConfig {
+            base_token: "bascn_test".to_string(),
+            ..FeishuCoordinationConfig::default()
+        };
+
+        assert!(config.is_configured());
+
+        config.base_token.clear();
+        assert!(!config.is_configured());
+    }
+
+    #[test]
+    fn coordination_ttl_is_at_least_twice_the_interval() {
+        let config = FeishuCoordinationConfig {
+            base_token: "bascn_test".to_string(),
+            heartbeat_interval_secs: 9,
+            heartbeat_ttl_secs: 5,
+            ..FeishuCoordinationConfig::default()
+        };
+
+        assert_eq!(config.heartbeat_ttl().as_secs(), 18);
     }
 }

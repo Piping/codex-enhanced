@@ -328,8 +328,7 @@ impl FeishuBaseClient {
     }
 
     async fn ensure_schema(&self) -> Result<ResolvedCoordinationTables> {
-        let mut cached = self.schema.lock().await;
-        if let Some(schema) = cached.clone() {
+        if let Some(schema) = self.schema.lock().await.clone() {
             return Ok(schema);
         }
 
@@ -358,7 +357,7 @@ impl FeishuBaseClient {
             heartbeat_table_id: heartbeat_table.table_id,
             force_table_id: force_table.table_id,
         };
-        *cached = Some(schema.clone());
+        *self.schema.lock().await = Some(schema.clone());
         Ok(schema)
     }
 

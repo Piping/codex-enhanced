@@ -83,16 +83,17 @@ async fn run_with_coordination(
         if let Some(handle) = websocket_task.as_ref()
             && handle.is_finished()
         {
-            let result = websocket_task
-                .take()
-                .expect("finished websocket task should still be present")
+            let Some(handle) = websocket_task.take() else {
+                continue;
+            };
+            let result = handle
                 .await
                 .map_err(|error| anyhow!("Feishu websocket runtime task failed: {error}"))?;
             emit_reconnect_state(
                 workspace_root.as_path(),
                 &provider_event_tx,
                 reconnect_delay,
-                result.as_ref().map(|_| ()).map_err(|error| error),
+                result.as_ref().map(|_| ()),
             )?;
             reconnect_at = Some(Instant::now() + reconnect_delay);
             reconnect_delay = (reconnect_delay * 2).min(MAX_RECONNECT_DELAY);

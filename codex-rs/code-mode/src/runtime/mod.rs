@@ -278,11 +278,7 @@ fn run_runtime(
     }
 
     let mut pending_promise = pending_promise;
-    loop {
-        let Ok(command) = command_rx.recv() else {
-            break;
-        };
-
+    while let Ok(command) = command_rx.recv() {
         match command {
             RuntimeCommand::Terminate => break,
             RuntimeCommand::ToolResponse { id, result } => {

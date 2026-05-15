@@ -1160,6 +1160,9 @@ fn test_model_info_includes_read_and_grep_tools() {
         vec!["read_file".to_string(), "grep_files".to_string()];
     let features = Features::with_defaults();
     let available_models = Vec::new();
+    let permission_profile = PermissionProfile::from_legacy_sandbox_policy(
+        &codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+    );
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
         available_models: &available_models,
@@ -1167,7 +1170,7 @@ fn test_model_info_includes_read_and_grep_tools() {
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        permission_profile: &permission_profile,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(

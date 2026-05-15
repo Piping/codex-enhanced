@@ -340,7 +340,6 @@ pub async fn run_resume_picker_with_app_server(
     run_resume_picker_with_launch_context(
         tui,
         config,
-        matches!(order, SessionPickerOrder::GlobalTime),
         provider_scope,
         include_non_interactive,
         app_server,
@@ -361,7 +360,6 @@ pub async fn run_resume_picker_from_existing_session_with_app_server(
     run_resume_picker_with_launch_context(
         tui,
         config,
-        matches!(order, SessionPickerOrder::GlobalTime),
         provider_scope,
         include_non_interactive,
         app_server,
@@ -374,7 +372,6 @@ pub async fn run_resume_picker_from_existing_session_with_app_server(
 async fn run_resume_picker_with_launch_context(
     tui: &mut Tui,
     config: &Config,
-    show_all: bool,
     provider_scope: SessionPickerProviderScope,
     include_non_interactive: bool,
     app_server: AppServerSession,
@@ -389,7 +386,7 @@ async fn run_resume_picker_with_launch_context(
         provider_filter_for_scope(is_remote, &config.model_provider_id, provider_scope);
     let pager_keymap = picker_pager_keymap(config)?;
     let options = SessionPickerRunOptions {
-        show_all,
+        show_all: matches!(order, SessionPickerOrder::GlobalTime),
         filter_cwd: cwd_filter.clone(),
         local_filter_cwd,
         action: SessionPickerAction::Resume,

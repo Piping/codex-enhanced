@@ -152,6 +152,13 @@ enum WorkflowDisabledJobBehavior {
     RunRootJobs,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct WorkflowRunSpec<'a> {
+    workflow_name: &'a str,
+    trigger_id: &'a str,
+    root_jobs: &'a [String],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct WorkflowPhaseContext<'a> {
     pub(crate) current_user_turn: Option<&'a str>,
@@ -745,9 +752,11 @@ impl App {
                     run_workflow_jobs(
                         &client,
                         &registry,
-                        &workflow.name,
-                        &trigger.id,
-                        &trigger.jobs,
+                        WorkflowRunSpec {
+                            workflow_name: &workflow.name,
+                            trigger_id: &trigger.id,
+                            root_jobs: &trigger.jobs,
+                        },
                         phase_context,
                         WorkflowDisabledJobBehavior::Skip,
                         /*cancellation*/ None,
@@ -1227,9 +1236,11 @@ async fn run_background_workflow_selection(
             run_workflow_jobs(
                 client,
                 &registry,
-                workflow_name,
-                trigger_id,
-                &trigger.jobs,
+                WorkflowRunSpec {
+                    workflow_name,
+                    trigger_id,
+                    root_jobs: &trigger.jobs,
+                },
                 phase_context.borrowed(),
                 WorkflowDisabledJobBehavior::Skip,
                 Some(cancellation),
@@ -1251,9 +1262,11 @@ async fn run_background_workflow_selection(
             run_workflow_jobs(
                 client,
                 &registry,
-                workflow_name,
-                &manual_workflow_job_trigger_id(job_name),
-                std::slice::from_ref(job_name),
+                WorkflowRunSpec {
+                    workflow_name,
+                    trigger_id: &manual_workflow_job_trigger_id(job_name),
+                    root_jobs: std::slice::from_ref(job_name),
+                },
                 WorkflowPhaseContext {
                     current_user_turn: None,
                     last_assistant_message: None,
@@ -1269,14 +1282,12 @@ async fn run_background_workflow_selection(
 async fn run_workflow_jobs(
     client: &dyn WorkflowRuntimeClient,
     registry: &LoadedWorkflowRegistry,
-    workflow_name: &str,
-    trigger_id: &str,
-    root_jobs: &[String],
+    spec: WorkflowRunSpec<'_>,
     phase_context: WorkflowPhaseContext<'_>,
     disabled_job_behavior: WorkflowDisabledJobBehavior,
     cancellation: Option<&CancellationToken>,
 ) -> Result<Vec<WorkflowJobRunResult>, WorkflowRunError> {
-    let ordered = ordered_jobs_for_roots(registry, root_jobs)
+    let ordered = ordered_jobs_for_roots(registry, spec.root_jobs)
         .map_err(|error| WorkflowRunError::Failed(error.to_string()))?;
     let mut results = Vec::new();
     let mut completed = BTreeMap::<String, bool>::new();
@@ -1287,10 +1298,11 @@ async fn run_workflow_jobs(
         let job = registry.jobs.get(&job_name).ok_or_else(|| {
             WorkflowRunError::Failed(format!("workflow job `{job_name}` does not exist"))
         })?;
-        let should_run_disabled_job = matches!(
-            disabled_job_behavior,
-            WorkflowDisabledJobBehavior::RunRootJobs
-        ) && root_jobs.iter().any(|root_job| root_job == &job_name);
+        let should_run_disabled_job =
+            matches!(
+                disabled_job_behavior,
+                WorkflowDisabledJobBehavior::RunRootJobs
+            ) && spec.root_jobs.iter().any(|root_job| root_job == &job_name);
         if !job.config.enabled && !should_run_disabled_job {
             completed.insert(job_name, false);
             continue;
@@ -1306,8 +1318,8 @@ async fn run_workflow_jobs(
         }
         let result = run_workflow_job(
             client,
-            workflow_name,
-            trigger_id,
+            spec.workflow_name,
+            spec.trigger_id,
             job,
             phase_context,
             cancellation,
@@ -1318,7 +1330,8 @@ async fn run_workflow_jobs(
     }
     if results.is_empty() {
         return Err(WorkflowRunError::Failed(format!(
-            "workflow `{workflow_name}/{trigger_id}` did not run any enabled jobs"
+            "workflow `{}/{}` did not run any enabled jobs",
+            spec.workflow_name, spec.trigger_id
         )));
     }
     Ok(results)

@@ -156,6 +156,7 @@ async fn retries_on_stream_disconnected_before_completion() {
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        aws: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -178,6 +179,7 @@ async fn retries_on_stream_disconnected_before_completion() {
 
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),

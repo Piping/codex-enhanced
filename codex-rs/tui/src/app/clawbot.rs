@@ -587,12 +587,15 @@ impl App {
         );
         self.register_pending_clawbot_turn(
             thread_id,
-            session.clone(),
-            turn_id,
-            message.message_id.clone(),
-            auto_ack_reaction_id,
-            turn_mode,
-            binding.owner_primary_thread_id.clone(),
+            PendingClawbotTurn {
+                thread_id: thread_id.to_string(),
+                turn_id,
+                owner_primary_thread_id: binding.owner_primary_thread_id.clone(),
+                session: session.clone(),
+                message_id: message.message_id.clone(),
+                auto_ack_reaction_id,
+                turn_mode,
+            },
         );
         Ok(())
     }
@@ -868,22 +871,8 @@ impl App {
     fn register_pending_clawbot_turn(
         &mut self,
         thread_id: ThreadId,
-        session: ProviderSessionRef,
-        turn_id: String,
-        message_id: String,
-        auto_ack_reaction_id: Option<String>,
-        turn_mode: ClawbotTurnMode,
-        owner_primary_thread_id: Option<String>,
+        pending_turn: PendingClawbotTurn,
     ) {
-        let pending_turn = PendingClawbotTurn {
-            thread_id: thread_id.to_string(),
-            turn_id,
-            owner_primary_thread_id,
-            session,
-            message_id,
-            auto_ack_reaction_id,
-            turn_mode,
-        };
         self.clawbot_pending_turns
             .entry(thread_id)
             .or_default()
