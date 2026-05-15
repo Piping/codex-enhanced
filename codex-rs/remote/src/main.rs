@@ -32,6 +32,9 @@ struct Cli {
 
     #[arg(long, default_value_t = 1500)]
     relay_sync_interval_ms: u64,
+
+    #[arg(long)]
+    app_server_websocket_url: Option<String>,
 }
 
 #[tokio::main]
@@ -39,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     init_tracing();
 
-    let state = AppState::load().await?;
+    let state = AppState::load(cli.app_server_websocket_url.clone()).await?;
     if let Some(relay_config) = relay_config_from_cli(&cli)? {
         state.start_relay_sync(relay_config);
     }
