@@ -44,6 +44,8 @@ use crate::chatwidget::UserMessage;
 use crate::display_preferences::DisplayPreferenceKey;
 use crate::history_cell::HistoryCell;
 use crate::profile_router::ProfileFallbackAction;
+use crate::realtime_webrtc::RealtimeWebrtcEvent;
+use crate::realtime_webrtc::RealtimeWebrtcSessionHandle;
 use codex_app_server_protocol::AskForApproval;
 use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
@@ -54,8 +56,6 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::Op;
-use codex_realtime_webrtc::RealtimeWebrtcEvent;
-use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RealtimeAudioDeviceKind {
@@ -899,14 +899,17 @@ pub(crate) enum AppEvent {
     },
 
     /// Result of creating a TUI-owned realtime WebRTC offer.
+    #[cfg_attr(not(feature = "realtime-webrtc"), allow(dead_code))]
     RealtimeWebrtcOfferCreated {
         result: Result<RealtimeWebrtcOffer, String>,
     },
 
     /// Peer-connection lifecycle event from a TUI-owned realtime WebRTC session.
+    #[cfg_attr(not(feature = "realtime-webrtc"), allow(dead_code))]
     RealtimeWebrtcEvent(RealtimeWebrtcEvent),
 
     /// Local microphone level from a TUI-owned realtime WebRTC session.
+    #[cfg_attr(not(feature = "realtime-webrtc"), allow(dead_code))]
     RealtimeWebrtcLocalAudioLevel(u16),
 
     /// Open the reasoning selection popup after picking a model.

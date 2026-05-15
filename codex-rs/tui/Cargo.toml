@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 autobins = false
 
+[features]
+default = ["realtime-webrtc"]
+realtime-webrtc = ["dep:codex-realtime-webrtc"]
+
 [[bin]]
 name = "codex-tui"
 path = "src/main.rs"
@@ -50,7 +54,6 @@ codex-models-manager = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
-codex-realtime-webrtc = { workspace = true }
 codex-rollout = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-state = { workspace = true }
@@ -124,6 +127,7 @@ url = { workspace = true }
 urlencoding = { workspace = true }
 webbrowser = { workspace = true }
 uuid = { workspace = true }
+codex-realtime-webrtc = { workspace = true, optional = true }
 
 codex-windows-sandbox = { workspace = true }
 tokio-util = { workspace = true, features = ["time"] }

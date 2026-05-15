@@ -95,7 +95,7 @@ pub struct RelayConfig {
 }
 
 impl AppState {
-    pub async fn load() -> anyhow::Result<Self> {
+    pub async fn load(app_server_websocket_url: Option<String>) -> anyhow::Result<Self> {
         let config = Config::load_with_cli_overrides(Vec::new())
             .await
             .context("failed to load Codex config")?;
@@ -103,7 +103,7 @@ impl AppState {
             LocalThreadStoreConfig::from_config(&RolloutConfig::from_view(&config)),
             /*state_db*/ None,
         );
-        let runtime = RemoteRuntime::start(config.clone()).await?;
+        let runtime = RemoteRuntime::start(config.clone(), app_server_websocket_url).await?;
         let server_name = gethostname().to_string_lossy().trim().to_string();
 
         Ok(Self {
@@ -857,21 +857,30 @@ fn push_message(messages: &mut Vec<SessionMessage>, role: &str, text: String) {
 struct RemoteRuntime {
     client: Arc<Mutex<AppServerClient>>,
     request_handle: AppServerRequestHandle,
-    _app_server: BackgroundAppServer,
+    _app_server: Option<BackgroundAppServer>,
     loaded_threads: Arc<RwLock<HashSet<String>>>,
     pending_approvals: Arc<RwLock<HashMap<String, Vec<PendingApprovalState>>>>,
     next_request_id: AtomicI64,
 }
 
 impl RemoteRuntime {
-    async fn start(mut config: Config) -> anyhow::Result<Arc<Self>> {
-        let codex_bin = resolve_codex_self_exe(&config)
-            .context("failed to locate `codex` executable for codex-remote app-server bridge")?;
-        config.codex_self_exe = Some(codex_bin.clone());
+    async fn start(
+        mut config: Config,
+        app_server_websocket_url: Option<String>,
+    ) -> anyhow::Result<Arc<Self>> {
+        let (app_server, websocket_url) = if let Some(websocket_url) = app_server_websocket_url {
+            (None, websocket_url)
+        } else {
+            let codex_bin = resolve_codex_self_exe(&config).context(
+                "failed to locate `codex` executable for codex-remote app-server bridge",
+            )?;
+            config.codex_self_exe = Some(codex_bin.clone());
 
-        let app_server = BackgroundAppServer::spawn(&codex_bin)
-            .with_context(|| format!("failed to start `{}` app-server", codex_bin.display()))?;
-        let websocket_url = app_server.websocket_url.clone();
+            let app_server = BackgroundAppServer::spawn(&codex_bin)
+                .with_context(|| format!("failed to start `{}` app-server", codex_bin.display()))?;
+            let websocket_url = app_server.websocket_url.clone();
+            (Some(app_server), websocket_url)
+        };
         let client = connect_remote_app_server(&websocket_url)
             .await
             .with_context(|| format!("failed to connect to app-server at `{websocket_url}`"))?;

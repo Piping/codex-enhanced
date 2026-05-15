@@ -158,6 +158,7 @@ mod pager_overlay;
 mod permission_compat;
 mod profile_router;
 pub(crate) mod public_widgets;
+mod realtime_webrtc;
 mod render;
 mod resize_reflow_cap;
 mod resume_picker;

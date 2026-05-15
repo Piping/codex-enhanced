@@ -1,4 +1,7 @@
 use super::*;
+use crate::realtime_webrtc::RealtimeWebrtcEvent;
+use crate::realtime_webrtc::RealtimeWebrtcSession;
+use crate::realtime_webrtc::RealtimeWebrtcSessionHandle;
 use codex_app_server_protocol::ThreadRealtimeAudioChunk;
 use codex_app_server_protocol::ThreadRealtimeClosedNotification;
 use codex_app_server_protocol::ThreadRealtimeErrorNotification;
@@ -7,9 +10,6 @@ use codex_app_server_protocol::ThreadRealtimeOutputAudioDeltaNotification;
 use codex_app_server_protocol::ThreadRealtimeStartTransport;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_config::config_toml::RealtimeTransport;
-use codex_realtime_webrtc::RealtimeWebrtcEvent;
-use codex_realtime_webrtc::RealtimeWebrtcSession;
-use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
 #[cfg(not(target_os = "linux"))]
 use std::sync::atomic::AtomicU16;
 #[cfg(not(target_os = "linux"))]
@@ -98,9 +98,23 @@ impl ChatWidget {
                 self.submit_realtime_conversation_start(/*transport*/ None);
             }
             RealtimeTransport::WebRtc => {
-                self.realtime_conversation.transport =
-                    RealtimeConversationUiTransport::Webrtc { handle: None };
-                start_realtime_webrtc_offer_task(self.app_event_tx.clone());
+                #[cfg(not(feature = "realtime-webrtc"))]
+                {
+                    self.realtime_conversation.transport =
+                        RealtimeConversationUiTransport::Websocket;
+                    self.add_info_message(
+                        "Realtime WebRTC is unavailable in this build; using websocket transport."
+                            .to_string(),
+                        /*hint*/ None,
+                    );
+                    self.submit_realtime_conversation_start(/*transport*/ None);
+                }
+                #[cfg(feature = "realtime-webrtc")]
+                {
+                    self.realtime_conversation.transport =
+                        RealtimeConversationUiTransport::Webrtc { handle: None };
+                    start_realtime_webrtc_offer_task(self.app_event_tx.clone());
+                }
             }
         }
         self.request_redraw();
@@ -492,6 +506,7 @@ impl ChatWidget {
     }
 }
 
+#[cfg_attr(not(feature = "realtime-webrtc"), allow(dead_code))]
 fn start_realtime_webrtc_offer_task(app_event_tx: AppEventSender) {
     std::thread::spawn(move || {
         let result = match RealtimeWebrtcSession::start() {
