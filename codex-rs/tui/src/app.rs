@@ -7647,6 +7647,51 @@ model = "gpt-5.2"
     }
 
     #[tokio::test]
+    async fn switching_runtime_profile_reloads_live_thread_into_new_thread() -> Result<()> {
+        let mut app = make_test_app().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
+        app.chat_widget.config.codex_home = app.config.codex_home.clone();
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            r#"
+profile = "secondary"
+
+[profiles.secondary]
+model = "gpt-5.2"
+"#,
+        )?;
+
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start thread");
+        let original_thread_id = started.session.thread_id;
+        app.enqueue_primary_thread_session(started.session, started.turns)
+            .await
+            .expect("primary thread should be registered");
+
+        let mut tui = crate::tests::create_test_tui(80, 24);
+        app.switch_runtime_profile(&mut tui, &mut app_server, Some("secondary"))
+            .await
+            .map_err(|err| color_eyre::eyre::eyre!(err))?;
+
+        assert_eq!(app.active_profile.as_deref(), Some("secondary"));
+        assert_eq!(app.config.active_profile.as_deref(), Some("secondary"));
+        assert_eq!(
+            app.chat_widget.config_ref().active_profile.as_deref(),
+            Some("secondary")
+        );
+        assert_ne!(app.primary_thread_id, Some(original_thread_id));
+        assert_eq!(app.active_thread_id, app.primary_thread_id);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn clear_only_ui_reset_preserves_chat_session_state() {
         let mut app = make_test_app().await;
         let thread_id = ThreadId::new();

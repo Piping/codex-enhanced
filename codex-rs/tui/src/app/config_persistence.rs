@@ -80,7 +80,7 @@ impl App {
             .await?;
         let next_thread = if can_resume_live_thread {
             app_server
-                .resume_thread(next_config.clone(), thread_id)
+                .fork_thread(next_config.clone(), thread_id)
                 .await
                 .map_err(|err| {
                     format!("Failed to reload current session after switching profiles: {err}")
