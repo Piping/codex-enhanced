@@ -270,6 +270,7 @@ fn queued_message_edit_hint_binding(
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event::ExitMode;
+use crate::app_event::ProfileEvent;
 use crate::app_event::RateLimitRefreshOrigin;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
@@ -3210,11 +3211,12 @@ impl ChatWidget {
                 /*inc*/ 1,
                 &[("action", profile_fallback_action_label(action))],
             );
-            self.app_event_tx
-                .send(AppEvent::RetryLastUserTurnWithProfileFallback {
+            self.app_event_tx.send(AppEvent::Profile(
+                ProfileEvent::RetryLastUserTurnWithProfileFallback {
                     action,
                     error_message: message,
-                });
+                },
+            ));
         } else if let Some(info) = codex_error_info
             .as_ref()
             .and_then(app_server_rate_limit_error_kind)

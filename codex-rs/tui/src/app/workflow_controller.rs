@@ -1,5 +1,5 @@
 use super::App;
-use crate::app_event::AppEvent;
+use crate::app_event::WorkflowEvent;
 use crate::app_server_session::AppServerSession;
 use crate::insert_history::ScrollbackWrapMode;
 use crate::tui;
@@ -11,56 +11,56 @@ impl WorkflowController {
         app: &mut App,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
-        event: AppEvent,
+        event: WorkflowEvent,
     ) {
         match event {
-            AppEvent::OpenWorkflowControls => {
+            WorkflowEvent::OpenWorkflowControls => {
                 app.open_workflow_controls_popup();
             }
-            AppEvent::OpenWorkflowControlView { destination } => {
+            WorkflowEvent::OpenWorkflowControlView { destination } => {
                 app.open_workflow_control_view(destination);
             }
-            AppEvent::CreateDefaultWorkflowTemplate => {
+            WorkflowEvent::CreateDefaultWorkflowTemplate => {
                 app.create_default_workflow_template_from_ui(tui).await;
             }
-            AppEvent::EditWorkflowFile {
+            WorkflowEvent::EditWorkflowFile {
                 workflow_path,
                 reopen,
             } => {
                 app.edit_workflow_file_from_ui(tui, workflow_path, reopen)
                     .await;
             }
-            AppEvent::ToggleWorkflowTriggerEnabled {
+            WorkflowEvent::ToggleWorkflowTriggerEnabled {
                 workflow_path,
                 trigger_id,
             } => {
                 app.toggle_workflow_trigger_enabled_from_ui(workflow_path, trigger_id);
             }
-            AppEvent::ToggleWorkflowJobEnabled {
+            WorkflowEvent::ToggleWorkflowJobEnabled {
                 workflow_path,
                 job_name,
             } => {
                 app.toggle_workflow_job_enabled_from_ui(workflow_path, job_name);
             }
-            AppEvent::CycleWorkflowJobContextStrategy {
+            WorkflowEvent::CycleWorkflowJobContextStrategy {
                 workflow_path,
                 job_name,
             } => {
                 app.cycle_workflow_job_context_strategy_from_ui(workflow_path, job_name);
             }
-            AppEvent::CycleWorkflowJobExecutionStrategy {
+            WorkflowEvent::CycleWorkflowJobExecutionStrategy {
                 workflow_path,
                 job_name,
             } => {
                 app.cycle_workflow_job_execution_strategy_from_ui(workflow_path, job_name);
             }
-            AppEvent::CycleWorkflowJobResponse {
+            WorkflowEvent::CycleWorkflowJobResponse {
                 workflow_path,
                 job_name,
             } => {
                 app.cycle_workflow_job_response_from_ui(workflow_path, job_name);
             }
-            AppEvent::EditWorkflowJobField {
+            WorkflowEvent::EditWorkflowJobField {
                 workflow_path,
                 job_name,
                 field,
@@ -68,14 +68,14 @@ impl WorkflowController {
                 app.edit_workflow_job_field_from_ui(tui, workflow_path, job_name, field)
                     .await;
             }
-            AppEvent::SetWorkflowTriggerType {
+            WorkflowEvent::SetWorkflowTriggerType {
                 workflow_path,
                 trigger_id,
                 trigger_type,
             } => {
                 app.set_workflow_trigger_type_from_ui(workflow_path, trigger_id, trigger_type);
             }
-            AppEvent::EditWorkflowTriggerField {
+            WorkflowEvent::EditWorkflowTriggerField {
                 workflow_path,
                 trigger_id,
                 field,
@@ -83,7 +83,7 @@ impl WorkflowController {
                 app.edit_workflow_trigger_field_from_ui(tui, workflow_path, trigger_id, field)
                     .await;
             }
-            AppEvent::WorkflowWorkspaceFilesChanged { changed_paths } => {
+            WorkflowEvent::WorkflowWorkspaceFilesChanged { changed_paths } => {
                 let relevant_paths = changed_paths
                     .into_iter()
                     .filter(|path| {
@@ -103,7 +103,7 @@ impl WorkflowController {
                     }
                 }
             }
-            AppEvent::StartManualWorkflowTrigger {
+            WorkflowEvent::StartManualWorkflowTrigger {
                 workflow_name,
                 trigger_id,
             } => {
@@ -114,7 +114,7 @@ impl WorkflowController {
                 );
                 app.insert_visible_history_cell(tui, cell);
             }
-            AppEvent::StartManualWorkflowJob {
+            WorkflowEvent::StartManualWorkflowJob {
                 workflow_name,
                 job_name,
             } => {
@@ -122,10 +122,10 @@ impl WorkflowController {
                     app.start_manual_workflow_job_from_ui(app_server, workflow_name, job_name);
                 app.insert_visible_history_cell(tui, cell);
             }
-            AppEvent::ShowWorkflowBackgroundTasks => {
+            WorkflowEvent::ShowWorkflowBackgroundTasks => {
                 app.chat_widget.add_ps_output();
             }
-            AppEvent::ReplayWorkflowHistory { thread_id } => {
+            WorkflowEvent::ReplayWorkflowHistory { thread_id } => {
                 if app.active_thread_id == Some(thread_id) {
                     let lines = app.replay_workflow_history_cells_for_thread(
                         thread_id,
@@ -139,7 +139,7 @@ impl WorkflowController {
                     }
                 }
             }
-            AppEvent::BackgroundWorkflowRunCompleted { run_id, result } => {
+            WorkflowEvent::BackgroundWorkflowRunCompleted { run_id, result } => {
                 let cells = app
                     .finish_background_workflow_run(app_server, run_id, *result)
                     .await;
@@ -147,7 +147,6 @@ impl WorkflowController {
                     app.insert_visible_history_cell(tui, cell);
                 }
             }
-            _ => unreachable!("non-workflow event passed to workflow controller"),
         }
     }
 }

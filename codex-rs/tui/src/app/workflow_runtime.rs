@@ -11,6 +11,7 @@ use super::workflow_definition::ordered_jobs_for_roots;
 use super::workflow_history::WorkflowReplySource;
 use super::workflow_history::workflow_result_cell;
 use crate::app_event::AppEvent;
+use crate::app_event::WorkflowEvent;
 use crate::app_server_session::AppServerSession;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
@@ -1160,10 +1161,12 @@ impl App {
                 cancellation_for_task,
             )
             .await;
-            app_event_tx.send(AppEvent::BackgroundWorkflowRunCompleted {
-                run_id: run_id_for_task,
-                result: Box::new(result),
-            });
+            app_event_tx.send(AppEvent::Workflow(
+                WorkflowEvent::BackgroundWorkflowRunCompleted {
+                    run_id: run_id_for_task,
+                    result: Box::new(result),
+                },
+            ));
         });
         self.workflow_scheduler.register_background_workflow_run(
             run_id,

@@ -1,5 +1,5 @@
 use super::App;
-use crate::app_event::AppEvent;
+use crate::app_event::ProfileEvent;
 use crate::app_event::RuntimeProfileTarget;
 use crate::app_server_session::AppServerSession;
 use crate::profile_router::PROFILE_ROUTER_STATE_RELATIVE_PATH;
@@ -12,16 +12,16 @@ impl ProfileController {
         app: &mut App,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
-        event: AppEvent,
+        event: ProfileEvent,
     ) {
         match event {
-            AppEvent::OpenProfileManagementPanel => {
+            ProfileEvent::OpenProfileManagementPanel => {
                 app.open_profile_management_panel();
             }
-            AppEvent::EditProfileFallbackConfig => {
+            ProfileEvent::EditProfileFallbackConfig => {
                 app.edit_profile_fallback_config_from_ui(tui).await;
             }
-            AppEvent::SwitchRuntimeProfile { target } => {
+            ProfileEvent::SwitchRuntimeProfile { target } => {
                 let is_default_target = matches!(&target, RuntimeProfileTarget::Default);
                 let target_profile = match &target {
                     RuntimeProfileTarget::Default => None,
@@ -53,7 +53,7 @@ impl ProfileController {
                     );
                 }
             }
-            AppEvent::RetryLastUserTurnWithProfileFallback {
+            ProfileEvent::RetryLastUserTurnWithProfileFallback {
                 action,
                 error_message,
             } => {
@@ -65,7 +65,7 @@ impl ProfileController {
                 )
                 .await;
             }
-            AppEvent::ExecuteProfileFallbackRetry {
+            ProfileEvent::ExecuteProfileFallbackRetry {
                 generation,
                 profile_id,
                 history_message,
@@ -79,7 +79,6 @@ impl ProfileController {
                 )
                 .await;
             }
-            _ => unreachable!("non-profile event passed to profile controller"),
         }
     }
 }

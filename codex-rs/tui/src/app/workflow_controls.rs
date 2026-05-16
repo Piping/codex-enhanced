@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::app_event::AppEvent;
 use crate::app_event::WorkflowControlsDestination;
+use crate::app_event::WorkflowEvent;
 use crate::app_event::WorkflowJobEditableField;
 use crate::app_event::WorkflowTriggerEditableField;
 use crate::app_event::WorkflowTriggerType;
@@ -441,7 +442,7 @@ impl App {
                 "Insert a background task snapshot into the transcript. /ps shows the same live workflow state."
                     .to_string(),
             ),
-            actions: vec![Box::new(|tx| tx.send(AppEvent::ShowWorkflowBackgroundTasks))],
+            actions: vec![Box::new(|tx| tx.send(AppEvent::Workflow(WorkflowEvent::ShowWorkflowBackgroundTasks)))],
             dismiss_on_select: false,
             ..Default::default()
         }];
@@ -472,7 +473,7 @@ impl App {
                             "Create a default workflow template, then open it in your configured editor."
                                 .to_string(),
                         ),
-                        actions: vec![Box::new(|tx| tx.send(AppEvent::CreateDefaultWorkflowTemplate))],
+                        actions: vec![Box::new(|tx| tx.send(AppEvent::Workflow(WorkflowEvent::CreateDefaultWorkflowTemplate)))],
                         dismiss_on_select: false,
                         ..Default::default()
                     });
@@ -502,10 +503,10 @@ impl App {
                             actions: vec![Box::new({
                                 let workflow_path = file.workflow_path.clone();
                                 move |tx| {
-                                    tx.send(AppEvent::EditWorkflowFile {
+                                    tx.send(AppEvent::Workflow(WorkflowEvent::EditWorkflowFile {
                                         workflow_path: workflow_path.clone(),
                                         reopen: WorkflowControlsDestination::Root,
-                                    });
+                                    }));
                                 }
                             })],
                             dismiss_on_select: false,
@@ -531,12 +532,12 @@ impl App {
                                         let workflow_path = file.workflow_path.clone();
                                         let job_name = job_name.clone();
                                         move |tx| {
-                                            tx.send(AppEvent::OpenWorkflowControlView {
+                                            tx.send(AppEvent::Workflow(WorkflowEvent::OpenWorkflowControlView {
                                                 destination: WorkflowControlsDestination::Job {
                                                     workflow_path: workflow_path.clone(),
                                                     job_name: job_name.clone(),
                                                 },
-                                            });
+                                            }));
                                         }
                                     })],
                                     dismiss_on_select: false,
@@ -567,13 +568,13 @@ impl App {
                                         let workflow_path = file.workflow_path.clone();
                                         let trigger_id = trigger.id.clone();
                                         move |tx| {
-                                            tx.send(AppEvent::OpenWorkflowControlView {
+                                            tx.send(AppEvent::Workflow(WorkflowEvent::OpenWorkflowControlView {
                                                 destination:
                                                     WorkflowControlsDestination::ManualTrigger {
                                                         workflow_path: workflow_path.clone(),
                                                         trigger_id: trigger_id.clone(),
                                                     },
-                                            });
+                                            }));
                                         }
                                     })],
                                     dismiss_on_select: false,
@@ -650,11 +651,11 @@ impl App {
                         actions: vec![Box::new({
                             let workflow_path = workflow_path.to_path_buf();
                             move |tx| {
-                                tx.send(AppEvent::OpenWorkflowControlView {
+                                tx.send(AppEvent::Workflow(WorkflowEvent::OpenWorkflowControlView {
                                     destination: WorkflowControlsDestination::Jobs {
                                         workflow_path: workflow_path.clone(),
                                     },
-                                });
+                                }));
                             }
                         })],
                         dismiss_on_select: false,
@@ -673,11 +674,11 @@ impl App {
                         actions: vec![Box::new({
                             let workflow_path = workflow_path.to_path_buf();
                             move |tx| {
-                                tx.send(AppEvent::OpenWorkflowControlView {
+                                tx.send(AppEvent::Workflow(WorkflowEvent::OpenWorkflowControlView {
                                     destination: WorkflowControlsDestination::ManualTriggers {
                                         workflow_path: workflow_path.clone(),
                                     },
-                                });
+                                }));
                             }
                         })],
                         dismiss_on_select: false,
@@ -779,12 +780,12 @@ impl App {
                                 status
                             )),
                             actions: vec![Box::new(move |tx| {
-                                tx.send(AppEvent::OpenWorkflowControlView {
+                                tx.send(AppEvent::Workflow(WorkflowEvent::OpenWorkflowControlView {
                                     destination: WorkflowControlsDestination::Job {
                                         workflow_path: workflow_path.clone(),
                                         job_name: job_name.clone(),
                                     },
-                                });
+                                }));
                             })],
                             dismiss_on_select: false,
                             ..Default::default()
@@ -868,12 +869,12 @@ impl App {
                                 status
                             )),
                             actions: vec![Box::new(move |tx| {
-                                tx.send(AppEvent::OpenWorkflowControlView {
+                                tx.send(AppEvent::Workflow(WorkflowEvent::OpenWorkflowControlView {
                                     destination: WorkflowControlsDestination::ManualTrigger {
                                         workflow_path: workflow_path.clone(),
                                         trigger_id: trigger_id.clone(),
                                     },
-                                });
+                                }));
                             })],
                             dismiss_on_select: false,
                             ..Default::default()
@@ -937,10 +938,10 @@ impl App {
                             let workflow_name = workflow.name.clone();
                             let trigger_id = trigger.id.clone();
                             move |tx| {
-                                tx.send(AppEvent::StartManualWorkflowTrigger {
+                                tx.send(AppEvent::Workflow(WorkflowEvent::StartManualWorkflowTrigger {
                                     workflow_name: workflow_name.clone(),
                                     trigger_id: trigger_id.clone(),
-                                });
+                                }));
                             }
                         })],
                         dismiss_on_select: false,
@@ -976,10 +977,12 @@ impl App {
                         let workflow_path = workflow_path.to_path_buf();
                         let trigger_id = trigger.id.clone();
                         move |tx| {
-                            tx.send(AppEvent::ToggleWorkflowTriggerEnabled {
-                                workflow_path: workflow_path.clone(),
-                                trigger_id: trigger_id.clone(),
-                            });
+                            tx.send(AppEvent::Workflow(
+                                WorkflowEvent::ToggleWorkflowTriggerEnabled {
+                                    workflow_path: workflow_path.clone(),
+                                    trigger_id: trigger_id.clone(),
+                                },
+                            ));
                         }
                     })],
                     dismiss_on_select: false,
@@ -999,12 +1002,12 @@ impl App {
                         let workflow_path = workflow_path.to_path_buf();
                         let trigger_id = trigger.id.clone();
                         move |tx| {
-                            tx.send(AppEvent::OpenWorkflowControlView {
+                            tx.send(AppEvent::Workflow(WorkflowEvent::OpenWorkflowControlView {
                                 destination: WorkflowControlsDestination::TriggerType {
                                     workflow_path: workflow_path.clone(),
                                     trigger_id: trigger_id.clone(),
                                 },
-                            });
+                            }));
                         }
                     })],
                     dismiss_on_select: false,
@@ -1022,11 +1025,11 @@ impl App {
                         let workflow_path = workflow_path.to_path_buf();
                         let trigger_id = trigger.id.clone();
                         move |tx| {
-                            tx.send(AppEvent::EditWorkflowTriggerField {
+                            tx.send(AppEvent::Workflow(WorkflowEvent::EditWorkflowTriggerField {
                                 workflow_path: workflow_path.clone(),
                                 trigger_id: trigger_id.clone(),
                                 field: WorkflowTriggerEditableField::Id,
-                            });
+                            }));
                         }
                     })],
                     dismiss_on_select: false,
@@ -1051,11 +1054,11 @@ impl App {
                         let workflow_path = workflow_path.to_path_buf();
                         let trigger_id = trigger.id.clone();
                         move |tx| {
-                            tx.send(AppEvent::EditWorkflowTriggerField {
+                            tx.send(AppEvent::Workflow(WorkflowEvent::EditWorkflowTriggerField {
                                 workflow_path: workflow_path.clone(),
                                 trigger_id: trigger_id.clone(),
                                 field: WorkflowTriggerEditableField::Jobs,
-                            });
+                            }));
                         }
                     })],
                     dismiss_on_select: false,
@@ -1129,11 +1132,13 @@ impl App {
                             let workflow_path = workflow_path.to_path_buf();
                             let trigger_id = trigger.id.clone();
                             move |tx| {
-                                tx.send(AppEvent::SetWorkflowTriggerType {
-                                    workflow_path: workflow_path.clone(),
-                                    trigger_id: trigger_id.clone(),
-                                    trigger_type,
-                                });
+                                tx.send(AppEvent::Workflow(
+                                    WorkflowEvent::SetWorkflowTriggerType {
+                                        workflow_path: workflow_path.clone(),
+                                        trigger_id: trigger_id.clone(),
+                                        trigger_type,
+                                    },
+                                ));
                             }
                         })],
                         dismiss_on_select: false,
@@ -1199,10 +1204,10 @@ impl App {
                         let workflow_name = workflow.name.clone();
                         let job_name = job.name.clone();
                         move |tx| {
-                            tx.send(AppEvent::StartManualWorkflowJob {
+                            tx.send(AppEvent::Workflow(WorkflowEvent::StartManualWorkflowJob {
                                 workflow_name: workflow_name.clone(),
                                 job_name: job_name.clone(),
-                            });
+                            }));
                         }
                     })],
                     dismiss_on_select: false,
@@ -1229,10 +1234,12 @@ impl App {
                         let workflow_path = workflow_path.to_path_buf();
                         let job_name = job.name.clone();
                         move |tx| {
-                            tx.send(AppEvent::ToggleWorkflowJobEnabled {
-                                workflow_path: workflow_path.clone(),
-                                job_name: job_name.clone(),
-                            });
+                            tx.send(AppEvent::Workflow(
+                                WorkflowEvent::ToggleWorkflowJobEnabled {
+                                    workflow_path: workflow_path.clone(),
+                                    job_name: job_name.clone(),
+                                },
+                            ));
                         }
                     })],
                     dismiss_on_select: false,
@@ -1255,10 +1262,12 @@ impl App {
                         let workflow_path = workflow_path.to_path_buf();
                         let job_name = job.name.clone();
                         move |tx| {
-                            tx.send(AppEvent::CycleWorkflowJobContextStrategy {
-                                workflow_path: workflow_path.clone(),
-                                job_name: job_name.clone(),
-                            });
+                            tx.send(AppEvent::Workflow(
+                                WorkflowEvent::CycleWorkflowJobContextStrategy {
+                                    workflow_path: workflow_path.clone(),
+                                    job_name: job_name.clone(),
+                                },
+                            ));
                         }
                     })],
                     dismiss_on_select: false,
@@ -1282,10 +1291,10 @@ impl App {
                         let workflow_path = workflow_path.to_path_buf();
                         let job_name = job.name.clone();
                         move |tx| {
-                            tx.send(AppEvent::CycleWorkflowJobExecutionStrategy {
+                            tx.send(AppEvent::Workflow(WorkflowEvent::CycleWorkflowJobExecutionStrategy {
                                 workflow_path: workflow_path.clone(),
                                 job_name: job_name.clone(),
-                            });
+                            }));
                         }
                     })],
                     dismiss_on_select: false,
@@ -1305,10 +1314,12 @@ impl App {
                         let workflow_path = workflow_path.to_path_buf();
                         let job_name = job.name.clone();
                         move |tx| {
-                            tx.send(AppEvent::CycleWorkflowJobResponse {
-                                workflow_path: workflow_path.clone(),
-                                job_name: job_name.clone(),
-                            });
+                            tx.send(AppEvent::Workflow(
+                                WorkflowEvent::CycleWorkflowJobResponse {
+                                    workflow_path: workflow_path.clone(),
+                                    job_name: job_name.clone(),
+                                },
+                            ));
                         }
                     })],
                     dismiss_on_select: false,
@@ -1326,11 +1337,11 @@ impl App {
                         let workflow_path = workflow_path.to_path_buf();
                         let job_name = job.name.clone();
                         move |tx| {
-                            tx.send(AppEvent::EditWorkflowJobField {
+                            tx.send(AppEvent::Workflow(WorkflowEvent::EditWorkflowJobField {
                                 workflow_path: workflow_path.clone(),
                                 job_name: job_name.clone(),
                                 field: WorkflowJobEditableField::Needs,
-                            });
+                            }));
                         }
                     })],
                     dismiss_on_select: false,
@@ -1348,11 +1359,11 @@ impl App {
                         let workflow_path = workflow_path.to_path_buf();
                         let job_name = job.name.clone();
                         move |tx| {
-                            tx.send(AppEvent::EditWorkflowJobField {
+                            tx.send(AppEvent::Workflow(WorkflowEvent::EditWorkflowJobField {
                                 workflow_path: workflow_path.clone(),
                                 job_name: job_name.clone(),
                                 field: WorkflowJobEditableField::Steps,
-                            });
+                            }));
                         }
                     })],
                     dismiss_on_select: false,
@@ -1552,11 +1563,11 @@ fn workflow_trigger_parameter_item(
             let workflow_path = workflow_path.to_path_buf();
             let trigger_id = trigger.id.clone();
             move |tx| {
-                tx.send(AppEvent::EditWorkflowTriggerField {
+                tx.send(AppEvent::Workflow(WorkflowEvent::EditWorkflowTriggerField {
                     workflow_path: workflow_path.clone(),
                     trigger_id: trigger_id.clone(),
                     field: WorkflowTriggerEditableField::Parameter,
-                });
+                }));
             }
         })],
         dismiss_on_select: false,
@@ -1586,9 +1597,9 @@ fn workflow_back_item(destination: WorkflowControlsDestination) -> SelectionItem
         description: Some("Return to the previous workflow menu.".to_string()),
         selected_description: Some("Return to the previous workflow menu.".to_string()),
         actions: vec![Box::new(move |tx| {
-            tx.send(AppEvent::OpenWorkflowControlView {
+            tx.send(AppEvent::Workflow(WorkflowEvent::OpenWorkflowControlView {
                 destination: destination.clone(),
-            });
+            }));
         })],
         dismiss_on_select: false,
         ..Default::default()
@@ -1609,10 +1620,10 @@ fn workflow_edit_file_item(
             "Open the real workflow YAML file in your external editor.".to_string(),
         ),
         actions: vec![Box::new(move |tx| {
-            tx.send(AppEvent::EditWorkflowFile {
+            tx.send(AppEvent::Workflow(WorkflowEvent::EditWorkflowFile {
                 workflow_path: workflow_path.clone(),
                 reopen: reopen.clone(),
-            });
+            }));
         })],
         dismiss_on_select: false,
         ..Default::default()

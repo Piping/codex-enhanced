@@ -3,6 +3,7 @@ use std::sync::Arc;
 use super::App;
 use super::jump_navigation::build_jump_targets;
 use crate::app_event::AppEvent;
+use crate::app_event::ThreadEvent;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
@@ -35,7 +36,9 @@ fn thread_panel_params(
         selected_description: Some(
             "Fork the current thread into a new session and continue there.".to_string(),
         ),
-        actions: vec![Box::new(|tx| tx.send(AppEvent::ForkCurrentSession))],
+        actions: vec![Box::new(|tx| {
+            tx.send(AppEvent::Thread(ThreadEvent::ForkCurrentSession))
+        })],
         dismiss_on_select: true,
         is_disabled: task_running,
         disabled_reason: task_running
@@ -51,7 +54,9 @@ fn thread_panel_params(
         selected_description: Some(
             "Search the current transcript and jump directly to a committed entry.".to_string(),
         ),
-        actions: vec![Box::new(|tx| tx.send(AppEvent::OpenJumpToMessagePanel))],
+        actions: vec![Box::new(|tx| {
+            tx.send(AppEvent::Thread(ThreadEvent::OpenJumpToMessagePanel))
+        })],
         dismiss_on_select: false,
         ..Default::default()
     });
@@ -63,7 +68,9 @@ fn thread_panel_params(
             "Restore the latest user input to the composer and rewind one committed turn."
                 .to_string(),
         ),
-        actions: vec![Box::new(|tx| tx.send(AppEvent::UndoLastUserMessage))],
+        actions: vec![Box::new(|tx| {
+            tx.send(AppEvent::Thread(ThreadEvent::UndoLastUserMessage));
+        })],
         dismiss_on_select: true,
         is_disabled: task_running,
         disabled_reason: task_running
@@ -121,7 +128,9 @@ fn jump_to_message_panel_params(
                     name,
                     description: Some(description),
                     actions: vec![Box::new(move |tx| {
-                        tx.send(AppEvent::JumpToTranscriptCell { cell_index });
+                        tx.send(AppEvent::Thread(ThreadEvent::JumpToTranscriptCell {
+                            cell_index,
+                        }));
                     })],
                     dismiss_on_select: true,
                     search_value: Some(search_value),

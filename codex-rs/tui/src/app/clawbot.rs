@@ -33,6 +33,7 @@ use tokio::sync::mpsc;
 use super::App;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
+use crate::app_event::ClawbotEvent;
 use crate::app_server_session::AppServerSession;
 use crate::session_state::ThreadSessionState;
 
@@ -191,8 +192,11 @@ impl App {
             };
             match turn.status {
                 TurnStatus::Completed | TurnStatus::Failed | TurnStatus::Interrupted => {
-                    self.handle_clawbot_turn_completed(app_server, thread_id, turn)
-                        .await?;
+                    self.app_event_tx
+                        .send(AppEvent::Clawbot(ClawbotEvent::ClawbotTurnCompleted {
+                            thread_id,
+                            turn,
+                        }));
                 }
                 TurnStatus::InProgress => {
                     self.attach_clawbot_bound_thread_if_needed(app_server, thread_id)
@@ -216,7 +220,9 @@ impl App {
             let (provider_event_tx, mut provider_event_rx) = mpsc::unbounded_channel();
             let forward_task = tokio::spawn(async move {
                 while let Some(event) = provider_event_rx.recv().await {
-                    app_event_tx.send(AppEvent::ClawbotProviderEvent { event });
+                    app_event_tx.send(AppEvent::Clawbot(ClawbotEvent::ClawbotProviderEvent {
+                        event,
+                    }));
                 }
             });
             if let Err(err) = FeishuProviderRuntime::new(workspace_root.to_path_buf(), config)

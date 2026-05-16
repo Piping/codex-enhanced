@@ -1,5 +1,6 @@
 use super::App;
 use crate::app_event::AppEvent;
+use crate::app_event::ThreadEvent;
 use crate::app_server_session::AppServerSession;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
@@ -164,7 +165,9 @@ fn delete_agent_picker_params(
             description: Some(uuid.clone()),
             is_current: app.active_thread_id == Some(thread_id),
             actions: vec![Box::new(move |tx| {
-                tx.send(AppEvent::OpenDeleteAgentConfirmation { thread_id });
+                tx.send(AppEvent::Thread(ThreadEvent::OpenDeleteAgentConfirmation {
+                    thread_id,
+                }));
             })],
             dismiss_on_select: false,
             dismiss_parent_on_child_accept: true,
@@ -202,7 +205,9 @@ fn delete_agent_confirmation_params(thread_id: ThreadId, label: &str) -> Selecti
                 description: Some("Stop tracking this open agent thread in Codex.".to_string()),
                 selected_description: Some(format!("Archive {label} now.")),
                 actions: vec![Box::new(move |tx| {
-                    tx.send(AppEvent::ArchiveAgentThread { thread_id });
+                    tx.send(AppEvent::Thread(ThreadEvent::ArchiveAgentThread {
+                        thread_id,
+                    }));
                 })],
                 dismiss_on_select: true,
                 ..Default::default()

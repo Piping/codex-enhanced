@@ -7,6 +7,7 @@ use super::agent_navigation::AgentNavigationDirection;
 use super::key_chord::KeyChordAction;
 use super::key_chord::KeyChordResolution;
 use super::*;
+use crate::app_event::ThreadEvent;
 
 impl App {
     pub(super) async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {
@@ -280,7 +281,8 @@ impl App {
                         }
                     }
                     KeyChordAction::UndoLastUserMessage => {
-                        self.app_event_tx.send(AppEvent::UndoLastUserMessage);
+                        self.app_event_tx
+                            .send(AppEvent::Thread(ThreadEvent::UndoLastUserMessage));
                     }
                     KeyChordAction::CopyLatestOutputPlainText => {
                         self.chat_widget.copy_latest_output_to_clipboard();

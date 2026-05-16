@@ -206,7 +206,6 @@ mod clawbot_controls;
 mod config_persistence;
 mod editor_helpers;
 mod event_dispatch;
-mod feature_dispatch;
 mod history_ui;
 mod input;
 mod jump_navigation;
@@ -6056,7 +6055,10 @@ model = "gpt-5.2"
             )),
             None
         );
-        assert_matches!(app_event_rx.try_recv(), Ok(AppEvent::UndoLastUserMessage));
+        assert_matches!(
+            app_event_rx.try_recv(),
+            Ok(AppEvent::Thread(ThreadEvent::UndoLastUserMessage))
+        );
     }
 
     #[tokio::test]
@@ -6182,9 +6184,9 @@ model = "gpt-5.2"
                     }
                     app.transcript_cells.push(cell);
                 }
-                AppEvent::ReplayWorkflowHistory {
+                AppEvent::Workflow(WorkflowEvent::ReplayWorkflowHistory {
                     thread_id: replay_thread_id,
-                } => {
+                }) => {
                     assert_eq!(replay_thread_id, thread_id);
                     replay_order.push("workflow");
                     let lines = app.replay_workflow_history_cells_for_thread(
@@ -6247,9 +6249,9 @@ model = "gpt-5.2"
                         replay_order.push("turn");
                     }
                 }
-                AppEvent::ReplayWorkflowHistory {
+                AppEvent::Workflow(WorkflowEvent::ReplayWorkflowHistory {
                     thread_id: replay_thread_id,
-                } => {
+                }) => {
                     assert_eq!(replay_thread_id, thread_id);
                     replay_order.push("workflow");
                 }
@@ -6712,9 +6714,9 @@ model = "gpt-5.2"
 
         while let Ok(event) = app_event_rx.try_recv() {
             match event {
-                AppEvent::ClawbotTurnCompleted { .. }
+                AppEvent::Clawbot(ClawbotEvent::ClawbotTurnCompleted { .. })
                 | AppEvent::InsertHistoryCell(_)
-                | AppEvent::ReplayWorkflowHistory { .. } => {
+                | AppEvent::Workflow(WorkflowEvent::ReplayWorkflowHistory { .. }) => {
                     continue;
                 }
                 other => {
@@ -6750,7 +6752,10 @@ model = "gpt-5.2"
                 .await?
                 .expect("expected background workflow event")
             {
-                AppEvent::BackgroundWorkflowRunCompleted { run_id, result } => {
+                AppEvent::Workflow(WorkflowEvent::BackgroundWorkflowRunCompleted {
+                    run_id,
+                    result,
+                }) => {
                     break (run_id, result);
                 }
                 other => panic!("expected background workflow completion event, got {other:?}"),
@@ -6998,12 +7003,15 @@ model = "gpt-5.2"
                 .await?
                 .expect("expected inactive primary background workflow event")
             {
-                AppEvent::BackgroundWorkflowRunCompleted { run_id, result } => {
+                AppEvent::Workflow(WorkflowEvent::BackgroundWorkflowRunCompleted {
+                    run_id,
+                    result,
+                }) => {
                     break (run_id, result);
                 }
-                AppEvent::ClawbotTurnCompleted { .. }
+                AppEvent::Clawbot(ClawbotEvent::ClawbotTurnCompleted { .. })
                 | AppEvent::InsertHistoryCell(_)
-                | AppEvent::ReplayWorkflowHistory { .. } => {
+                | AppEvent::Workflow(WorkflowEvent::ReplayWorkflowHistory { .. }) => {
                     continue;
                 }
                 other => panic!("expected background workflow completion event, got {other:?}"),
@@ -7413,9 +7421,9 @@ model = "gpt-5.2"
         assert!(app.background_workflow_labels().is_empty());
         while let Ok(event) = app_event_rx.try_recv() {
             match event {
-                AppEvent::ClawbotTurnCompleted { .. }
+                AppEvent::Clawbot(ClawbotEvent::ClawbotTurnCompleted { .. })
                 | AppEvent::InsertHistoryCell(_)
-                | AppEvent::ReplayWorkflowHistory { .. } => {}
+                | AppEvent::Workflow(WorkflowEvent::ReplayWorkflowHistory { .. }) => {}
                 other => panic!("unexpected event after workflow follow-up completion: {other:?}"),
             }
         }

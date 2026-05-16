@@ -25,6 +25,7 @@ use super::App;
 use super::editor_helpers::ExternalEditorErrorTarget;
 use crate::app_event::AppEvent;
 use crate::app_event::ClawbotControlsDestination;
+use crate::app_event::ClawbotEvent;
 use crate::app_event::ClawbotFeishuConfigField;
 use crate::app_event::ClawbotForwardingChannel;
 use crate::app_event::ClawbotSessionBindSource;
@@ -222,7 +223,9 @@ impl App {
             field.current_value(config.as_ref()).unwrap_or_default(),
             Some(field.prompt_context_label(config.as_ref())),
             Box::new(move |value| {
-                tx.send(AppEvent::SaveClawbotFeishuConfigValue { field, value });
+                tx.send(AppEvent::Clawbot(
+                    ClawbotEvent::SaveClawbotFeishuConfigValue { field, value },
+                ));
             }),
         );
         self.chat_widget.show_view(Box::new(view));
@@ -712,7 +715,7 @@ impl App {
                             .to_string(),
                     ),
                     is_disabled: !has_api_credentials,
-                    actions: vec![Box::new(|tx| tx.send(AppEvent::ScanClawbotFeishuSessions))],
+                    actions: vec![Box::new(|tx| tx.send(AppEvent::Clawbot(ClawbotEvent::ScanClawbotFeishuSessions)))],
                     dismiss_on_select: false,
                     ..Default::default()
                 },
@@ -868,7 +871,7 @@ impl App {
                             .to_string(),
                     ),
                     is_disabled: unbound_session_count == 0 && clearable_unread_count == 0,
-                    actions: vec![Box::new(|tx| tx.send(AppEvent::ClearClawbotFeishuSessions))],
+                    actions: vec![Box::new(|tx| tx.send(AppEvent::Clawbot(ClawbotEvent::ClearClawbotFeishuSessions)))],
                     dismiss_on_select: false,
                     ..Default::default()
                 },
@@ -889,11 +892,11 @@ impl App {
                             "Restore normal interactive prompt handling for clawbot-originated turns.".to_string()
                         }
                     }),
-                    actions: vec![Box::new(move |tx| {
-                        tx.send(AppEvent::ClawbotSetTurnMode {
-                            mode: next_turn_mode,
-                        });
-                    })],
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::Clawbot(ClawbotEvent::ClawbotSetTurnMode {
+                        mode: next_turn_mode,
+                    }));
+                })],
                     dismiss_on_select: false,
                     ..Default::default()
                 },
@@ -938,7 +941,7 @@ impl App {
                     ),
                     is_disabled: !has_api_credentials,
                     actions: vec![Box::new(|tx| {
-                        tx.send(AppEvent::RetryClawbotFeishuConnection)
+                        tx.send(AppEvent::Clawbot(ClawbotEvent::RetryClawbotFeishuConnection))
                     })],
                     dismiss_on_select: false,
                     ..Default::default()
@@ -1007,9 +1010,9 @@ fn submenu_item(
         description: Some(description),
         selected_description: Some(selected_description),
         actions: vec![Box::new(move |tx| {
-            tx.send(AppEvent::OpenClawbotManagementView {
+            tx.send(AppEvent::Clawbot(ClawbotEvent::OpenClawbotManagementView {
                 destination: destination.clone(),
-            });
+            }));
         })],
         dismiss_on_select: false,
         ..Default::default()
@@ -1025,9 +1028,9 @@ fn clawbot_back_item(
         description: Some("Return to the previous clawbot menu.".to_string()),
         selected_description: Some(selected_description.to_string()),
         actions: vec![Box::new(move |tx| {
-            tx.send(AppEvent::OpenClawbotManagementView {
+            tx.send(AppEvent::Clawbot(ClawbotEvent::OpenClawbotManagementView {
                 destination: destination.clone(),
-            });
+            }));
         })],
         dismiss_on_select: false,
         ..Default::default()
@@ -1050,10 +1053,10 @@ fn clawbot_state_file_item(name: &str, path: PathBuf, label: &'static str) -> Se
         description: Some(display_path.clone()),
         selected_description: Some(format!("Open {display_path} in your external editor.")),
         actions: vec![Box::new(move |tx| {
-            tx.send(AppEvent::EditClawbotStateFile {
+            tx.send(AppEvent::Clawbot(ClawbotEvent::EditClawbotStateFile {
                 label,
                 path: path.clone(),
-            });
+            }));
         })],
         dismiss_on_select: false,
         ..Default::default()
@@ -1072,7 +1075,9 @@ fn clawbot_config_item(
                 .to_string(),
         ),
         actions: vec![Box::new(move |tx| {
-            tx.send(AppEvent::OpenClawbotFeishuConfigPrompt { field });
+            tx.send(AppEvent::Clawbot(
+                ClawbotEvent::OpenClawbotFeishuConfigPrompt { field },
+            ));
         })],
         dismiss_on_select: false,
         ..Default::default()
@@ -1111,7 +1116,7 @@ fn clawbot_force_connect_toggle_item(config: Option<&FeishuConfig>) -> Selection
                 .to_string(),
         }),
         is_disabled: !coordination.is_some_and(FeishuCoordinationConfig::is_configured),
-        actions: vec![Box::new(|tx| tx.send(AppEvent::ToggleClawbotForceConnect))],
+        actions: vec![Box::new(|tx| tx.send(AppEvent::Clawbot(ClawbotEvent::ToggleClawbotForceConnect)))],
         dismiss_on_select: false,
         ..Default::default()
     }
@@ -1176,11 +1181,11 @@ fn bound_channel_item(
             "Open this binding to jump threads or change forwarding state.".to_string(),
         ),
         actions: vec![Box::new(move |tx| {
-            tx.send(AppEvent::OpenClawbotManagementView {
+            tx.send(AppEvent::Clawbot(ClawbotEvent::OpenClawbotManagementView {
                 destination: ClawbotControlsDestination::BoundChannel {
                     thread_id: thread_id.clone(),
                 },
-            });
+            }));
         })],
         dismiss_on_select: false,
         ..Default::default()
@@ -1249,9 +1254,11 @@ fn bound_channel_detail_items(
         actions: vec![Box::new({
             let session_id = binding.session_id.clone();
             move |tx| {
-                tx.send(AppEvent::BindClawbotSessionAndPreempt {
-                    session_id: session_id.clone(),
-                });
+                tx.send(AppEvent::Clawbot(
+                    ClawbotEvent::BindClawbotSessionAndPreempt {
+                        session_id: session_id.clone(),
+                    },
+                ));
             }
         })],
         dismiss_on_select: false,
@@ -1301,11 +1308,13 @@ fn bound_channel_detail_items(
                         .selected_description(binding.inbound_forwarding_enabled),
                 ),
                 actions: vec![Box::new(move |tx| {
-                    tx.send(AppEvent::ClawbotSetThreadForwarding {
-                        thread_id: inbound_thread_id,
-                        channel: ClawbotForwardingChannel::Inbound,
-                        enabled: toggle_inbound_enabled,
-                    });
+                    tx.send(AppEvent::Clawbot(
+                        ClawbotEvent::ClawbotSetThreadForwarding {
+                            thread_id: inbound_thread_id,
+                            channel: ClawbotForwardingChannel::Inbound,
+                            enabled: toggle_inbound_enabled,
+                        },
+                    ));
                 })],
                 dismiss_on_select: false,
                 ..Default::default()
@@ -1321,11 +1330,13 @@ fn bound_channel_detail_items(
                         .selected_description(binding.outbound_forwarding_enabled),
                 ),
                 actions: vec![Box::new(move |tx| {
-                    tx.send(AppEvent::ClawbotSetThreadForwarding {
-                        thread_id: outbound_thread_id,
-                        channel: ClawbotForwardingChannel::Outbound,
-                        enabled: toggle_outbound_enabled,
-                    });
+                    tx.send(AppEvent::Clawbot(
+                        ClawbotEvent::ClawbotSetThreadForwarding {
+                            thread_id: outbound_thread_id,
+                            channel: ClawbotForwardingChannel::Outbound,
+                            enabled: toggle_outbound_enabled,
+                        },
+                    ));
                 })],
                 dismiss_on_select: false,
                 ..Default::default()
@@ -1338,9 +1349,9 @@ fn bound_channel_detail_items(
                         .to_string(),
                 ),
                 actions: vec![Box::new(move |tx| {
-                    tx.send(AppEvent::ClawbotDisconnectThread {
+                    tx.send(AppEvent::Clawbot(ClawbotEvent::ClawbotDisconnectThread {
                         thread_id: disconnect_thread_id,
-                    });
+                    }));
                 })],
                 dismiss_on_select: false,
                 ..Default::default()
@@ -1359,11 +1370,11 @@ fn unbound_session_item(session: &ProviderSession) -> SelectionItem {
             "Open this session to inspect it and bind it to the current thread.".to_string(),
         ),
         actions: vec![Box::new(move |tx| {
-            tx.send(AppEvent::OpenClawbotManagementView {
+            tx.send(AppEvent::Clawbot(ClawbotEvent::OpenClawbotManagementView {
                 destination: ClawbotControlsDestination::UnboundSession {
                     session_id: session_id.clone(),
                 },
-            });
+            }));
         })],
         dismiss_on_select: false,
         ..Default::default()
@@ -1399,9 +1410,11 @@ fn unbound_session_detail_items(
             }),
             is_disabled: active_thread_id.is_none(),
             actions: vec![Box::new(move |tx: &AppEventSender| {
-                tx.send(AppEvent::BindClawbotDiscoveredSession {
-                    session_id: bind_session_id.clone(),
-                });
+                tx.send(AppEvent::Clawbot(
+                    ClawbotEvent::BindClawbotDiscoveredSession {
+                        session_id: bind_session_id.clone(),
+                    },
+                ));
             })],
             dismiss_on_select: false,
             ..Default::default()
@@ -1429,9 +1442,11 @@ fn unbound_session_detail_items(
             }),
             is_disabled: active_thread_id.is_none() || !can_preempt_ws,
             actions: vec![Box::new(move |tx: &AppEventSender| {
-                tx.send(AppEvent::BindClawbotSessionAndPreempt {
-                    session_id: preempt_session_id.clone(),
-                });
+                tx.send(AppEvent::Clawbot(
+                    ClawbotEvent::BindClawbotSessionAndPreempt {
+                        session_id: preempt_session_id.clone(),
+                    },
+                ));
             })],
             dismiss_on_select: false,
             ..Default::default()
@@ -1511,9 +1526,11 @@ fn clawbot_session_item(
         })]
     } else {
         vec![Box::new(move |tx: &AppEventSender| {
-            tx.send(AppEvent::BindClawbotDiscoveredSession {
-                session_id: session_id.clone(),
-            });
+            tx.send(AppEvent::Clawbot(
+                ClawbotEvent::BindClawbotDiscoveredSession {
+                    session_id: session_id.clone(),
+                },
+            ));
         })]
     };
     SelectionItem {

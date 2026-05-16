@@ -232,21 +232,160 @@ pub(crate) enum KeymapEditIntent {
     ReplaceOne { old_key: String },
 }
 
+#[derive(Debug)]
+pub(crate) enum ProfileEvent {
+    OpenProfileManagementPanel,
+    EditProfileFallbackConfig,
+    SwitchRuntimeProfile {
+        target: RuntimeProfileTarget,
+    },
+    RetryLastUserTurnWithProfileFallback {
+        action: ProfileFallbackAction,
+        error_message: String,
+    },
+    ExecuteProfileFallbackRetry {
+        generation: u64,
+        profile_id: Option<String>,
+        history_message: String,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum ThreadEvent {
+    OpenDeleteAgentPicker,
+    OpenDeleteAgentConfirmation { thread_id: ThreadId },
+    ArchiveAgentThread { thread_id: ThreadId },
+    OpenThreadPanel,
+    OpenJumpToMessagePanel,
+    JumpToTranscriptCell { cell_index: usize },
+    ForkCurrentSession,
+    UndoLastUserMessage,
+}
+
+#[derive(Debug)]
+pub(crate) enum BtwEvent {
+    StartBtwDiscussion { prompt: String },
+}
+
+#[derive(Debug)]
+pub(crate) enum WorkflowEvent {
+    ReplayWorkflowHistory {
+        thread_id: ThreadId,
+    },
+    BackgroundWorkflowRunCompleted {
+        run_id: String,
+        result: Box<BackgroundWorkflowRunResult>,
+    },
+    OpenWorkflowControls,
+    StartManualWorkflowTrigger {
+        workflow_name: String,
+        trigger_id: String,
+    },
+    StartManualWorkflowJob {
+        workflow_name: String,
+        job_name: String,
+    },
+    ShowWorkflowBackgroundTasks,
+    OpenWorkflowControlView {
+        destination: WorkflowControlsDestination,
+    },
+    CreateDefaultWorkflowTemplate,
+    EditWorkflowFile {
+        workflow_path: PathBuf,
+        reopen: WorkflowControlsDestination,
+    },
+    ToggleWorkflowTriggerEnabled {
+        workflow_path: PathBuf,
+        trigger_id: String,
+    },
+    ToggleWorkflowJobEnabled {
+        workflow_path: PathBuf,
+        job_name: String,
+    },
+    CycleWorkflowJobContextStrategy {
+        workflow_path: PathBuf,
+        job_name: String,
+    },
+    CycleWorkflowJobExecutionStrategy {
+        workflow_path: PathBuf,
+        job_name: String,
+    },
+    CycleWorkflowJobResponse {
+        workflow_path: PathBuf,
+        job_name: String,
+    },
+    EditWorkflowJobField {
+        workflow_path: PathBuf,
+        job_name: String,
+        field: WorkflowJobEditableField,
+    },
+    SetWorkflowTriggerType {
+        workflow_path: PathBuf,
+        trigger_id: String,
+        trigger_type: WorkflowTriggerType,
+    },
+    EditWorkflowTriggerField {
+        workflow_path: PathBuf,
+        trigger_id: String,
+        field: WorkflowTriggerEditableField,
+    },
+    WorkflowWorkspaceFilesChanged {
+        changed_paths: Vec<PathBuf>,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum ClawbotEvent {
+    ClawbotProviderEvent {
+        event: ClawbotProviderEvent,
+    },
+    ClawbotTurnCompleted {
+        thread_id: ThreadId,
+        turn: AppServerTurn,
+    },
+    OpenClawbotManagement,
+    OpenClawbotManagementView {
+        destination: ClawbotControlsDestination,
+    },
+    OpenClawbotFeishuConfigPrompt {
+        field: ClawbotFeishuConfigField,
+    },
+    SaveClawbotFeishuConfigValue {
+        field: ClawbotFeishuConfigField,
+        value: String,
+    },
+    BindClawbotDiscoveredSession {
+        session_id: String,
+    },
+    BindClawbotSessionAndPreempt {
+        session_id: String,
+    },
+    ClawbotSetTurnMode {
+        mode: ClawbotTurnMode,
+    },
+    ClawbotSetThreadForwarding {
+        thread_id: ThreadId,
+        channel: ClawbotForwardingChannel,
+        enabled: bool,
+    },
+    ScanClawbotFeishuSessions,
+    ClearClawbotFeishuSessions,
+    RetryClawbotFeishuConnection,
+    ToggleClawbotForceConnect,
+    ClawbotDisconnectThread {
+        thread_id: ThreadId,
+    },
+    EditClawbotStateFile {
+        label: &'static str,
+        path: PathBuf,
+    },
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
-    /// Open the picker for archiving an open sub-agent thread.
-    OpenDeleteAgentPicker,
-    /// Open a confirmation prompt before archiving a sub-agent thread.
-    OpenDeleteAgentConfirmation {
-        thread_id: ThreadId,
-    },
-    /// Archive a sub-agent thread and remove it from the live picker state.
-    ArchiveAgentThread {
-        thread_id: ThreadId,
-    },
     /// Switch the active thread to the selected agent.
     SelectAgentThread(ThreadId),
 
@@ -319,34 +458,11 @@ pub(crate) enum AppEvent {
 
     /// Open the local TUI display preferences panel.
     OpenDisplayPreferencesPanel,
-
-    /// Open the routed profile management panel.
-    OpenProfileManagementPanel,
-
-    /// Edit the fallback route for named profiles.
-    EditProfileFallbackConfig,
-
-    /// Open thread-specific actions for the current conversation.
-    OpenThreadPanel,
-
-    /// Open the committed transcript jump picker.
-    OpenJumpToMessagePanel,
-
-    /// Open the transcript overlay and jump to the selected committed cell.
-    JumpToTranscriptCell {
-        cell_index: usize,
-    },
-
-    /// Fork the current session into a new thread.
-    ForkCurrentSession,
-
-    /// Restore the last user input and roll back one committed turn.
-    UndoLastUserMessage,
-
-    /// Switch the current runtime to the selected config profile.
-    SwitchRuntimeProfile {
-        target: RuntimeProfileTarget,
-    },
+    Profile(ProfileEvent),
+    Thread(ThreadEvent),
+    Btw(BtwEvent),
+    Workflow(WorkflowEvent),
+    Clawbot(ClawbotEvent),
 
     /// Request to exit the application.
     ///
@@ -664,9 +780,6 @@ pub(crate) enum AppEvent {
     BeginThreadSwitchHistoryReplayBuffer,
 
     InsertHistoryCell(Box<dyn HistoryCell>),
-    ClawbotProviderEvent {
-        event: ClawbotProviderEvent,
-    },
 
     /// Finish buffering initial resume replay after all replay events have been queued.
     EndInitialHistoryReplayBuffer,
@@ -690,156 +803,6 @@ pub(crate) enum AppEvent {
     /// Emitted by `ChatWidget::on_plan_item_completed` after plan stream
     /// finalization.
     ConsolidateProposedPlan(String),
-
-    /// Replay stored workflow-only transcript cells for a specific thread after its turn replay.
-    #[allow(dead_code)]
-    ReplayWorkflowHistory {
-        thread_id: ThreadId,
-    },
-    /// Final result for one background workflow execution.
-    BackgroundWorkflowRunCompleted {
-        run_id: String,
-        result: Box<BackgroundWorkflowRunResult>,
-    },
-    OpenWorkflowControls,
-
-    StartManualWorkflowTrigger {
-        workflow_name: String,
-        trigger_id: String,
-    },
-
-    StartManualWorkflowJob {
-        workflow_name: String,
-        job_name: String,
-    },
-
-    ShowWorkflowBackgroundTasks,
-
-    OpenWorkflowControlView {
-        destination: WorkflowControlsDestination,
-    },
-
-    CreateDefaultWorkflowTemplate,
-
-    EditWorkflowFile {
-        workflow_path: PathBuf,
-        reopen: WorkflowControlsDestination,
-    },
-
-    ToggleWorkflowTriggerEnabled {
-        workflow_path: PathBuf,
-        trigger_id: String,
-    },
-
-    ToggleWorkflowJobEnabled {
-        workflow_path: PathBuf,
-        job_name: String,
-    },
-
-    CycleWorkflowJobContextStrategy {
-        workflow_path: PathBuf,
-        job_name: String,
-    },
-
-    CycleWorkflowJobExecutionStrategy {
-        workflow_path: PathBuf,
-        job_name: String,
-    },
-
-    CycleWorkflowJobResponse {
-        workflow_path: PathBuf,
-        job_name: String,
-    },
-
-    EditWorkflowJobField {
-        workflow_path: PathBuf,
-        job_name: String,
-        field: WorkflowJobEditableField,
-    },
-
-    SetWorkflowTriggerType {
-        workflow_path: PathBuf,
-        trigger_id: String,
-        trigger_type: WorkflowTriggerType,
-    },
-
-    EditWorkflowTriggerField {
-        workflow_path: PathBuf,
-        trigger_id: String,
-        field: WorkflowTriggerEditableField,
-    },
-
-    WorkflowWorkspaceFilesChanged {
-        changed_paths: Vec<PathBuf>,
-    },
-
-    StartBtwDiscussion {
-        prompt: String,
-    },
-    /// Retry the last turn using the routed profile fallback policy.
-    RetryLastUserTurnWithProfileFallback {
-        action: ProfileFallbackAction,
-        error_message: String,
-    },
-    ExecuteProfileFallbackRetry {
-        generation: u64,
-        profile_id: Option<String>,
-        history_message: String,
-    },
-    #[allow(dead_code)]
-    ClawbotTurnCompleted {
-        thread_id: ThreadId,
-        turn: AppServerTurn,
-    },
-
-    OpenClawbotManagement,
-
-    OpenClawbotManagementView {
-        destination: ClawbotControlsDestination,
-    },
-
-    OpenClawbotFeishuConfigPrompt {
-        field: ClawbotFeishuConfigField,
-    },
-
-    SaveClawbotFeishuConfigValue {
-        field: ClawbotFeishuConfigField,
-        value: String,
-    },
-    BindClawbotDiscoveredSession {
-        session_id: String,
-    },
-
-    BindClawbotSessionAndPreempt {
-        session_id: String,
-    },
-
-    ClawbotSetTurnMode {
-        mode: ClawbotTurnMode,
-    },
-
-    ClawbotSetThreadForwarding {
-        thread_id: ThreadId,
-        channel: ClawbotForwardingChannel,
-        enabled: bool,
-    },
-
-    ScanClawbotFeishuSessions,
-
-    ClearClawbotFeishuSessions,
-
-    RetryClawbotFeishuConnection,
-
-    ToggleClawbotForceConnect,
-
-    ClawbotDisconnectThread {
-        thread_id: ThreadId,
-    },
-
-    EditClawbotStateFile {
-        label: &'static str,
-        path: PathBuf,
-    },
     /// Apply rollback semantics to local transcript cells.
     ///
     /// This is emitted when rollback was not initiated by the current

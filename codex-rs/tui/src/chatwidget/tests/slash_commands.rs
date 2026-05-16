@@ -1145,7 +1145,10 @@ async fn slash_thread_dispatches_open_thread_panel_event() {
 
     chat.dispatch_command(SlashCommand::Thread);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenThreadPanel));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::Thread(ThreadEvent::OpenThreadPanel))
+    );
 }
 
 #[tokio::test]
@@ -1154,7 +1157,10 @@ async fn slash_profile_dispatches_open_profile_management_panel_event() {
 
     chat.dispatch_command(SlashCommand::Profile);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenProfileManagementPanel));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::Profile(ProfileEvent::OpenProfileManagementPanel))
+    );
 }
 
 #[tokio::test]
@@ -1175,7 +1181,10 @@ async fn slash_del_agent_dispatches_open_delete_agent_picker_event() {
 
     chat.dispatch_command(SlashCommand::DelAgent);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenDeleteAgentPicker));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::Thread(ThreadEvent::OpenDeleteAgentPicker))
+    );
 }
 
 #[tokio::test]
@@ -1190,7 +1199,7 @@ async fn slash_btw_dispatches_start_event() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     match rx.try_recv() {
-        Ok(AppEvent::StartBtwDiscussion { prompt }) => {
+        Ok(AppEvent::Btw(BtwEvent::StartBtwDiscussion { prompt })) => {
             assert_eq!(prompt, "compare the two approaches");
         }
         other => panic!("expected StartBtwDiscussion event, got {other:?}"),
@@ -1210,7 +1219,7 @@ async fn slash_btw_dispatches_start_event_while_task_running() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     match rx.try_recv() {
-        Ok(AppEvent::StartBtwDiscussion { prompt }) => {
+        Ok(AppEvent::Btw(BtwEvent::StartBtwDiscussion { prompt })) => {
             assert_eq!(prompt, "compare against prior context");
         }
         other => panic!("expected StartBtwDiscussion event, got {other:?}"),
@@ -2091,7 +2100,10 @@ async fn slash_workflow_opens_controls_popup() {
 
     chat.dispatch_command(SlashCommand::Workflow);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenWorkflowControls));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::Workflow(WorkflowEvent::OpenWorkflowControls))
+    );
     assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
 }
 
@@ -2113,7 +2125,10 @@ async fn slash_clawbot_opens_management_popup() {
 
     chat.dispatch_command(SlashCommand::Clawbot);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenClawbotManagement));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::Clawbot(ClawbotEvent::OpenClawbotManagement))
+    );
     assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
 }
 
@@ -2170,7 +2185,10 @@ async fn slash_fork_requests_current_fork() {
 
     chat.dispatch_command(SlashCommand::Fork);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ForkCurrentSession));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::Thread(ThreadEvent::ForkCurrentSession))
+    );
 }
 
 #[tokio::test]

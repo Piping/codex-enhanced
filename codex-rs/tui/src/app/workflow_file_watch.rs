@@ -8,6 +8,7 @@ use notify::RecursiveMode;
 use notify::Watcher;
 
 use crate::app_event::AppEvent;
+use crate::app_event::WorkflowEvent;
 use crate::app_event_sender::AppEventSender;
 
 pub(crate) struct WorkflowFileWatchState {
@@ -30,7 +31,9 @@ impl WorkflowFileWatchState {
                     if changed_paths.is_empty() {
                         return;
                     }
-                    app_event_tx.send(AppEvent::WorkflowWorkspaceFilesChanged { changed_paths });
+                    app_event_tx.send(AppEvent::Workflow(
+                        WorkflowEvent::WorkflowWorkspaceFilesChanged { changed_paths },
+                    ));
                 }
                 Err(err) => {
                     tracing::warn!("workflow file watcher event failed: {err}");

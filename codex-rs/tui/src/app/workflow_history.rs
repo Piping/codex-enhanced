@@ -10,6 +10,7 @@ use crate::app::workflow_definition::load_workflow_registry;
 use crate::app_command::AppCommand;
 use crate::app_command::AppCommandView;
 use crate::app_event::AppEvent;
+use crate::app_event::WorkflowEvent;
 use crate::app_server_session::AppServerSession;
 use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
@@ -199,7 +200,9 @@ impl App {
             .contains_key(&thread_id)
         {
             self.app_event_tx
-                .send(AppEvent::ReplayWorkflowHistory { thread_id });
+                .send(AppEvent::Workflow(WorkflowEvent::ReplayWorkflowHistory {
+                    thread_id,
+                }));
         }
     }
 

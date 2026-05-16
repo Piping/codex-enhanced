@@ -7,7 +7,12 @@
 
 use super::goal_validation::GoalObjectiveValidationSource;
 use super::*;
+use crate::app_event::BtwEvent;
+use crate::app_event::ClawbotEvent;
+use crate::app_event::ProfileEvent;
+use crate::app_event::ThreadEvent;
 use crate::app_event::ThreadGoalSetMode;
+use crate::app_event::WorkflowEvent;
 use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::slash_commands;
 
@@ -152,13 +157,16 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::OpenResumePicker);
             }
             SlashCommand::Fork => {
-                self.app_event_tx.send(AppEvent::ForkCurrentSession);
+                self.app_event_tx
+                    .send(AppEvent::Thread(ThreadEvent::ForkCurrentSession));
             }
             SlashCommand::Thread => {
-                self.app_event_tx.send(AppEvent::OpenThreadPanel);
+                self.app_event_tx
+                    .send(AppEvent::Thread(ThreadEvent::OpenThreadPanel));
             }
             SlashCommand::Profile => {
-                self.app_event_tx.send(AppEvent::OpenProfileManagementPanel);
+                self.app_event_tx
+                    .send(AppEvent::Profile(ProfileEvent::OpenProfileManagementPanel));
             }
             SlashCommand::Init => {
                 let init_target = self.config.cwd.join(DEFAULT_AGENTS_MD_FILENAME);
@@ -207,7 +215,8 @@ impl ChatWidget {
                 self.open_settings_popup();
             }
             SlashCommand::Clawbot => {
-                self.app_event_tx.send(AppEvent::OpenClawbotManagement);
+                self.app_event_tx
+                    .send(AppEvent::Clawbot(ClawbotEvent::OpenClawbotManagement));
             }
             SlashCommand::Personality => {
                 self.open_personality_popup();
@@ -246,7 +255,8 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
             SlashCommand::DelAgent => {
-                self.app_event_tx.send(AppEvent::OpenDeleteAgentPicker);
+                self.app_event_tx
+                    .send(AppEvent::Thread(ThreadEvent::OpenDeleteAgentPicker));
             }
             SlashCommand::Approvals => {
                 self.open_permissions_popup();
@@ -434,7 +444,8 @@ impl ChatWidget {
                 self.add_plugins_output();
             }
             SlashCommand::Workflow => {
-                self.app_event_tx.send(AppEvent::OpenWorkflowControls);
+                self.app_event_tx
+                    .send(AppEvent::Workflow(WorkflowEvent::OpenWorkflowControls));
             }
             SlashCommand::Btw => {
                 self.add_error_message("Usage: /btw <prompt>".to_string());
@@ -802,7 +813,7 @@ impl ChatWidget {
             }
             SlashCommand::Btw if !trimmed.is_empty() => {
                 self.app_event_tx
-                    .send(AppEvent::StartBtwDiscussion { prompt: args });
+                    .send(AppEvent::Btw(BtwEvent::StartBtwDiscussion { prompt: args }));
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {

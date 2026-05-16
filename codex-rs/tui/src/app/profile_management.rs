@@ -6,6 +6,7 @@ use toml::Value as TomlValue;
 use super::App;
 use super::editor_helpers::ExternalEditorErrorTarget;
 use crate::app_event::AppEvent;
+use crate::app_event::ProfileEvent;
 use crate::app_event::RuntimeProfileTarget;
 use crate::app_server_session::AppServerSession;
 use crate::bottom_pane::SelectionItem;
@@ -366,11 +367,13 @@ impl App {
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
             tokio::time::sleep(delay).await;
-            app_event_tx.send(AppEvent::ExecuteProfileFallbackRetry {
-                generation,
-                profile_id,
-                history_message,
-            });
+            app_event_tx.send(AppEvent::Profile(
+                ProfileEvent::ExecuteProfileFallbackRetry {
+                    generation,
+                    profile_id,
+                    history_message,
+                },
+            ));
         });
     }
 
@@ -439,7 +442,7 @@ fn profile_management_root_params(
                     .to_string(),
             ),
             actions: vec![Box::new(|tx| {
-                tx.send(AppEvent::EditProfileFallbackConfig);
+                tx.send(AppEvent::Profile(ProfileEvent::EditProfileFallbackConfig));
             })],
             dismiss_on_select: false,
             search_value: Some("fallback config route reorder edit".to_string()),
@@ -515,9 +518,9 @@ fn profile_selection_item(
         is_disabled,
         disabled_reason,
         actions: vec![Box::new(move |tx| {
-            tx.send(AppEvent::SwitchRuntimeProfile {
+            tx.send(AppEvent::Profile(ProfileEvent::SwitchRuntimeProfile {
                 target: target.clone(),
-            });
+            }));
         })],
         dismiss_on_select: true,
         search_value: Some(format!("{name} {description}")),
@@ -995,7 +998,7 @@ mod tests {
         (params.items[1].actions[0])(&AppEventSender::new(tx));
         assert!(matches!(
             rx.try_recv().ok(),
-            Some(AppEvent::EditProfileFallbackConfig)
+            Some(AppEvent::Profile(ProfileEvent::EditProfileFallbackConfig))
         ));
     }
 

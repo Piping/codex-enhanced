@@ -3,8 +3,14 @@
 //! This module contains the exhaustive `AppEvent` dispatcher and exit-mode handling. Large domain
 //! actions are delegated to focused app submodules so the central match remains the routing layer.
 
+use super::clawbot_controller::ClawbotController;
+use super::profile_controller::ProfileController;
 use super::resize_reflow::trailing_run_start;
+use super::thread_controller::ThreadController;
+use super::workflow_controller::WorkflowController;
 use super::*;
+use crate::app_event::AppEvent;
+use crate::app_event::BtwEvent;
 
 const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
 
@@ -136,118 +142,20 @@ impl App {
                     }
                 }
             }
-            event @ (AppEvent::OpenProfileManagementPanel
-            | AppEvent::EditProfileFallbackConfig
-            | AppEvent::SwitchRuntimeProfile { .. }
-            | AppEvent::RetryLastUserTurnWithProfileFallback { .. }
-            | AppEvent::ExecuteProfileFallbackRetry { .. }
-            | AppEvent::OpenThreadPanel
-            | AppEvent::OpenJumpToMessagePanel
-            | AppEvent::JumpToTranscriptCell { .. }
-            | AppEvent::UndoLastUserMessage
-            | AppEvent::OpenDeleteAgentPicker
-            | AppEvent::OpenDeleteAgentConfirmation { .. }
-            | AppEvent::ArchiveAgentThread { .. }
-            | AppEvent::StartBtwDiscussion { .. }
-            | AppEvent::OpenWorkflowControls
-            | AppEvent::OpenWorkflowControlView { .. }
-            | AppEvent::CreateDefaultWorkflowTemplate
-            | AppEvent::EditWorkflowFile { .. }
-            | AppEvent::ToggleWorkflowTriggerEnabled { .. }
-            | AppEvent::ToggleWorkflowJobEnabled { .. }
-            | AppEvent::CycleWorkflowJobContextStrategy { .. }
-            | AppEvent::CycleWorkflowJobExecutionStrategy { .. }
-            | AppEvent::CycleWorkflowJobResponse { .. }
-            | AppEvent::EditWorkflowJobField { .. }
-            | AppEvent::SetWorkflowTriggerType { .. }
-            | AppEvent::EditWorkflowTriggerField { .. }
-            | AppEvent::WorkflowWorkspaceFilesChanged { .. }
-            | AppEvent::StartManualWorkflowTrigger { .. }
-            | AppEvent::StartManualWorkflowJob { .. }
-            | AppEvent::ShowWorkflowBackgroundTasks
-            | AppEvent::ReplayWorkflowHistory { .. }
-            | AppEvent::BackgroundWorkflowRunCompleted { .. }
-            | AppEvent::ClawbotProviderEvent { .. }
-            | AppEvent::ClawbotTurnCompleted { .. }
-            | AppEvent::OpenClawbotManagement
-            | AppEvent::OpenClawbotManagementView { .. }
-            | AppEvent::OpenClawbotFeishuConfigPrompt { .. }
-            | AppEvent::SaveClawbotFeishuConfigValue { .. }
-            | AppEvent::BindClawbotDiscoveredSession { .. }
-            | AppEvent::BindClawbotSessionAndPreempt { .. }
-            | AppEvent::ClawbotSetTurnMode { .. }
-            | AppEvent::ClawbotSetThreadForwarding { .. }
-            | AppEvent::ScanClawbotFeishuSessions
-            | AppEvent::ClearClawbotFeishuSessions
-            | AppEvent::RetryClawbotFeishuConnection
-            | AppEvent::ToggleClawbotForceConnect
-            | AppEvent::ClawbotDisconnectThread { .. }
-            | AppEvent::EditClawbotStateFile { .. }) => {
-                self.dispatch_feature_event(tui, app_server, event).await;
+            AppEvent::Profile(event) => {
+                ProfileController::handle(self, tui, app_server, event).await;
             }
-            AppEvent::ForkCurrentSession => {
-                self.session_telemetry.counter(
-                    "codex.thread.fork",
-                    /*inc*/ 1,
-                    &[("source", "slash_command")],
-                );
-                let summary = session_summary(
-                    self.chat_widget.token_usage(),
-                    self.chat_widget.thread_id(),
-                    self.chat_widget.thread_name(),
-                    self.chat_widget.rollout_path().as_deref(),
-                );
-                self.chat_widget
-                    .add_plain_history_lines(vec!["/fork".magenta().into()]);
-                if let Some(thread_id) = self.chat_widget.thread_id() {
-                    self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
-                        .await;
-                    match app_server.fork_thread(self.config.clone(), thread_id).await {
-                        Ok(forked) => {
-                            self.shutdown_current_thread(app_server).await;
-                            match self
-                                .replace_chat_widget_with_app_server_thread(
-                                    tui, app_server, forked, /*initial_user_message*/ None,
-                                )
-                                .await
-                            {
-                                Ok(()) => {
-                                    if let Some(summary) = summary {
-                                        let mut lines: Vec<Line<'static>> = Vec::new();
-                                        if let Some(usage_line) = summary.usage_line {
-                                            lines.push(usage_line.into());
-                                        }
-                                        if let Some(command) = summary.resume_command {
-                                            let spans = vec![
-                                                "To continue this session, run ".into(),
-                                                command.cyan(),
-                                            ];
-                                            lines.push(spans.into());
-                                        }
-                                        self.chat_widget.add_plain_history_lines(lines);
-                                    }
-                                }
-                                Err(err) => {
-                                    self.chat_widget.add_error_message(format!(
-                                        "Failed to attach to forked app-server thread: {err}"
-                                    ));
-                                }
-                            }
-                        }
-                        Err(err) => {
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to fork current session through the app server: {err}"
-                            ));
-                        }
-                    }
-                } else {
-                    self.chat_widget.add_error_message(
-                        "A thread must contain at least one turn before it can be forked."
-                            .to_string(),
-                    );
-                }
-
-                tui.frame_requester().schedule_frame();
+            AppEvent::Thread(event) => {
+                ThreadController::handle(self, tui, app_server, event).await;
+            }
+            AppEvent::Btw(event) => {
+                self.handle_btw_feature_event(app_server, event).await;
+            }
+            AppEvent::Workflow(event) => {
+                WorkflowController::handle(self, tui, app_server, event).await;
+            }
+            AppEvent::Clawbot(event) => {
+                ClawbotController::handle(self, tui, app_server, event).await;
             }
             AppEvent::BeginInitialHistoryReplayBuffer => {
                 self.begin_initial_history_replay_buffer();
@@ -2231,6 +2139,18 @@ impl App {
             ExitMode::RespawnImmediate => {
                 self.pending_shutdown_exit_thread_id = None;
                 AppRunControl::Exit(ExitReason::RespawnRequested)
+            }
+        }
+    }
+
+    pub(super) async fn handle_btw_feature_event(
+        &mut self,
+        app_server: &mut AppServerSession,
+        event: BtwEvent,
+    ) {
+        match event {
+            BtwEvent::StartBtwDiscussion { prompt } => {
+                self.start_btw_discussion(app_server, prompt).await;
             }
         }
     }

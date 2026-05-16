@@ -2,7 +2,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 
 use super::App;
-use crate::app_event::AppEvent;
+use crate::app_event::ThreadEvent;
 use crate::app_server_session::AppServerSession;
 use crate::pager_overlay::Overlay;
 use crate::tui;
@@ -14,25 +14,25 @@ impl ThreadController {
         app: &mut App,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
-        event: AppEvent,
+        event: ThreadEvent,
     ) {
         match event {
-            AppEvent::OpenDeleteAgentPicker => {
+            ThreadEvent::OpenDeleteAgentPicker => {
                 app.open_delete_agent_picker(app_server).await;
             }
-            AppEvent::OpenDeleteAgentConfirmation { thread_id } => {
+            ThreadEvent::OpenDeleteAgentConfirmation { thread_id } => {
                 app.open_delete_agent_confirmation(thread_id);
             }
-            AppEvent::ArchiveAgentThread { thread_id } => {
+            ThreadEvent::ArchiveAgentThread { thread_id } => {
                 app.archive_agent_thread(tui, app_server, thread_id).await;
             }
-            AppEvent::OpenThreadPanel => {
+            ThreadEvent::OpenThreadPanel => {
                 app.open_thread_panel();
             }
-            AppEvent::OpenJumpToMessagePanel => {
+            ThreadEvent::OpenJumpToMessagePanel => {
                 app.open_jump_to_message_panel();
             }
-            AppEvent::JumpToTranscriptCell { cell_index } => {
+            ThreadEvent::JumpToTranscriptCell { cell_index } => {
                 app.reset_backtrack_state();
                 app.backtrack.overlay_preview_active = false;
                 if !matches!(app.overlay, Some(Overlay::Transcript(_))) {
@@ -45,7 +45,7 @@ impl ThreadController {
                     tui.frame_requester().schedule_frame();
                 }
             }
-            AppEvent::ForkCurrentSession => {
+            ThreadEvent::ForkCurrentSession => {
                 app.session_telemetry.counter(
                     "codex.thread.fork",
                     /*inc*/ 1,
@@ -109,10 +109,9 @@ impl ThreadController {
 
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::UndoLastUserMessage => {
+            ThreadEvent::UndoLastUserMessage => {
                 app.undo_last_user_message();
             }
-            _ => unreachable!("non-thread event passed to thread controller"),
         }
     }
 }
