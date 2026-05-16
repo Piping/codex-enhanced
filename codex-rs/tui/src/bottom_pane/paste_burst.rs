@@ -170,6 +170,7 @@ pub(crate) struct PasteBurst {
     burst_window_until: Option<Instant>,
     buffer: String,
     active: bool,
+    enter_suppression_armed: bool,
     // Hold first fast char briefly to avoid rendering flicker
     pending_first_char: Option<(char, Instant)>,
 }
@@ -321,7 +322,7 @@ impl PasteBurst {
     /// Returns true if a newline was appended (we are in a burst context),
     /// false otherwise.
     pub fn append_newline_if_active(&mut self, now: Instant) -> bool {
-        if self.is_active() {
+        if self.is_active_internal() && self.enter_suppression_armed {
             self.buffer.push('\n');
             self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
             true
@@ -333,7 +334,7 @@ impl PasteBurst {
     /// Decide if Enter should insert a newline (burst context) vs submit.
     pub fn newline_should_insert_instead_of_submit(&self, now: Instant) -> bool {
         let in_burst_window = self.burst_window_until.is_some_and(|until| now <= until);
-        self.is_active() || in_burst_window
+        self.enter_suppression_armed && (self.is_active_internal() || in_burst_window)
     }
 
     /// Keep the burst window alive.
@@ -348,12 +349,14 @@ impl PasteBurst {
         }
         self.active = true;
         self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
+        self.arm_enter_suppression_if_paste_like();
     }
 
     /// Append a char into the burst buffer.
     pub fn append_char_to_buffer(&mut self, ch: char, now: Instant) {
         self.buffer.push(ch);
         self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
+        self.arm_enter_suppression_if_paste_like();
     }
 
     /// Try to append a char into the burst buffer only if a burst is already active.
@@ -423,6 +426,7 @@ impl PasteBurst {
         self.last_plain_char_time = None;
         self.burst_window_until = None;
         self.active = false;
+        self.enter_suppression_armed = false;
         self.pending_first_char = None;
     }
 
@@ -442,8 +446,21 @@ impl PasteBurst {
         self.consecutive_plain_char_burst = 0;
         self.burst_window_until = None;
         self.active = false;
+        self.enter_suppression_armed = false;
         self.buffer.clear();
         self.pending_first_char = None;
+    }
+
+    fn arm_enter_suppression_if_paste_like(&mut self) {
+        if self.buffer_looks_paste_like() {
+            self.enter_suppression_armed = true;
+        }
+    }
+
+    fn buffer_looks_paste_like(&self) -> bool {
+        self.buffer.chars().any(char::is_whitespace)
+            || !self.buffer.is_ascii()
+            || self.buffer.chars().count() >= 16
     }
 }
 
@@ -555,17 +572,24 @@ mod tests {
 
         let t1 = t0 + Duration::from_millis(1);
         assert!(matches!(
-            burst.on_plain_char('b', t1),
+            burst.on_plain_char(' ', t1),
             CharDecision::BeginBufferFromPending
         ));
-        burst.append_char_to_buffer('b', t1);
+        burst.append_char_to_buffer(' ', t1);
 
-        let t2 = t1 + PasteBurst::recommended_active_flush_delay() + Duration::from_millis(1);
-        assert!(matches!(burst.flush_if_due(t2), FlushResult::Paste(ref s) if s == "ab"));
+        let t2 = t1 + Duration::from_millis(1);
+        assert!(matches!(
+            burst.on_plain_char('b', t2),
+            CharDecision::BufferAppend
+        ));
+        burst.append_char_to_buffer('b', t2);
+
+        let t3 = t2 + PasteBurst::recommended_active_flush_delay() + Duration::from_millis(1);
+        assert!(matches!(burst.flush_if_due(t3), FlushResult::Paste(ref s) if s == "a b"));
         assert!(!burst.is_active());
 
-        assert!(burst.newline_should_insert_instead_of_submit(t2));
-        let t3 = t1 + PASTE_ENTER_SUPPRESS_WINDOW + Duration::from_millis(1);
-        assert!(!burst.newline_should_insert_instead_of_submit(t3));
+        assert!(burst.newline_should_insert_instead_of_submit(t3));
+        let t4 = t2 + PASTE_ENTER_SUPPRESS_WINDOW + Duration::from_millis(1);
+        assert!(!burst.newline_should_insert_instead_of_submit(t4));
     }
 }

@@ -124,6 +124,7 @@ use codex_app_server_protocol::ThreadMemoryMode;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
+use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
 use codex_clawbot::PendingClawbotTurn;
@@ -297,6 +298,29 @@ fn collab_receiver_thread_ids(notification: &ServerNotification) -> Option<&[Str
 pub(super) struct AfterTurnContext {
     last_agent_message: Option<String>,
     status: TurnStatus,
+}
+
+impl AfterTurnContext {
+    pub(super) fn from_turn_completed_notification(
+        notification: &TurnCompletedNotification,
+    ) -> Self {
+        Self {
+            last_agent_message: last_agent_message_for_turn_items(
+                notification.turn.items.as_slice(),
+            ),
+            status: notification.turn.status.clone(),
+        }
+    }
+}
+
+fn last_agent_message_for_turn_items(items: &[ThreadItem]) -> Option<String> {
+    items.iter().fold(None, |_, item| match item {
+        ThreadItem::AgentMessage { text, .. } => {
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        _ => None,
+    })
 }
 
 fn default_exec_approval_decisions(
@@ -822,6 +846,8 @@ pub(crate) struct App {
     last_subagent_backfill_attempt: Option<ThreadId>,
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
+    pending_workflow_followup_turns: HashMap<ThreadId, usize>,
+    workflow_followup_turn_ids: HashMap<ThreadId, std::collections::HashSet<String>>,
     pending_workflow_compact_followups: VecDeque<PendingWorkflowCompactFollowup>,
     pending_app_server_requests: PendingAppServerRequests,
     // Serialize plugin enablement writes per plugin so stale completions cannot
@@ -4214,6 +4240,8 @@ guardian_approval = true
             last_subagent_backfill_attempt: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            pending_workflow_followup_turns: HashMap::new(),
+            workflow_followup_turn_ids: HashMap::new(),
             pending_workflow_compact_followups: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             pending_plugin_enabled_writes: HashMap::new(),
@@ -4294,6 +4322,8 @@ guardian_approval = true
                 last_subagent_backfill_attempt: None,
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
+                pending_workflow_followup_turns: HashMap::new(),
+                workflow_followup_turn_ids: HashMap::new(),
                 pending_workflow_compact_followups: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),
                 pending_plugin_enabled_writes: HashMap::new(),
@@ -6760,6 +6790,58 @@ model = "gpt-5.2"
     }
 
     #[tokio::test]
+    async fn drain_active_thread_events_runs_after_turn_for_primary_turn_complete() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+        write_test_after_turn_workflow(app.config.cwd.as_path())?;
+
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start thread");
+        let thread_id = started.session.thread_id;
+        app.enqueue_primary_thread_session(started.session, Vec::new())
+            .await?;
+        while app_event_rx.try_recv().is_ok() {}
+
+        app.enqueue_thread_notification(
+            thread_id,
+            turn_completed_notification_with_agent_message(
+                thread_id,
+                "turn-1",
+                TurnStatus::Completed,
+                "final reply",
+            ),
+        )
+        .await?;
+
+        let mut tui = crate::tui::tests::make_test_tui()?;
+        app.drain_active_thread_events(&mut tui, &app_server)
+            .await?;
+
+        assert_eq!(
+            app.background_workflow_labels(),
+            vec!["director · followup".to_string()]
+        );
+        let rendered_cells: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .map(|cell| lines_to_single_string(&cell.transcript_lines(/*width*/ 80)))
+            .collect();
+        assert!(
+            rendered_cells
+                .iter()
+                .any(|cell| cell.contains("Workflow trigger started"))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn failed_primary_turn_skips_after_turn_by_default() -> Result<()> {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let mut app_server =
@@ -7285,6 +7367,38 @@ model = "gpt-5.2"
         app.active_thread_id = Some(ThreadId::new());
         while app_event_rx.try_recv().is_ok() {}
 
+        app.app_event_tx.send(AppEvent::SubmitWorkflowFollowup {
+            thread_id,
+            op: Op::UserTurn {
+                items: vec![UserInput::Text {
+                    text: "follow up from workflow".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                cwd: app.config.cwd.to_path_buf(),
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                sandbox_policy: SandboxPolicy::DangerFullAccess,
+                permission_profile: None,
+                environments: None,
+                model: "gpt-test".to_string(),
+                effort: None,
+                summary: None,
+                service_tier: None,
+                final_output_json_schema: None,
+                collaboration_mode: None,
+                personality: app.config.personality,
+            },
+        });
+        let _ = app_event_rx.try_recv();
+
+        app.handle_app_server_event(
+            &app_server,
+            AppServerEvent::ServerNotification(turn_started_notification(
+                thread_id,
+                "turn-followup",
+            )),
+        )
+        .await;
         app.handle_app_server_event(
             &app_server,
             AppServerEvent::ServerNotification(turn_completed_notification_with_agent_message(
@@ -7296,10 +7410,7 @@ model = "gpt-5.2"
         )
         .await;
 
-        assert_eq!(
-            app.background_workflow_labels(),
-            vec!["director · followup".to_string()]
-        );
+        assert!(app.background_workflow_labels().is_empty());
         while let Ok(event) = app_event_rx.try_recv() {
             match event {
                 AppEvent::ClawbotTurnCompleted { .. }

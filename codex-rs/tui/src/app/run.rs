@@ -315,6 +315,8 @@ See the Codex keymap documentation for supported actions and examples."
             last_subagent_backfill_attempt: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            pending_workflow_followup_turns: HashMap::new(),
+            workflow_followup_turn_ids: HashMap::new(),
             pending_workflow_compact_followups: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             pending_plugin_enabled_writes: HashMap::new(),

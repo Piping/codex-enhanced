@@ -674,6 +674,8 @@ impl App {
                 app_server
                     .thread_background_terminals_clean(thread_id)
                     .await?;
+                let _stopped = self.workflow_scheduler.stop_active_workflow_runs().await;
+                self.sync_background_workflow_status();
                 Ok(true)
             }
             AppCommand::RealtimeConversationStart(params) => {
@@ -1195,7 +1197,11 @@ impl App {
     /// refreshes from the backend. Refresh failures are treated as "thread is only inspectable by
     /// historical id now" and converted into closed picker entries instead of deleting them, so
     /// the stable traversal order remains intact for review and keyboard navigation.
-    pub(super) async fn drain_active_thread_events(&mut self, tui: &mut tui::Tui) -> Result<()> {
+    pub(super) async fn drain_active_thread_events(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &AppServerSession,
+    ) -> Result<()> {
         let Some(mut rx) = self.active_thread_rx.take() else {
             return Ok(());
         };
@@ -1203,7 +1209,18 @@ impl App {
         let mut disconnected = false;
         loop {
             match rx.try_recv() {
-                Ok(event) => self.handle_thread_event_now(event),
+                Ok(event) => {
+                    let after_turn = self.after_turn_context_for_active_primary_event(&event);
+                    self.handle_thread_event_now(event);
+                    if let Some(after_turn) = after_turn {
+                        let visible_cells = self
+                            .handle_primary_thread_turn_complete_for_workflows(
+                                app_server, after_turn,
+                            )
+                            .await;
+                        self.transcript_cells.extend(visible_cells);
+                    }
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     disconnected = true;
@@ -1381,10 +1398,9 @@ impl App {
                 | ThreadBufferedEvent::Notification(ServerNotification::ThreadTokenUsageUpdated(_))
         );
         match event {
-            ThreadBufferedEvent::Notification(notification) => {
-                self.chat_widget
-                    .handle_server_notification(notification, /*replay_kind*/ None);
-            }
+            ThreadBufferedEvent::Notification(notification) => self
+                .chat_widget
+                .handle_server_notification(notification, /*replay_kind*/ None),
             ThreadBufferedEvent::Request(request) => {
                 if self
                     .pending_app_server_requests
@@ -1403,6 +1419,108 @@ impl App {
         }
         if needs_refresh {
             self.refresh_status_line();
+        }
+    }
+
+    pub(super) fn note_workflow_followup_notification(
+        &mut self,
+        notification: &ServerNotification,
+    ) {
+        if let ServerNotification::TurnStarted(notification) = notification
+            && let Ok(thread_id) = ThreadId::from_string(&notification.thread_id)
+            && let Some(pending) = self.pending_workflow_followup_turns.get_mut(&thread_id)
+            && *pending > 0
+        {
+            self.workflow_followup_turn_ids
+                .entry(thread_id)
+                .or_default()
+                .insert(notification.turn.id.clone());
+            *pending -= 1;
+            if *pending == 0 {
+                self.pending_workflow_followup_turns.remove(&thread_id);
+            }
+        }
+    }
+
+    pub(super) fn after_turn_context_for_primary_notification(
+        &self,
+        thread_id: ThreadId,
+        notification: &ServerNotification,
+    ) -> Option<AfterTurnContext> {
+        if self.primary_thread_id != Some(thread_id) {
+            return None;
+        }
+
+        match notification {
+            ServerNotification::TurnCompleted(notification)
+                if !self.is_workflow_followup_turn_completion(notification) =>
+            {
+                Some(AfterTurnContext::from_turn_completed_notification(
+                    notification,
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    fn after_turn_context_for_active_primary_event(
+        &self,
+        event: &ThreadBufferedEvent,
+    ) -> Option<AfterTurnContext> {
+        let primary_thread_id = self.primary_thread_id?;
+        match event {
+            ThreadBufferedEvent::Notification(ServerNotification::TurnCompleted(notification))
+                if self.active_thread_id == Some(primary_thread_id)
+                    && Some(primary_thread_id)
+                        == ThreadId::from_string(&notification.thread_id).ok() =>
+            {
+                self.after_turn_context_for_primary_notification(
+                    primary_thread_id,
+                    &ServerNotification::TurnCompleted(notification.clone()),
+                )
+            }
+            _ => None,
+        }
+    }
+
+    fn is_workflow_followup_turn_completion(
+        &self,
+        notification: &codex_app_server_protocol::TurnCompletedNotification,
+    ) -> bool {
+        let Ok(thread_id) = ThreadId::from_string(&notification.thread_id) else {
+            return false;
+        };
+        self.workflow_followup_turn_ids
+            .get(&thread_id)
+            .is_some_and(|turn_ids| turn_ids.contains(&notification.turn.id))
+    }
+
+    fn workflow_followup_turn_completion_key(
+        event: &ThreadBufferedEvent,
+    ) -> Option<(ThreadId, String)> {
+        let ThreadBufferedEvent::Notification(ServerNotification::TurnCompleted(notification)) =
+            event
+        else {
+            return None;
+        };
+        let Ok(thread_id) = ThreadId::from_string(&notification.thread_id) else {
+            return None;
+        };
+        Some((thread_id, notification.turn.id.clone()))
+    }
+
+    fn consume_workflow_followup_turn_completion(
+        &mut self,
+        completion: Option<(ThreadId, String)>,
+    ) {
+        let Some((thread_id, turn_id)) = completion else {
+            return;
+        };
+        if let Some(turn_ids) = self.workflow_followup_turn_ids.get_mut(&thread_id) {
+            turn_ids.remove(&turn_id);
+            if turn_ids.is_empty() {
+                self.workflow_followup_turn_ids.remove(&thread_id);
+            }
         }
     }
 
@@ -1489,7 +1607,19 @@ impl App {
                 .await;
         }
 
+        let after_turn = self.after_turn_context_for_active_primary_event(&event);
+        let workflow_followup_completion = Self::workflow_followup_turn_completion_key(&event);
+
         self.handle_thread_event_now(event);
+        self.consume_workflow_followup_turn_completion(workflow_followup_completion);
+        if let Some(after_turn) = after_turn {
+            let visible_cells = self
+                .handle_primary_thread_turn_complete_for_workflows(app_server, after_turn)
+                .await;
+            for cell in visible_cells {
+                self.transcript_cells.push(cell);
+            }
+        }
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();
         }

@@ -109,8 +109,22 @@ impl App {
             _ => {}
         }
 
-        match server_notification_thread_target(&notification) {
+        let thread_target = server_notification_thread_target(&notification);
+        if let ServerNotificationThreadTarget::Thread(thread_id) = thread_target {
+            self.forward_notification_to_workflow_thread(thread_id, &notification)
+                .await;
+            self.note_workflow_followup_notification(&notification);
+        }
+
+        match thread_target {
             ServerNotificationThreadTarget::Thread(thread_id) => {
+                let after_turn = if self.primary_thread_id == Some(thread_id)
+                    && self.active_thread_id != Some(thread_id)
+                {
+                    self.after_turn_context_for_primary_notification(thread_id, &notification)
+                } else {
+                    None
+                };
                 let result = if self.primary_thread_id == Some(thread_id)
                     || self.primary_thread_id.is_none()
                 {
@@ -122,6 +136,17 @@ impl App {
 
                 if let Err(err) = result {
                     tracing::warn!("failed to enqueue app-server notification: {err}");
+                }
+                if let Some(after_turn) = after_turn {
+                    let visible_cells = self
+                        .handle_primary_thread_turn_complete_for_workflows(
+                            app_server_client,
+                            after_turn,
+                        )
+                        .await;
+                    if !visible_cells.is_empty() {
+                        self.transcript_cells.extend(visible_cells);
+                    }
                 }
                 return;
             }
@@ -137,6 +162,30 @@ impl App {
 
         self.chat_widget
             .handle_server_notification(notification, /*replay_kind*/ None);
+    }
+
+    async fn forward_notification_to_workflow_thread(
+        &self,
+        thread_id: codex_protocol::ThreadId,
+        notification: &ServerNotification,
+    ) {
+        let maybe_sender = self
+            .workflow_thread_notification_channels
+            .lock()
+            .await
+            .get(&thread_id)
+            .cloned();
+        let Some(sender) = maybe_sender else {
+            return;
+        };
+
+        if let Err(err) = sender.send(notification.clone()) {
+            tracing::warn!(
+                thread_id = %thread_id,
+                error = %err,
+                "failed to forward app-server notification to workflow thread"
+            );
+        }
     }
 
     async fn handle_server_request_event(

@@ -2903,6 +2903,9 @@ impl ChatComposer {
         now: Instant,
     ) -> (InputResult, bool) {
         if should_queue {
+            if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
+                self.handle_paste(pasted);
+            }
             let raw_text = self.textarea.text();
             let defer_slash_validation =
                 self.should_parse_as_slash_on_dequeue_from_raw_text(raw_text);
@@ -2973,6 +2976,10 @@ impl ChatComposer {
             self.textarea.insert_str("\n");
             self.paste_burst.extend_window(now);
             return (InputResult::None, true);
+        }
+
+        if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
+            self.handle_paste(pasted);
         }
 
         let original_input = self.current_text();
@@ -7234,10 +7241,10 @@ mod tests {
         assert_eq!(composer.textarea.text(), LARGE_MIXED_PAYLOAD);
     }
 
-    /// Behavior: while a paste-like burst is active, Enter should not submit; it should insert a
-    /// newline into the buffered payload and flush as a single paste later.
+    /// Behavior: a short single-line fast ASCII burst should still submit on Enter so PTY-fed
+    /// small messages do not get trapped in the paste-burst heuristic.
     #[test]
-    fn ascii_burst_treats_enter_as_newline() {
+    fn short_ascii_burst_submits_on_enter() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
@@ -7267,24 +7274,61 @@ mod tests {
         now += step;
 
         let (result, _) = composer.handle_submission_with_time(/*should_queue*/ false, now);
-        assert!(
-            matches!(result, InputResult::None),
-            "Enter during a burst should insert newline, not submit"
+        match result {
+            InputResult::Submitted { text, .. } => assert_eq!(text, "hi"),
+            other => panic!("expected Submitted, got {other:?}"),
+        }
+        assert!(composer.textarea.text().is_empty());
+    }
+
+    /// Behavior: once a fast ASCII burst looks like a real paste payload, Enter should continue
+    /// to insert a newline into the buffered payload instead of submitting.
+    #[test]
+    fn paste_like_ascii_burst_treats_enter_as_newline() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
         );
 
-        for ch in ['t', 'h', 'e', 'r', 'e'] {
-            now += step;
+        let mut now = Instant::now();
+        let step = Duration::from_millis(1);
+
+        for ch in ['h', 'i', ' '] {
             let _ = composer.handle_input_basic_with_time(
                 KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
                 now,
             );
+            now += step;
+        }
+
+        let (result, _) = composer.handle_submission_with_time(/*should_queue*/ false, now);
+        assert!(
+            matches!(result, InputResult::None),
+            "Enter during a paste-like burst should insert newline, not submit"
+        );
+
+        for ch in ['t', 'h', 'e', 'r', 'e'] {
+            let _ = composer.handle_input_basic_with_time(
+                KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+                now,
+            );
+            now += step;
         }
 
         assert!(composer.textarea.text().is_empty());
         let flush_time = now + PasteBurst::recommended_active_flush_delay() + step;
         let flushed = composer.handle_paste_burst_flush(flush_time);
         assert!(flushed, "expected paste burst to flush");
-        assert_eq!(composer.textarea.text(), "hi\nthere");
+        assert_eq!(composer.textarea.text(), "hi \nthere");
     }
 
     /// Behavior: even if Enter suppression would normally be active for a burst, Enter should
@@ -10171,6 +10215,37 @@ mod tests {
         let flushed = composer.flush_paste_burst_if_due();
         assert!(flushed, "expected pending first char to flush");
         assert_eq!(composer.textarea.text(), "h");
+        assert!(!composer.is_in_paste_burst());
+    }
+
+    #[test]
+    fn pending_first_ascii_char_submits_immediately_on_enter() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        assert!(composer.is_in_paste_burst());
+        assert!(composer.textarea.text().is_empty());
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::Submitted { text, .. } => assert_eq!(text, "h"),
+            other => panic!("expected Submitted, got {other:?}"),
+        }
+        assert!(composer.textarea.is_empty());
         assert!(!composer.is_in_paste_burst());
     }
 

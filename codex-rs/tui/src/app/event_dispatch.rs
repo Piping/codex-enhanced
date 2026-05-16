@@ -403,6 +403,14 @@ impl App {
             AppEvent::SubmitThreadOp { thread_id, op } => {
                 self.submit_thread_op(app_server, thread_id, op).await?;
             }
+            AppEvent::SubmitWorkflowFollowup { thread_id, op } => {
+                *self
+                    .pending_workflow_followup_turns
+                    .entry(thread_id)
+                    .or_default() += 1;
+                self.submit_thread_op(app_server, thread_id, AppCommand::from_core(op))
+                    .await?;
+            }
             AppEvent::ThreadHistoryEntryResponse { thread_id, event } => {
                 self.enqueue_thread_history_entry_response(thread_id, event)
                     .await?;

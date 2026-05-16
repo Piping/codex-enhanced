@@ -91,6 +91,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tempfile::tempdir;
 use tokio::time;
+use tokio_util::sync::CancellationToken;
 
 macro_rules! assert_app_snapshot {
     ($name:expr, $value:expr $(,)?) => {
@@ -3914,6 +3915,8 @@ pub(crate) async fn make_test_app() -> App {
         last_subagent_backfill_attempt: None,
         primary_session_configured: None,
         pending_primary_events: VecDeque::new(),
+        pending_workflow_followup_turns: HashMap::new(),
+        workflow_followup_turn_ids: HashMap::new(),
         pending_workflow_compact_followups: VecDeque::new(),
         pending_app_server_requests: PendingAppServerRequests::default(),
         pending_plugin_enabled_writes: HashMap::new(),
@@ -3992,6 +3995,8 @@ pub(crate) async fn make_test_app_with_channels() -> (
             last_subagent_backfill_attempt: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            pending_workflow_followup_turns: HashMap::new(),
+            workflow_followup_turn_ids: HashMap::new(),
             pending_workflow_compact_followups: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             pending_plugin_enabled_writes: HashMap::new(),
@@ -5231,6 +5236,61 @@ async fn interrupt_without_active_turn_is_treated_as_handled() {
         .expect("interrupt submission should not fail");
 
         assert_eq!(handled, true);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn clean_background_terminals_stops_background_workflows() {
+    Box::pin(async {
+        let mut app = make_test_app().await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
+        .await
+        .expect("embedded app server");
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("thread/start should succeed");
+        let thread_id = started.session.thread_id;
+        app.enqueue_primary_thread_session(started.session, started.turns)
+            .await
+            .expect("primary thread should be registered");
+
+        let run_id = app
+            .workflow_scheduler
+            .next_background_run_id("director", "review_backlog");
+        let cancellation = CancellationToken::new();
+        let cancellation_for_task = cancellation.clone();
+        app.workflow_scheduler.register_background_workflow_run(
+            run_id,
+            crate::app::workflow_runtime::BackgroundWorkflowRunTarget::Job {
+                workflow_name: "director".to_string(),
+                job_name: "review_backlog".to_string(),
+            },
+            cancellation,
+            tokio::spawn(async move {
+                cancellation_for_task.cancelled().await;
+            }),
+        );
+        app.sync_background_workflow_status();
+        assert_eq!(
+            app.background_workflow_labels(),
+            vec!["director · review_backlog".to_string()]
+        );
+
+        let handled = Box::pin(app.try_submit_active_thread_op_via_app_server(
+            &mut app_server,
+            thread_id,
+            &AppCommand::clean_background_terminals(),
+        ))
+        .await
+        .expect("clean background terminals submission should not fail");
+
+        assert!(handled);
+        assert!(app.background_workflow_labels().is_empty());
+        assert!(app.queued_trigger_labels().is_empty());
     })
     .await;
 }

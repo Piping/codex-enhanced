@@ -45,26 +45,15 @@ where
     let mut lines: Vec<Range<usize>> = Vec::new();
     let mut cursor = 0usize;
     for (line_index, line) in textwrap::wrap(text, &opts).iter().enumerate() {
-        match line {
-            std::borrow::Cow::Borrowed(slice) => {
-                let start = unsafe { slice.as_ptr().offset_from(text.as_ptr()) as usize };
-                let end = start + slice.len();
-                let trailing_spaces = text[end..].chars().take_while(|c| *c == ' ').count();
-                lines.push(start..end + trailing_spaces + 1);
-                cursor = end + trailing_spaces;
-            }
-            std::borrow::Cow::Owned(slice) => {
-                let synthetic_prefix = if line_index == 0 {
-                    opts.initial_indent
-                } else {
-                    opts.subsequent_indent
-                };
-                let mapped = map_owned_wrapped_line_to_range(text, cursor, slice, synthetic_prefix);
-                let trailing_spaces = text[mapped.end..].chars().take_while(|c| *c == ' ').count();
-                lines.push(mapped.start..mapped.end + trailing_spaces + 1);
-                cursor = mapped.end + trailing_spaces;
-            }
-        }
+        let synthetic_prefix = if line_index == 0 {
+            opts.initial_indent
+        } else {
+            opts.subsequent_indent
+        };
+        let mapped = map_wrapped_line_to_range(text, cursor, line.as_ref(), synthetic_prefix);
+        let trailing_spaces = text[mapped.end..].chars().take_while(|c| *c == ' ').count();
+        lines.push(mapped.start..mapped.end + trailing_spaces + 1);
+        cursor = mapped.end + trailing_spaces;
     }
     lines
 }
@@ -80,24 +69,14 @@ where
     let mut lines: Vec<Range<usize>> = Vec::new();
     let mut cursor = 0usize;
     for (line_index, line) in textwrap::wrap(text, &opts).iter().enumerate() {
-        match line {
-            std::borrow::Cow::Borrowed(slice) => {
-                let start = unsafe { slice.as_ptr().offset_from(text.as_ptr()) as usize };
-                let end = start + slice.len();
-                lines.push(start..end);
-                cursor = end;
-            }
-            std::borrow::Cow::Owned(slice) => {
-                let synthetic_prefix = if line_index == 0 {
-                    opts.initial_indent
-                } else {
-                    opts.subsequent_indent
-                };
-                let mapped = map_owned_wrapped_line_to_range(text, cursor, slice, synthetic_prefix);
-                lines.push(mapped.clone());
-                cursor = mapped.end;
-            }
-        }
+        let synthetic_prefix = if line_index == 0 {
+            opts.initial_indent
+        } else {
+            opts.subsequent_indent
+        };
+        let mapped = map_wrapped_line_to_range(text, cursor, line.as_ref(), synthetic_prefix);
+        lines.push(mapped.clone());
+        cursor = mapped.end;
     }
     lines
 }
@@ -109,7 +88,7 @@ where
 /// function walks the owned string character-by-character against the
 /// source, skipping trailing penalty chars, and returns the
 /// corresponding source byte range starting from `cursor`.
-fn map_owned_wrapped_line_to_range(
+fn map_wrapped_line_to_range(
     text: &str,
     cursor: usize,
     wrapped: &str,
@@ -165,7 +144,7 @@ fn map_owned_wrapped_line_to_range(
             wrapped = %wrapped,
             cursor,
             end,
-            "wrap_ranges: could not fully map owned line; returning partial source range"
+            "wrap_ranges: could not fully map wrapped line; returning partial source range"
         );
         break;
     }
@@ -1269,7 +1248,7 @@ them."#
     fn map_owned_wrapped_line_to_range_recovers_on_non_prefix_mismatch() {
         // Match source chars first, then introduce a non-penalty mismatch.
         // The function should recover and return the mapped prefix range.
-        let range = map_owned_wrapped_line_to_range("hello world", /*cursor*/ 0, "helloX", "");
+        let range = map_wrapped_line_to_range("hello world", /*cursor*/ 0, "helloX", "");
         assert_eq!(range, 0..5);
     }
 
@@ -1285,7 +1264,7 @@ them."#
         let text = "- item one and some more words";
         // Simulate what textwrap would produce for the first continuation line
         // when subsequent_indent = "- ": it prepends "- " to the source slice.
-        let range = map_owned_wrapped_line_to_range(text, /*cursor*/ 0, "- - item one", "- ");
+        let range = map_wrapped_line_to_range(text, /*cursor*/ 0, "- - item one", "- ");
         // The mapper should skip the synthetic "- " prefix and map "- item one"
         // back to source bytes 0..10.
         assert_eq!(range, 0..10);
@@ -1330,7 +1309,7 @@ them."#
             panic!("expected at least one wrapped line");
         };
 
-        let mapped = map_owned_wrapped_line_to_range(text, /*cursor*/ 0, line.as_ref(), "- ");
+        let mapped = map_wrapped_line_to_range(text, /*cursor*/ 0, line.as_ref(), "- ");
         let expected_len = line
             .as_ref()
             .strip_prefix("- ")
@@ -1403,5 +1382,19 @@ them."#
 
         assert_eq!(rebuilt, text);
         assert!(ranges.len() > 1, "expected wrapped ranges, got: {ranges:?}");
+    }
+
+    #[test]
+    fn wrap_ranges_trim_does_not_panic_for_narrow_width_with_indents() {
+        let text = "director - trigger - review_backlog";
+        let opts = Options::new(1)
+            .initial_indent("  ")
+            .subsequent_indent("  ")
+            .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit);
+
+        let ranges = wrap_ranges_trim(text, opts);
+        assert!(!ranges.is_empty());
+        assert!(ranges.iter().all(|range| range.start <= range.end));
+        assert!(ranges.iter().all(|range| range.end <= text.len()));
     }
 }
