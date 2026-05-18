@@ -4,46 +4,58 @@ use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::SubAgentSpawnParams;
 use pretty_assertions::assert_eq;
 
-#[tokio::test]
-async fn start_btw_discussion_registers_thread_and_requests_switch() -> Result<()> {
-    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
-    let started = app_server
-        .start_thread(app.chat_widget.config_ref())
-        .await
-        .expect("start primary thread");
-    let primary_thread_id = started.session.thread_id;
-    app.primary_thread_id = Some(primary_thread_id);
-    app.active_thread_id = Some(primary_thread_id);
+#[test]
+fn start_btw_discussion_registers_thread_and_requests_switch() -> Result<()> {
+    const WORKER_THREADS: usize = 1;
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
 
-    app.start_btw_discussion(&mut app_server, "compare the two approaches".to_string())
-        .await;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKER_THREADS)
+        .thread_stack_size(TEST_STACK_SIZE_BYTES)
+        .enable_all()
+        .build()?;
 
-    let btw_thread_id = std::iter::from_fn(|| app_event_rx.try_recv().ok())
-        .find_map(|event| match event {
-            AppEvent::SelectAgentThread(thread_id) => Some(thread_id),
-            _ => None,
-        })
-        .expect("expected SelectAgentThread event");
-    assert_ne!(btw_thread_id, primary_thread_id);
-    assert_eq!(
-        app.agent_navigation.get(&btw_thread_id),
-        Some(&AgentPickerThreadEntry {
-            agent_nickname: Some("compare the two approaches".to_string()),
-            agent_role: Some("btw".to_string()),
-            is_closed: false,
-        })
-    );
-    assert_eq!(
-        app.btw_session,
-        Some(BtwSessionState {
-            thread_id: btw_thread_id,
-        })
-    );
-    assert!(app.thread_event_channels.contains_key(&btw_thread_id));
-    Ok(())
+    runtime.block_on(async {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start primary thread");
+        let primary_thread_id = started.session.thread_id;
+        app.primary_thread_id = Some(primary_thread_id);
+        app.active_thread_id = Some(primary_thread_id);
+
+        app.start_btw_discussion(&mut app_server, "compare the two approaches".to_string())
+            .await;
+
+        let btw_thread_id = std::iter::from_fn(|| app_event_rx.try_recv().ok())
+            .find_map(|event| match event {
+                AppEvent::SelectAgentThread(thread_id) => Some(thread_id),
+                _ => None,
+            })
+            .expect("expected SelectAgentThread event");
+        assert_ne!(btw_thread_id, primary_thread_id);
+        assert_eq!(
+            app.agent_navigation.get(&btw_thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: Some("compare the two approaches".to_string()),
+                agent_role: Some("btw".to_string()),
+                is_closed: false,
+            })
+        );
+        assert_eq!(
+            app.btw_session,
+            Some(BtwSessionState {
+                thread_id: btw_thread_id,
+            })
+        );
+        assert!(app.thread_event_channels.contains_key(&btw_thread_id));
+        Ok(())
+    })
 }
 
 #[tokio::test]
@@ -166,106 +178,130 @@ async fn btw_permissions_fall_back_to_config_when_thread_session_is_missing() ->
     Ok(())
 }
 
-#[tokio::test]
-async fn backfill_restores_unloaded_btw_thread_after_restart() -> Result<()> {
-    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
-    let started = app_server
-        .start_thread(app.chat_widget.config_ref())
-        .await
-        .expect("start primary thread");
-    let primary_session = started.session.clone();
-    let primary_turns = started.turns.clone();
-    app.enqueue_primary_thread_session(started.session, started.turns)
-        .await?;
+#[test]
+fn backfill_restores_unloaded_btw_thread_after_restart() -> Result<()> {
+    const WORKER_THREADS: usize = 1;
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
 
-    let agent_nickname = "compare the two approaches".to_string();
-    app.start_btw_discussion(&mut app_server, agent_nickname.clone())
-        .await;
-    let btw_thread_id = std::iter::from_fn(|| app_event_rx.try_recv().ok())
-        .find_map(|event| match event {
-            AppEvent::SelectAgentThread(thread_id) => Some(thread_id),
-            _ => None,
-        })
-        .expect("expected SelectAgentThread event");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKER_THREADS)
+        .thread_stack_size(TEST_STACK_SIZE_BYTES)
+        .enable_all()
+        .build()?;
 
-    app_server.thread_unsubscribe(btw_thread_id).await?;
-
-    let mut restarted_app = make_test_app().await;
-    restarted_app
-        .enqueue_primary_thread_session(primary_session, primary_turns)
-        .await?;
-
-    assert!(
-        restarted_app
-            .backfill_loaded_subagent_threads(&mut app_server)
+    runtime.block_on(async {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
             .await
-    );
-    assert_eq!(
-        restarted_app.agent_navigation.get(&btw_thread_id),
-        Some(&AgentPickerThreadEntry {
-            agent_nickname: Some(agent_nickname),
-            agent_role: Some("btw".to_string()),
-            is_closed: false,
-        })
-    );
+            .expect("start primary thread");
+        let primary_session = started.session.clone();
+        let primary_turns = started.turns.clone();
+        app.enqueue_primary_thread_session(started.session, started.turns)
+            .await?;
 
-    Ok(())
+        let agent_nickname = "compare the two approaches".to_string();
+        app.start_btw_discussion(&mut app_server, agent_nickname.clone())
+            .await;
+        let btw_thread_id = std::iter::from_fn(|| app_event_rx.try_recv().ok())
+            .find_map(|event| match event {
+                AppEvent::SelectAgentThread(thread_id) => Some(thread_id),
+                _ => None,
+            })
+            .expect("expected SelectAgentThread event");
+
+        app_server.thread_unsubscribe(btw_thread_id).await?;
+
+        let mut restarted_app = make_test_app().await;
+        restarted_app
+            .enqueue_primary_thread_session(primary_session, primary_turns)
+            .await?;
+
+        assert!(
+            restarted_app
+                .backfill_loaded_subagent_threads(&mut app_server)
+                .await
+        );
+        assert_eq!(
+            restarted_app.agent_navigation.get(&btw_thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: Some(agent_nickname),
+                agent_role: Some("btw".to_string()),
+                is_closed: false,
+            })
+        );
+
+        Ok(())
+    })
 }
 
-#[tokio::test]
-async fn startup_resume_restores_unloaded_btw_thread_into_agent_slots() -> Result<()> {
-    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
-    let started = app_server
-        .start_thread(app.chat_widget.config_ref())
-        .await
-        .expect("start primary thread");
-    let primary_thread_id = started.session.thread_id;
-    app.enqueue_primary_thread_session(started.session, started.turns)
-        .await?;
+#[test]
+fn startup_resume_restores_unloaded_btw_thread_into_agent_slots() -> Result<()> {
+    const WORKER_THREADS: usize = 1;
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
 
-    let agent_nickname = "compare the two approaches".to_string();
-    app.start_btw_discussion(&mut app_server, agent_nickname.clone())
-        .await;
-    let btw_thread_id = std::iter::from_fn(|| app_event_rx.try_recv().ok())
-        .find_map(|event| match event {
-            AppEvent::SelectAgentThread(thread_id) => Some(thread_id),
-            _ => None,
-        })
-        .expect("expected SelectAgentThread event");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKER_THREADS)
+        .thread_stack_size(TEST_STACK_SIZE_BYTES)
+        .enable_all()
+        .build()?;
 
-    app_server.thread_unsubscribe(btw_thread_id).await?;
+    runtime.block_on(async {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("start primary thread");
+        let primary_thread_id = started.session.thread_id;
+        app.enqueue_primary_thread_session(started.session, started.turns)
+            .await?;
 
-    let mut restarted_app = make_test_app().await;
-    let resumed = app_server
-        .resume_thread(
-            restarted_app.chat_widget.config_ref().clone(),
-            primary_thread_id,
-        )
-        .await?;
-    restarted_app
-        .restore_started_thread_state(&mut app_server, resumed)
-        .await?;
+        let agent_nickname = "compare the two approaches".to_string();
+        app.start_btw_discussion(&mut app_server, agent_nickname.clone())
+            .await;
+        let btw_thread_id = std::iter::from_fn(|| app_event_rx.try_recv().ok())
+            .find_map(|event| match event {
+                AppEvent::SelectAgentThread(thread_id) => Some(thread_id),
+                _ => None,
+            })
+            .expect("expected SelectAgentThread event");
 
-    assert_eq!(
-        restarted_app.agent_navigation.get(&btw_thread_id),
-        Some(&AgentPickerThreadEntry {
-            agent_nickname: Some(agent_nickname),
-            agent_role: Some("btw".to_string()),
-            is_closed: false,
-        })
-    );
-    assert_eq!(
+        app_server.thread_unsubscribe(btw_thread_id).await?;
+
+        let mut restarted_app = make_test_app().await;
+        let resumed = app_server
+            .resume_thread(
+                restarted_app.chat_widget.config_ref().clone(),
+                primary_thread_id,
+            )
+            .await?;
         restarted_app
-            .agent_navigation
-            .thread_id_for_slot(restarted_app.primary_thread_id, 2),
-        Some(btw_thread_id)
-    );
+            .restore_started_thread_state(&mut app_server, resumed)
+            .await?;
 
-    Ok(())
+        assert_eq!(
+            restarted_app.agent_navigation.get(&btw_thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: Some(agent_nickname),
+                agent_role: Some("btw".to_string()),
+                is_closed: false,
+            })
+        );
+        assert_eq!(
+            restarted_app
+                .agent_navigation
+                .thread_id_for_slot(restarted_app.primary_thread_id, 2),
+            Some(btw_thread_id)
+        );
+
+        Ok(())
+    })
 }

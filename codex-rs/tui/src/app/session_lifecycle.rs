@@ -791,11 +791,7 @@ impl App {
                             }
                             self.chat_widget.add_plain_history_lines(lines);
                         }
-                        self.maybe_prompt_resume_paused_goal_after_resume(
-                            app_server,
-                            resumed_thread_id,
-                        )
-                        .await;
+                        self.maybe_prompt_resume_paused_goal_after_resume(resumed_thread_id);
                     }
                     Err(err) => {
                         self.chat_widget.add_error_message(format!(

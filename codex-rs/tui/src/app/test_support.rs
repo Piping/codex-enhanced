@@ -50,6 +50,7 @@ pub(crate) async fn make_test_app() -> App {
         remote_app_server_auth_token: None,
         pending_update_action: None,
         pending_shutdown_exit_thread_id: None,
+        pending_paused_goal_prompt_thread_id: None,
         windows_sandbox: WindowsSandboxState::default(),
         thread_event_channels: HashMap::new(),
         thread_event_listener_tasks: HashMap::new(),

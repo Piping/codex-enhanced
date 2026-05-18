@@ -805,7 +805,7 @@ impl ThreadRequestProcessor {
             thread_source,
             environments,
             persist_extended_history,
-            subagent_spawn: _subagent_spawn,
+            subagent_spawn,
         } = params;
         if sandbox.is_some() && permissions.is_some() {
             return Err(invalid_request(
@@ -817,6 +817,9 @@ impl ThreadRequestProcessor {
                 .await;
         }
         let environment_selections = self.parse_environment_selections(environments)?;
+        let session_source = self
+            .subagent_spawn_session_source(subagent_spawn.as_ref())
+            .await?;
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -855,6 +858,7 @@ impl ThreadRequestProcessor {
                 config,
                 typesafe_overrides,
                 dynamic_tools,
+                session_source,
                 session_start_source,
                 thread_source.map(Into::into),
                 environment_selections,
@@ -939,6 +943,7 @@ impl ThreadRequestProcessor {
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
+        session_source: Option<codex_protocol::protocol::SessionSource>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
         thread_source: Option<codex_protocol::protocol::ThreadSource>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
@@ -1056,7 +1061,7 @@ impl ThreadRequestProcessor {
                     codex_app_server_protocol::ThreadStartSource::Startup => InitialHistory::New,
                     codex_app_server_protocol::ThreadStartSource::Clear => InitialHistory::Cleared,
                 },
-                session_source: None,
+                session_source,
                 thread_source,
                 dynamic_tools: core_dynamic_tools,
                 persist_extended_history: false,
@@ -1935,22 +1940,20 @@ impl ThreadRequestProcessor {
                     "thread not loaded: {thread_id}"
                 )));
             }
+        } else if let Some(loaded_thread) = loaded_thread.as_ref() {
+            // Loaded metadata-only read still needs live snapshot fields so
+            // thread-spawn source metadata and session state stay current.
+            let persisted_thread = self
+                .load_persisted_thread_for_read(thread_id, /*include_turns*/ false)
+                .await?;
+            self.load_live_thread_view(thread_id, include_turns, loaded_thread, persisted_thread)
+                .await?
         } else if let Some(thread) = self
             .load_persisted_thread_for_read(thread_id, include_turns)
             .await?
         {
-            // Persisted metadata-only read: no live thread state is needed.
+            // Persisted metadata-only read for unloaded threads.
             thread
-        } else if let Some(loaded_thread) = loaded_thread.as_ref() {
-            // Loaded metadata-only read before persistence is materialized: build
-            // the response from the live thread snapshot.
-            self.load_live_thread_view(
-                thread_id,
-                include_turns,
-                loaded_thread,
-                /*persisted_thread*/ None,
-            )
-            .await?
         } else {
             return Err(ThreadReadViewError::InvalidRequest(format!(
                 "thread not loaded: {thread_id}"
@@ -2033,11 +2036,7 @@ impl ThreadRequestProcessor {
         let fallback_thread =
             build_thread_from_loaded_snapshot(thread_id, &config_snapshot, loaded_thread);
         let mut thread = if let Some(mut thread) = persisted_thread {
-            if thread.path.is_none() {
-                thread.path = fallback_thread.path.clone();
-            }
-            thread.session_id.clone_from(&fallback_thread.session_id);
-            thread.ephemeral = fallback_thread.ephemeral;
+            overlay_live_thread_metadata(&mut thread, &fallback_thread);
             thread
         } else {
             fallback_thread
@@ -2947,7 +2946,7 @@ impl ThreadRequestProcessor {
             thread_source,
             exclude_turns,
             persist_extended_history,
-            subagent_spawn: _subagent_spawn,
+            subagent_spawn,
         } = params;
         let include_turns = !exclude_turns;
         if sandbox.is_some() && permissions.is_some() {
@@ -3017,6 +3016,9 @@ impl ThreadRequestProcessor {
             .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
             .await
             .map_err(|err| config_load_error(&err))?;
+        let session_source = self
+            .subagent_spawn_session_source(subagent_spawn.as_ref())
+            .await?;
 
         let fallback_model_provider = config.model_provider_id.clone();
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
@@ -3026,28 +3028,45 @@ impl ThreadRequestProcessor {
             thread: forked_thread,
             session_configured,
             ..
-        } = self
-            .thread_manager
-            .fork_thread_from_history(
-                ForkSnapshot::Interrupted,
-                config,
-                InitialHistory::Resumed(ResumedHistory {
-                    conversation_id: source_thread_id,
-                    history: history_items.clone(),
-                    rollout_path: source_thread.rollout_path.clone(),
-                }),
-                thread_source.map(Into::into),
-                /*persist_extended_history*/ false,
-                self.request_trace_context(&request_id).await,
-            )
-            .await
-            .map_err(|err| match err {
-                CodexErr::Io(_) | CodexErr::Json(_) => {
-                    invalid_request(format!("failed to load thread {source_thread_id}: {err}"))
-                }
-                CodexErr::InvalidRequest(message) => invalid_request(message),
-                err => internal_error(format!("error forking thread: {err}")),
+        } = if let Some(session_source) = session_source {
+            let rollout_path = source_thread.rollout_path.clone().ok_or_else(|| {
+                invalid_request(format!(
+                    "thread {source_thread_id} does not have a persisted rollout path"
+                ))
             })?;
+            self.thread_manager
+                .fork_thread_for_source(
+                    ForkSnapshot::Interrupted,
+                    config,
+                    rollout_path,
+                    session_source,
+                    /*persist_extended_history*/ false,
+                    self.request_trace_context(&request_id).await,
+                )
+                .await
+        } else {
+            self.thread_manager
+                .fork_thread_from_history(
+                    ForkSnapshot::Interrupted,
+                    config,
+                    InitialHistory::Resumed(ResumedHistory {
+                        conversation_id: source_thread_id,
+                        history: history_items.clone(),
+                        rollout_path: source_thread.rollout_path.clone(),
+                    }),
+                    thread_source.map(Into::into),
+                    /*persist_extended_history*/ false,
+                    self.request_trace_context(&request_id).await,
+                )
+                .await
+        }
+        .map_err(|err| match err {
+            CodexErr::Io(_) | CodexErr::Json(_) => {
+                invalid_request(format!("failed to load thread {source_thread_id}: {err}"))
+            }
+            CodexErr::InvalidRequest(message) => invalid_request(message),
+            err => internal_error(format!("error forking thread: {err}")),
+        })?;
 
         Self::set_app_server_client_info(
             forked_thread.as_ref(),
@@ -3928,6 +3947,58 @@ fn build_thread_from_loaded_snapshot(
         config_snapshot,
         loaded_thread.rollout_path(),
     )
+}
+
+fn overlay_live_thread_metadata(thread: &mut Thread, live_thread: &Thread) {
+    if thread.path.is_none() {
+        thread.path = live_thread.path.clone();
+    }
+    thread.session_id.clone_from(&live_thread.session_id);
+    thread.ephemeral = live_thread.ephemeral;
+    thread.agent_nickname = live_thread.agent_nickname.clone();
+    thread.agent_role = live_thread.agent_role.clone();
+    thread.source = live_thread.source.clone();
+    thread.thread_source = live_thread.thread_source;
+}
+
+impl ThreadRequestProcessor {
+    async fn subagent_spawn_session_source(
+        &self,
+        subagent_spawn: Option<&codex_app_server_protocol::SubAgentSpawnParams>,
+    ) -> Result<Option<codex_protocol::protocol::SessionSource>, JSONRPCErrorError> {
+        let Some(subagent_spawn) = subagent_spawn else {
+            return Ok(None);
+        };
+
+        let parent_thread_id = ThreadId::from_string(&subagent_spawn.parent_thread_id)
+            .map_err(|err| invalid_request(format!("invalid parent thread id: {err}")))?;
+        let depth = match self.thread_manager.get_thread(parent_thread_id).await {
+            Ok(parent_thread) => {
+                let config_snapshot = parent_thread.config_snapshot().await;
+                match config_snapshot.session_source {
+                    codex_protocol::protocol::SessionSource::SubAgent(
+                        codex_protocol::protocol::SubAgentSource::ThreadSpawn { depth, .. },
+                    ) => depth + 1,
+                    _ => 1,
+                }
+            }
+            Err(err) => {
+                return Err(invalid_request(format!(
+                    "failed to load subagent parent thread {parent_thread_id}: {err}"
+                )));
+            }
+        };
+
+        Ok(Some(codex_protocol::protocol::SessionSource::SubAgent(
+            codex_protocol::protocol::SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth,
+                agent_path: None,
+                agent_nickname: subagent_spawn.agent_nickname.clone(),
+                agent_role: subagent_spawn.agent_role.clone(),
+            },
+        )))
+    }
 }
 
 #[cfg(test)]

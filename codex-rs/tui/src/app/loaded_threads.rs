@@ -94,13 +94,14 @@ pub(crate) fn find_loaded_subagent_threads_for_primary(
 fn thread_spawn_parent_thread_id(
     source: &codex_app_server_protocol::SessionSource,
 ) -> Option<ThreadId> {
-    let value = serde_json::to_value(source).ok()?;
-    let parent_thread_id = value
-        .get("subAgent")?
-        .get("thread_spawn")?
-        .get("parent_thread_id")?
-        .as_str()?;
-    ThreadId::from_string(parent_thread_id).ok()
+    match source {
+        codex_app_server_protocol::SessionSource::SubAgent(
+            codex_protocol::protocol::SubAgentSource::ThreadSpawn {
+                parent_thread_id, ..
+            },
+        ) => Some(*parent_thread_id),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

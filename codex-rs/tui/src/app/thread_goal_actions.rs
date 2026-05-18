@@ -8,7 +8,9 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::goal_display::goal_status_label;
 use crate::goal_display::goal_usage_summary;
+use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadGoalStatus;
+use codex_features::Feature;
 use codex_protocol::ThreadId;
 
 impl App {
@@ -42,30 +44,30 @@ impl App {
         self.chat_widget.show_goal_summary(goal);
     }
 
-    pub(super) async fn maybe_prompt_resume_paused_goal_after_resume(
-        &mut self,
-        app_server: &mut AppServerSession,
-        thread_id: ThreadId,
-    ) {
-        let result = app_server.thread_goal_get(thread_id).await;
-        if self.current_displayed_thread_id() != Some(thread_id) {
+    pub(super) fn maybe_prompt_resume_paused_goal_after_resume(&mut self, thread_id: ThreadId) {
+        if !self.config.features.enabled(Feature::Goals) {
             return;
         }
+        self.pending_paused_goal_prompt_thread_id = Some(thread_id);
+    }
 
-        let response = match result {
-            Ok(response) => response,
-            Err(err) => {
-                tracing::warn!("failed to read thread goal after resume: {err}");
-                return;
-            }
-        };
-
-        let Some(goal) = response.goal else {
+    pub(super) fn maybe_show_paused_goal_prompt_from_notification(&mut self, goal: &ThreadGoal) {
+        let Some(expected_thread_id) = self.pending_paused_goal_prompt_thread_id else {
             return;
         };
+        let Ok(goal_thread_id) = ThreadId::from_string(&goal.thread_id) else {
+            return;
+        };
+        if goal_thread_id != expected_thread_id {
+            return;
+        }
+        self.pending_paused_goal_prompt_thread_id = None;
+        if self.current_displayed_thread_id() != Some(goal_thread_id) {
+            return;
+        }
         if goal.status == ThreadGoalStatus::Paused {
             self.chat_widget
-                .show_resume_paused_goal_prompt(thread_id, goal.objective);
+                .show_resume_paused_goal_prompt(goal_thread_id, goal.objective.clone());
         }
     }
 

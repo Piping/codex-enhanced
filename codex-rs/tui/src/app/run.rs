@@ -304,6 +304,7 @@ See the Codex keymap documentation for supported actions and examples."
             remote_app_server_auth_token,
             pending_update_action: None,
             pending_shutdown_exit_thread_id: None,
+            pending_paused_goal_prompt_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
@@ -348,8 +349,7 @@ See the Codex keymap documentation for supported actions and examples."
             app.restore_started_thread_state(&mut app_server, started)
                 .await?;
             if should_prompt_for_paused_goal_after_startup_resume {
-                app.maybe_prompt_resume_paused_goal_after_resume(&mut app_server, thread_id)
-                    .await;
+                app.maybe_prompt_resume_paused_goal_after_resume(thread_id);
             }
         }
         app.handle_skills_list_result(

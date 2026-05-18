@@ -683,6 +683,7 @@ mod tests {
     use super::profile_management_root_params;
     use super::rewritten_router_state;
     use crate::app_event::AppEvent;
+    use crate::app_event::ProfileEvent;
     use crate::app_event_sender::AppEventSender;
     use crate::bottom_pane::ListSelectionView;
     use crate::profile_router::ProfileFallbackAction;

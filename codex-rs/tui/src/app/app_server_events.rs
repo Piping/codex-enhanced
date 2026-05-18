@@ -12,6 +12,7 @@ use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_protocol::ThreadId;
 
 impl App {
     fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
@@ -63,6 +64,16 @@ impl App {
         notification: ServerNotification,
     ) {
         match &notification {
+            ServerNotification::ThreadGoalUpdated(notification) => {
+                self.maybe_show_paused_goal_prompt_from_notification(&notification.goal);
+            }
+            ServerNotification::ThreadGoalCleared(notification) => {
+                if self.pending_paused_goal_prompt_thread_id
+                    == ThreadId::from_string(&notification.thread_id).ok()
+                {
+                    self.pending_paused_goal_prompt_thread_id = None;
+                }
+            }
             ServerNotification::ServerRequestResolved(notification) => {
                 if let Some(request) = self
                     .pending_app_server_requests

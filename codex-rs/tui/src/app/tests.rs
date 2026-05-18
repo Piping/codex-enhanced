@@ -70,6 +70,7 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_app_server_protocol::UserInput as AppServerUserInput;
 use codex_app_server_protocol::WarningNotification;
+use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
@@ -1416,7 +1417,7 @@ fn open_agent_picker_marks_loaded_threads_open() -> Result<()> {
 }
 
 #[test]
-fn attach_live_thread_for_selection_rejects_empty_non_ephemeral_fallback_threads() -> Result<()> {
+fn attach_live_thread_for_selection_attaches_live_non_ephemeral_threads() -> Result<()> {
     const WORKER_THREADS: usize = 1;
     const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
 
@@ -1444,16 +1445,13 @@ fn attach_live_thread_for_selection_rejects_empty_non_ephemeral_fallback_threads
             /*is_closed*/ false,
         );
 
-        let err = app
+        let live_attached = app
             .attach_live_thread_for_selection(&mut app_server, thread_id)
             .await
-            .expect_err("empty fallback should not attach as a blank replay-only thread");
+            .expect("live thread should attach");
 
-        assert_eq!(
-            err.to_string(),
-            format!("Agent thread {thread_id} is not yet available for replay or live attach.")
-        );
-        assert!(!app.thread_event_channels.contains_key(&thread_id));
+        assert!(live_attached);
+        assert!(app.thread_event_channels.contains_key(&thread_id));
         Ok(())
     })
 }
@@ -1583,6 +1581,85 @@ async fn open_agent_picker_prompts_to_enable_multi_agent_when_disabled() -> Resu
         .join("\n");
     assert!(rendered.contains("Subagents will be enabled in the next session."));
     Ok(())
+}
+
+#[tokio::test]
+async fn paused_goal_prompt_after_resume_is_skipped_when_goals_disabled() -> Result<()> {
+    let mut app = make_test_app().await;
+    let _ = app.config.features.disable(Feature::Goals);
+
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let started = app_server.start_thread(&app.config).await?;
+    let thread_id = started.session.thread_id;
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await?;
+
+    app.maybe_prompt_resume_paused_goal_after_resume(thread_id);
+
+    assert_eq!(
+        app.chat_widget.active_cell_transcript_lines(/*width*/ 120),
+        None
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn paused_goal_prompt_after_resume_uses_goal_snapshot_notification() {
+    let mut app = make_test_app().await;
+    let _ = app.config.features.enable(Feature::Goals);
+    let thread_id = ThreadId::new();
+
+    app.active_thread_id = Some(thread_id);
+    app.chat_widget.handle_thread_session(ThreadSessionState {
+        thread_id,
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "gpt-test".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: codex_config::types::ApprovalsReviewer::User,
+        permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
+        cwd: test_absolute_path("/tmp"),
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: None,
+        message_history: None,
+        network_proxy: None,
+        rollout_path: None,
+    });
+    app.maybe_prompt_resume_paused_goal_after_resume(thread_id);
+
+    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(
+            ServerNotification::ThreadGoalUpdated(
+                codex_app_server_protocol::ThreadGoalUpdatedNotification {
+                    thread_id: thread_id.to_string(),
+                    turn_id: None,
+                    goal: codex_app_server_protocol::ThreadGoal {
+                        thread_id: thread_id.to_string(),
+                        objective: "Resume the paused goal.".to_string(),
+                        status: codex_app_server_protocol::ThreadGoalStatus::Paused,
+                        token_budget: None,
+                        tokens_used: 0,
+                        time_used_seconds: 0,
+                        created_at: 1,
+                        updated_at: 1,
+                    },
+                },
+            ),
+        ),
+    )
+    .await;
+
+    let rendered =
+        crate::chatwidget::tests::render_bottom_popup(&app.chat_widget, /*width*/ 120);
+    assert!(rendered.contains("Resume paused goal?"));
 }
 
 #[tokio::test]
@@ -3904,6 +3981,7 @@ pub(crate) async fn make_test_app() -> App {
         remote_app_server_auth_token: None,
         pending_update_action: None,
         pending_shutdown_exit_thread_id: None,
+        pending_paused_goal_prompt_thread_id: None,
         windows_sandbox: WindowsSandboxState::default(),
         thread_event_channels: HashMap::new(),
         thread_event_listener_tasks: HashMap::new(),
@@ -3984,6 +4062,7 @@ pub(crate) async fn make_test_app_with_channels() -> (
             remote_app_server_auth_token: None,
             pending_update_action: None,
             pending_shutdown_exit_thread_id: None,
+            pending_paused_goal_prompt_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),

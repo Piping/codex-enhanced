@@ -54,101 +54,129 @@ async fn bind_test_clawbot_session(
     Ok((thread_id, session))
 }
 
-#[tokio::test]
-async fn clawbot_inbound_message_resumes_bound_thread_and_starts_turn() -> Result<()> {
-    let mut app = make_test_app().await;
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+#[test]
+fn clawbot_inbound_message_resumes_bound_thread_and_starts_turn() -> Result<()> {
+    const WORKER_THREADS: usize = 1;
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKER_THREADS)
+        .thread_stack_size(TEST_STACK_SIZE_BYTES)
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+
+        let (thread_id, session) =
+            bind_test_clawbot_session(&mut app, &mut app_server, "chat_resume").await?;
+
+        app.handle_clawbot_provider_event(
+            &mut app_server,
+            ClawbotProviderEvent::InboundMessage(codex_clawbot::ProviderInboundMessage {
+                session: session.clone(),
+                message_id: "msg_1".to_string(),
+                text: "hello from feishu".to_string(),
+                received_at: 1,
+            }),
+        )
         .await
-        .expect("embedded app server");
-    let tempdir = tempdir()?;
-    app.config.cwd = tempdir.path().to_path_buf().abs();
+        .expect("handle clawbot inbound message");
 
-    let (thread_id, session) =
-        bind_test_clawbot_session(&mut app, &mut app_server, "chat_resume").await?;
+        assert!(app.thread_event_channels.contains_key(&thread_id));
+        assert_eq!(
+            app.clawbot_outbound_reactions,
+            vec![ProviderOutboundReaction {
+                target: ProviderMessageRef::new(
+                    ClawbotProviderKind::Feishu,
+                    "chat_resume",
+                    "msg_1",
+                ),
+                emoji_type: "TONGUE".to_string(),
+            }]
+        );
+        assert_eq!(
+            app.clawbot_pending_turns
+                .get(&thread_id)
+                .map(std::collections::VecDeque::len),
+            Some(1)
+        );
+        assert!(app.active_turn_id_for_thread(thread_id).await.is_some());
 
-    app.handle_clawbot_provider_event(
-        &mut app_server,
-        ClawbotProviderEvent::InboundMessage(codex_clawbot::ProviderInboundMessage {
-            session: session.clone(),
-            message_id: "msg_1".to_string(),
-            text: "hello from feishu".to_string(),
-            received_at: 1,
-        }),
-    )
-    .await
-    .expect("handle clawbot inbound message");
-
-    assert!(app.thread_event_channels.contains_key(&thread_id));
-    assert_eq!(
-        app.clawbot_outbound_reactions,
-        vec![ProviderOutboundReaction {
-            target: ProviderMessageRef::new(ClawbotProviderKind::Feishu, "chat_resume", "msg_1"),
-            emoji_type: "TONGUE".to_string(),
-        }]
-    );
-    assert_eq!(
-        app.clawbot_pending_turns
-            .get(&thread_id)
-            .map(std::collections::VecDeque::len),
-        Some(1)
-    );
-    assert!(app.active_turn_id_for_thread(thread_id).await.is_some());
-
-    Ok(())
+        Ok(())
+    })
 }
 
-#[tokio::test]
-async fn clawbot_inbound_message_to_inactive_thread_shows_jump_hint() -> Result<()> {
-    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-    let mut app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+#[test]
+fn clawbot_inbound_message_to_inactive_thread_shows_jump_hint() -> Result<()> {
+    const WORKER_THREADS: usize = 1;
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKER_THREADS)
+        .thread_stack_size(TEST_STACK_SIZE_BYTES)
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let tempdir = tempdir()?;
+        app.config.cwd = tempdir.path().to_path_buf().abs();
+
+        let current_started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("current thread");
+        app.active_thread_id = Some(current_started.session.thread_id);
+        app.primary_thread_id = Some(current_started.session.thread_id);
+
+        let (bound_thread_id, session) =
+            bind_test_clawbot_session(&mut app, &mut app_server, "chat_inactive_hint").await?;
+        app.upsert_agent_picker_thread(
+            bound_thread_id,
+            Some("Inbox Agent".to_string()),
+            /*agent_role*/ None,
+            /*is_closed*/ false,
+        );
+        app.active_thread_id = Some(current_started.session.thread_id);
+
+        app.handle_clawbot_provider_event(
+            &mut app_server,
+            ClawbotProviderEvent::InboundMessage(codex_clawbot::ProviderInboundMessage {
+                session,
+                message_id: "msg_1".to_string(),
+                text: "hello from inactive".to_string(),
+                received_at: 1,
+            }),
+        )
         .await
-        .expect("embedded app server");
-    let tempdir = tempdir()?;
-    app.config.cwd = tempdir.path().to_path_buf().abs();
+        .expect("handle clawbot inbound message");
 
-    let current_started = app_server
-        .start_thread(app.chat_widget.config_ref())
-        .await
-        .expect("current thread");
-    app.active_thread_id = Some(current_started.session.thread_id);
-    app.primary_thread_id = Some(current_started.session.thread_id);
+        let cell = match app_event_rx.try_recv() {
+            Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+            other => panic!("expected InsertHistoryCell event, got {other:?}"),
+        };
+        let rendered = cell
+            .display_lines(/*width*/ 120)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("imported into agent thread Inbox Agent."));
+        assert!(rendered.contains("Open /clawbot to inspect bindings and jump."));
 
-    let (bound_thread_id, session) =
-        bind_test_clawbot_session(&mut app, &mut app_server, "chat_inactive_hint").await?;
-    app.upsert_agent_picker_thread(
-        bound_thread_id,
-        Some("Inbox Agent".to_string()),
-        /*agent_role*/ None,
-        /*is_closed*/ false,
-    );
-    app.active_thread_id = Some(current_started.session.thread_id);
-
-    app.handle_clawbot_provider_event(
-        &mut app_server,
-        ClawbotProviderEvent::InboundMessage(codex_clawbot::ProviderInboundMessage {
-            session,
-            message_id: "msg_1".to_string(),
-            text: "hello from inactive".to_string(),
-            received_at: 1,
-        }),
-    )
-    .await
-    .expect("handle clawbot inbound message");
-
-    let cell = match app_event_rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
-        other => panic!("expected InsertHistoryCell event, got {other:?}"),
-    };
-    let rendered = cell
-        .display_lines(/*width*/ 120)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(rendered.contains("imported into agent thread Inbox Agent."));
-    assert!(rendered.contains("Open /clawbot to inspect bindings and jump."));
-
-    Ok(())
+        Ok(())
+    })
 }
 
 #[tokio::test]

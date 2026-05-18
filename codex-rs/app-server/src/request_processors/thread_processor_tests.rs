@@ -53,6 +53,7 @@ mod thread_processor_behavior_tests {
     use chrono::Utc;
     use codex_app_server_protocol::ServerRequestPayload;
     use codex_app_server_protocol::ThreadItem;
+    use codex_app_server_protocol::ThreadSource;
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_config::CloudRequirementsLoader;
     use codex_config::LoaderOverrides;
@@ -967,6 +968,79 @@ mod thread_processor_behavior_tests {
         assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
         assert_eq!(thread.agent_role, Some("explorer".to_string()));
         assert_eq!(thread.thread_source, None);
+        Ok(())
+    }
+
+    #[test]
+    fn overlay_live_thread_metadata_prefers_live_spawn_source_metadata() -> Result<()> {
+        let thread_id = ThreadId::new();
+        let parent_thread_id = ThreadId::new();
+        let fallback_cwd = AbsolutePathBuf::from_absolute_path("/")?;
+
+        let mut persisted = Thread {
+            id: thread_id.to_string(),
+            session_id: "persisted-session".to_string(),
+            forked_from_id: None,
+            preview: "persisted".to_string(),
+            ephemeral: false,
+            model_provider: "test-provider".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            status: ThreadStatus::NotLoaded,
+            path: None,
+            cwd: fallback_cwd.clone(),
+            cli_version: "0.0.0".to_string(),
+            source: SessionSource::Cli.into(),
+            thread_source: None,
+            agent_nickname: None,
+            agent_role: None,
+            git_info: None,
+            name: None,
+            turns: Vec::new(),
+        };
+        let live = build_thread_from_snapshot(
+            thread_id,
+            "live-session".to_string(),
+            &ThreadConfigSnapshot {
+                model: "gpt-5".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
+                approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
+                permission_profile: codex_protocol::models::PermissionProfile::Disabled,
+                active_permission_profile: None,
+                cwd: fallback_cwd,
+                ephemeral: false,
+                reasoning_effort: None,
+                personality: None,
+                session_source: SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id,
+                    depth: 1,
+                    agent_path: None,
+                    agent_nickname: Some("atlas".to_string()),
+                    agent_role: Some("explorer".to_string()),
+                }),
+                thread_source: Some(codex_protocol::protocol::ThreadSource::Subagent),
+            },
+            Some(PathBuf::from("/tmp/thread.jsonl")),
+        );
+
+        overlay_live_thread_metadata(&mut persisted, &live);
+        let source_json = serde_json::to_value(&persisted.source)?;
+
+        assert_eq!(persisted.session_id, "live-session");
+        assert_eq!(persisted.path, Some(PathBuf::from("/tmp/thread.jsonl")));
+        assert_eq!(persisted.thread_source, Some(ThreadSource::Subagent));
+        assert_eq!(persisted.agent_nickname.as_deref(), Some("atlas"));
+        assert_eq!(persisted.agent_role.as_deref(), Some("explorer"));
+        assert_eq!(
+            source_json
+                .get("subAgent")
+                .and_then(|value| value.get("thread_spawn"))
+                .and_then(|value| value.get("parent_thread_id"))
+                .and_then(|value| value.as_str()),
+            Some(parent_thread_id.to_string().as_str())
+        );
         Ok(())
     }
 
