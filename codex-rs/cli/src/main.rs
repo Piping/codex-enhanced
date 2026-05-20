@@ -573,19 +573,13 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
 /// Handle a completed interactive app run.
 fn finish_interactive_exit(
     exit_info: AppExitInfo,
-    arg0_paths: &Arg0DispatchPaths,
     respawn_args: &[OsString],
 ) -> anyhow::Result<()> {
     if matches!(exit_info.exit_reason, ExitReason::RespawnRequested) {
         let Some(respawn_target) = exit_info.respawn_target.as_deref() else {
             anyhow::bail!("cannot respawn Codex: current session has no thread id");
         };
-        respawn_current_codex_session(
-            arg0_paths,
-            respawn_args,
-            respawn_target,
-            exit_info.respawn_with_yolo,
-        )?;
+        respawn_current_codex_session(respawn_args, respawn_target, exit_info.respawn_with_yolo)?;
         return Ok(());
     }
 
@@ -614,31 +608,18 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
 }
 
 fn respawn_current_codex_session(
-    arg0_paths: &Arg0DispatchPaths,
     respawn_args: &[OsString],
     thread_id: &str,
     respawn_with_yolo: bool,
 ) -> anyhow::Result<()> {
-    let Some(exe_path) = arg0_paths.codex_self_exe.as_ref() else {
-        anyhow::bail!("unable to respawn Codex: current executable path is unavailable");
-    };
-
-    let mut command = std::process::Command::new(exe_path);
-    command.args(build_codex_respawn_argv(
-        respawn_args,
-        thread_id,
-        respawn_with_yolo,
-    ));
+    let mut command = build_codex_respawn_command(respawn_args, thread_id, respawn_with_yolo);
 
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
 
         let error = command.exec();
-        anyhow::bail!(
-            "failed to respawn Codex via {}: {error}",
-            exe_path.display()
-        );
+        anyhow::bail!("failed to respawn Codex via PATH lookup for codex: {error}");
     }
 
     #[cfg(not(unix))]
@@ -648,13 +629,24 @@ fn respawn_current_codex_session(
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit());
         command.spawn().map_err(|error| {
-            anyhow::anyhow!(
-                "failed to respawn Codex via {}: {error}",
-                exe_path.display()
-            )
+            anyhow::anyhow!("failed to respawn Codex via PATH lookup for codex: {error}")
         })?;
         Ok(())
     }
+}
+
+fn build_codex_respawn_command(
+    respawn_args: &[OsString],
+    thread_id: &str,
+    respawn_with_yolo: bool,
+) -> std::process::Command {
+    let mut command = std::process::Command::new("codex");
+    command.args(build_codex_respawn_argv(
+        respawn_args,
+        thread_id,
+        respawn_with_yolo,
+    ));
+    command
 }
 
 fn build_codex_respawn_argv(
@@ -969,7 +961,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 arg0_paths.clone(),
             )
             .await?;
-            finish_interactive_exit(exit_info, &arg0_paths, &respawn_args)?;
+            finish_interactive_exit(exit_info, &respawn_args)?;
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -1144,7 +1136,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 arg0_paths.clone(),
             )
             .await?;
-            finish_interactive_exit(exit_info, &arg0_paths, &respawn_args)?;
+            finish_interactive_exit(exit_info, &respawn_args)?;
         }
         Some(Subcommand::Fork(ForkCommand {
             session_id,
@@ -1175,7 +1167,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 arg0_paths.clone(),
             )
             .await?;
-            finish_interactive_exit(exit_info, &arg0_paths, &respawn_args)?;
+            finish_interactive_exit(exit_info, &respawn_args)?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -2286,28 +2278,6 @@ mod tests {
     }
 
     #[test]
-    fn finish_interactive_exit_respawns_with_named_target_without_rollout_hint() {
-        let exit_info = AppExitInfo {
-            token_usage: TokenUsage::default(),
-            thread_id: None,
-            thread_name: Some("btw scratch".to_string()),
-            respawn_target: Some("btw scratch".to_string()),
-            update_action: None,
-            respawn_with_yolo: false,
-            exit_reason: ExitReason::RespawnRequested,
-        };
-        let arg0_paths = Arg0DispatchPaths {
-            codex_self_exe: Some(PathBuf::from("/usr/bin/true")),
-            codex_linux_sandbox_exe: None,
-            main_execve_wrapper_exe: None,
-        };
-
-        let result = finish_interactive_exit(exit_info, &arg0_paths, &[]);
-
-        assert!(result.is_ok());
-    }
-
-    #[test]
     fn build_interactive_respawn_args_preserves_effective_session_args() {
         let cli = MultitoolCli::try_parse_from([
             "codex",
@@ -2386,6 +2356,27 @@ mod tests {
                 "thread-123",
                 "--yolo",
             ]
+        );
+    }
+
+    #[test]
+    fn build_codex_respawn_command_uses_path_lookup_for_codex() {
+        let respawn_args = vec![
+            OsString::from("--remote"),
+            OsString::from("ws://127.0.0.1:4500"),
+        ];
+
+        let command = build_codex_respawn_command(
+            &respawn_args,
+            "thread-123",
+            /*respawn_with_yolo*/ false,
+        );
+        let args = command.get_args().map(OsString::from).collect::<Vec<_>>();
+
+        assert_eq!(command.get_program(), "codex");
+        assert_eq!(
+            lossy_args(&args),
+            vec!["--remote", "ws://127.0.0.1:4500", "resume", "thread-123",]
         );
     }
 

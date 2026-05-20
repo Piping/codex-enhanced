@@ -36,6 +36,8 @@ use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::PermissionProfileModificationParams;
+use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
@@ -44,6 +46,8 @@ use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
@@ -51,7 +55,10 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
 use codex_core::config::Config;
+use codex_protocol::models::ActivePermissionProfile;
+use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
@@ -229,6 +236,50 @@ impl AppState {
             ok: true,
             turn_id: Some(response.turn.id),
         })
+    }
+
+    async fn create_session_action(&self) -> Result<SessionDetailResponse, ApiError> {
+        let response: ThreadStartResponse = self
+            .runtime
+            .request_typed(ClientRequest::ThreadStart {
+                request_id: self.runtime.next_request_id(),
+                params: thread_start_params_from_config(&self.config),
+            })
+            .await?;
+
+        let thread_id = response.thread.id.clone();
+        self.runtime.mark_thread_loaded(&thread_id).await;
+
+        for _ in 0..10 {
+            match self
+                .store
+                .read_thread(ReadThreadParams {
+                    thread_id: thread_id
+                        .clone()
+                        .try_into()
+                        .map_err(|_| ApiError::internal("invalid thread id".to_string()))?,
+                    include_archived: true,
+                    include_history: true,
+                })
+                .await
+            {
+                Ok(stored_thread) => {
+                    let mut detail = SessionDetailResponse::from(stored_thread);
+                    detail.messages = build_runtime_messages(&response.thread);
+                    detail.runtime_status =
+                        Some(SessionRuntimeStatus::from(&response.thread.status));
+                    return Ok(detail);
+                }
+                Err(ThreadStoreError::ThreadNotFound { .. }) => {
+                    sleep(Duration::from_millis(100)).await;
+                }
+                Err(err) => return Err(ApiError::from_thread_store(err)),
+            }
+        }
+
+        Err(ApiError::internal(format!(
+            "thread {thread_id} was created but did not appear in the local store"
+        )))
     }
 
     async fn interrupt_session_action(
@@ -532,7 +583,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/readyz", get(readyz))
         .route("/api/v1/host", get(get_host))
-        .route("/api/v1/sessions", get(list_sessions))
+        .route("/api/v1/sessions", get(list_sessions).post(create_session))
         .route("/api/v1/sessions/{id}", get(get_session))
         .route("/api/v1/sessions/{id}/messages", post(post_session_message))
         .route("/api/v1/sessions/{id}/interrupt", post(interrupt_session))
@@ -617,6 +668,12 @@ async fn get_session(
         .map(Json)
 }
 
+async fn create_session(
+    State(state): State<AppState>,
+) -> Result<Json<SessionDetailResponse>, ApiError> {
+    state.create_session_action().await.map(Json)
+}
+
 async fn post_session_message(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -673,6 +730,89 @@ fn normalize_query_text(value: Option<String>) -> Option<String> {
     value.and_then(|text| {
         let trimmed = text.trim().to_string();
         (!trimmed.is_empty()).then_some(trimmed)
+    })
+}
+
+fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
+    let permissions = permissions_selection_from_config(config);
+    let sandbox = permissions.is_none().then(|| {
+        sandbox_mode_from_permission_profile(
+            &config.permissions.permission_profile(),
+            config.cwd.as_path(),
+        )
+    });
+    ThreadStartParams {
+        model: config.model.clone(),
+        model_provider: Some(config.model_provider_id.clone()),
+        cwd: Some(config.cwd.to_string_lossy().to_string()),
+        approval_policy: Some(config.permissions.approval_policy.value().into()),
+        approvals_reviewer: Some(config.approvals_reviewer.into()),
+        sandbox: sandbox.flatten(),
+        permissions,
+        config: config_request_overrides_from_config(config),
+        ephemeral: Some(config.ephemeral),
+        ..ThreadStartParams::default()
+    }
+}
+
+fn permissions_selection_from_config(config: &Config) -> Option<PermissionProfileSelectionParams> {
+    config
+        .permissions
+        .active_permission_profile()
+        .map(permissions_selection_from_active_profile)
+}
+
+fn permissions_selection_from_active_profile(
+    active: ActivePermissionProfile,
+) -> PermissionProfileSelectionParams {
+    let modifications = active
+        .modifications
+        .into_iter()
+        .map(|modification| match modification {
+            ActivePermissionProfileModification::AdditionalWritableRoot { path } => {
+                PermissionProfileModificationParams::AdditionalWritableRoot { path }
+            }
+        })
+        .collect::<Vec<_>>();
+    PermissionProfileSelectionParams::Profile {
+        id: active.id,
+        modifications: (!modifications.is_empty()).then_some(modifications),
+    }
+}
+
+fn sandbox_mode_from_permission_profile(
+    permission_profile: &PermissionProfile,
+    cwd: &StdPath,
+) -> Option<codex_app_server_protocol::SandboxMode> {
+    match permission_profile {
+        PermissionProfile::Disabled => {
+            Some(codex_app_server_protocol::SandboxMode::DangerFullAccess)
+        }
+        PermissionProfile::External { .. } => None,
+        PermissionProfile::Managed { .. } => {
+            let file_system_policy = permission_profile.file_system_sandbox_policy();
+            if file_system_policy.has_full_disk_write_access() {
+                permission_profile
+                    .network_sandbox_policy()
+                    .is_enabled()
+                    .then_some(codex_app_server_protocol::SandboxMode::DangerFullAccess)
+            } else if file_system_policy.can_write_path_with_cwd(cwd, cwd) {
+                Some(codex_app_server_protocol::SandboxMode::WorkspaceWrite)
+            } else {
+                Some(codex_app_server_protocol::SandboxMode::ReadOnly)
+            }
+        }
+    }
+}
+
+fn config_request_overrides_from_config(
+    config: &Config,
+) -> Option<HashMap<String, serde_json::Value>> {
+    config.active_profile.as_ref().map(|profile| {
+        HashMap::from([(
+            "profile".to_string(),
+            serde_json::Value::String(profile.clone()),
+        )])
     })
 }
 
@@ -984,10 +1124,7 @@ impl RemoteRuntime {
             })
             .await?;
 
-        self.loaded_threads
-            .write()
-            .await
-            .insert(thread_id.to_string());
+        self.mark_thread_loaded(thread_id).await;
         Ok(())
     }
 
@@ -1007,6 +1144,13 @@ impl RemoteRuntime {
 
     async fn is_thread_loaded(&self, thread_id: &str) -> bool {
         self.loaded_threads.read().await.contains(thread_id)
+    }
+
+    async fn mark_thread_loaded(&self, thread_id: &str) {
+        self.loaded_threads
+            .write()
+            .await
+            .insert(thread_id.to_string());
     }
 
     async fn request_typed<T>(&self, request: ClientRequest) -> Result<T, ApiError>
@@ -1256,11 +1400,12 @@ async fn run_relay_sync(state: AppState, config: RelayConfig) -> anyhow::Result<
                         if command.seq <= acked_command_seq {
                             continue;
                         }
-                        tracked_sessions.insert(command.session_id.clone());
                         if let Err(err) =
                             apply_relay_command(&state, &command, &mut tracked_sessions).await
                         {
                             warn!("failed to apply relay command {:?}: {err:?}", command);
+                        } else if !command.session_id.is_empty() {
+                            tracked_sessions.insert(command.session_id.clone());
                         }
                         acked_command_seq = command.seq;
                     }
@@ -1313,6 +1458,10 @@ async fn apply_relay_command(
     tracked_sessions: &mut HashSet<String>,
 ) -> Result<(), ApiError> {
     match command.kind.as_str() {
+        "createSession" => {
+            let detail = state.create_session_action().await?;
+            tracked_sessions.insert(detail.id);
+        }
         "activateSession" => {
             state
                 .session_detail_snapshot(&command.session_id, true, true)
