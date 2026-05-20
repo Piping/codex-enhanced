@@ -490,6 +490,13 @@ impl App {
     }
 
     pub(crate) fn undo_last_user_message(&mut self) -> bool {
+        if self.chat_widget.is_user_turn_pending_or_running() {
+            self.chat_widget.add_error_message(
+                "Cannot restore the previous message while a turn is in progress.".to_string(),
+            );
+            return false;
+        }
+
         self.reset_backtrack_state();
 
         let Some(nth_user_message) = user_count(&self.transcript_cells).checked_sub(1) else {

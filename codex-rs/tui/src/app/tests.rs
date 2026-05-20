@@ -7,6 +7,7 @@ mod model_catalog;
 use super::*;
 use crate::app_backtrack::BacktrackSelection;
 use crate::app_backtrack::BacktrackState;
+use crate::app_backtrack::PendingBacktrackRollback;
 use crate::app_backtrack::user_count;
 
 use crate::chatwidget::ChatWidgetInit;
@@ -4796,6 +4797,71 @@ async fn backtrack_remote_image_only_selection_clears_existing_composer_draft() 
 }
 
 #[tokio::test]
+async fn undo_last_user_message_rejects_pending_turn_start() {
+    let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+
+    app.transcript_cells = vec![Arc::new(UserHistoryCell {
+        message: "previous prompt".to_string(),
+        text_elements: Vec::new(),
+        local_image_paths: Vec::new(),
+        remote_image_urls: Vec::new(),
+    }) as Arc<dyn HistoryCell>];
+    app.chat_widget.handle_thread_session(test_thread_session(
+        thread_id,
+        test_path_buf("/tmp/project"),
+    ));
+
+    app.chat_widget.submit_user_message_with_mode(
+        "new prompt".to_string(),
+        CollaborationModeMask {
+            name: "Default".to_string(),
+            mode: Some(ModeKind::Default),
+            model: None,
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    );
+
+    let mut saw_user_turn = false;
+    while let Ok(op) = op_rx.try_recv() {
+        if matches!(op, Op::UserTurn { .. }) {
+            saw_user_turn = true;
+            break;
+        }
+    }
+    assert!(saw_user_turn, "expected a submitted user turn");
+    assert!(app.chat_widget.is_user_turn_pending_or_running());
+
+    assert!(!app.undo_last_user_message());
+    assert!(matches!(
+        op_rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+
+    let rendered = loop {
+        match app_event_rx.try_recv() {
+            Ok(AppEvent::InsertHistoryCell(cell)) => {
+                let rendered = cell
+                    .display_lines(/*width*/ 120)
+                    .into_iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if rendered
+                    .contains("Cannot restore the previous message while a turn is in progress.")
+                {
+                    break rendered;
+                }
+            }
+            Ok(_) => continue,
+            Err(err) => panic!("expected InsertHistoryCell event, got {err:?}"),
+        }
+    };
+    assert!(rendered.contains("Cannot restore the previous message while a turn is in progress."));
+}
+
+#[tokio::test]
 async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
     let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
@@ -5195,6 +5261,49 @@ async fn thread_rollback_response_discards_queued_active_thread_events() {
         .as_mut()
         .expect("active receiver should remain attached");
     assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[tokio::test]
+async fn thread_rollback_rpc_failure_stays_in_ui_and_clears_pending_backtrack() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+
+    app.backtrack.pending_rollback = Some(PendingBacktrackRollback {
+        selection: BacktrackSelection {
+            nth_user_message: 0,
+            prefill: "previous prompt".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        },
+        thread_id: Some(thread_id),
+    });
+
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
+
+    let result = app
+        .submit_thread_op(&mut app_server, thread_id, Op::thread_rollback(1))
+        .await;
+
+    assert!(result.is_ok(), "rollback RPC failure should stay in the UI");
+    assert!(app.backtrack.pending_rollback.is_none());
+
+    let cell = match app_event_rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+        other => panic!("expected InsertHistoryCell event, got {other:?}"),
+    };
+    let rendered = cell
+        .display_lines(/*width*/ 120)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Failed to restore the previous message:"));
+    assert!(rendered.contains("thread/rollback failed in TUI"));
 }
 
 #[tokio::test]

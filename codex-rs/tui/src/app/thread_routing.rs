@@ -659,7 +659,10 @@ impl App {
                     Ok(response) => response,
                     Err(err) => {
                         self.handle_backtrack_rollback_failed();
-                        return Err(err);
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to restore the previous message: {err}"
+                        ));
+                        return Ok(true);
                     }
                 };
                 self.handle_thread_rollback_response(thread_id, *num_turns, &response)
