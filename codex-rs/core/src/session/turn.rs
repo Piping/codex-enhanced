@@ -109,6 +109,7 @@ use futures::prelude::*;
 use futures::stream::FuturesOrdered;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
+use tracing::debug;
 use tracing::error;
 use tracing::field;
 use tracing::info;
@@ -2164,7 +2165,10 @@ async fn try_run_sampling_request(
                             .await;
                     }
                 } else {
-                    error_or_panic("OutputTextDelta without active item".to_string());
+                    debug!(
+                        turn_id = %turn_context.sub_id,
+                        "received OutputTextDelta before any active item; skipping"
+                    );
                 }
             }
             ResponseEvent::ToolCallInputDelta {
@@ -2200,7 +2204,10 @@ async fn try_run_sampling_request(
                     sess.send_event(&turn_context, EventMsg::ReasoningContentDelta(event))
                         .await;
                 } else {
-                    error_or_panic("ReasoningSummaryDelta without active item".to_string());
+                    debug!(
+                        turn_id = %turn_context.sub_id,
+                        "received ReasoningSummaryDelta before any active item; skipping"
+                    );
                 }
             }
             ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
@@ -2212,7 +2219,10 @@ async fn try_run_sampling_request(
                         });
                     sess.send_event(&turn_context, event).await;
                 } else {
-                    error_or_panic("ReasoningSummaryPartAdded without active item".to_string());
+                    debug!(
+                        turn_id = %turn_context.sub_id,
+                        "received ReasoningSummaryPartAdded before any active item; skipping"
+                    );
                 }
             }
             ResponseEvent::ReasoningContentDelta {
@@ -2230,7 +2240,10 @@ async fn try_run_sampling_request(
                     sess.send_event(&turn_context, EventMsg::ReasoningRawContentDelta(event))
                         .await;
                 } else {
-                    error_or_panic("ReasoningRawContentDelta without active item".to_string());
+                    debug!(
+                        turn_id = %turn_context.sub_id,
+                        "received ReasoningRawContentDelta before any active item; skipping"
+                    );
                 }
             }
         }
