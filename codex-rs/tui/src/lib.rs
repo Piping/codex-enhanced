@@ -10,6 +10,7 @@ use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::find_codex_home;
 use crate::legacy_core::config::load_config_as_toml_with_cli_overrides;
 use crate::legacy_core::config::resolve_oss_provider;
+use crate::legacy_core::config::set_project_trust_level;
 use crate::legacy_core::format_exec_policy_error_with_source;
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::session_resume::ResolveCwdOutcome;
@@ -41,12 +42,15 @@ use codex_config::format_config_error_with_source;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::EnvironmentManagerArgs;
 use codex_exec_server::ExecServerRuntimePaths;
+use codex_exec_server::LOCAL_FS;
+use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthConfig;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::enforce_login_restrictions;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_rollout::StateDbHandle;
 use codex_rollout::state_db;
@@ -1151,6 +1155,18 @@ async fn run_ratatui_app(
 
     tooltips::announcement::prewarm();
 
+    let initial_config = if remote_mode {
+        initial_config
+    } else {
+        auto_trust_current_directory(
+            initial_config,
+            &cli_kv_overrides,
+            &overrides,
+            &cloud_requirements,
+        )
+        .await?
+    };
+
     let mut terminal = tui::init()?;
     terminal.clear()?;
 
@@ -1736,6 +1752,65 @@ async fn load_config_or_exit_with_fallback_cwd(
     }
 }
 
+async fn auto_trust_current_directory(
+    config: Config,
+    cli_kv_overrides: &[(String, toml::Value)],
+    overrides: &ConfigOverrides,
+    cloud_requirements: &CloudRequirementsLoader,
+) -> color_eyre::Result<Config> {
+    if config.active_project.trust_level.is_some() {
+        return Ok(config);
+    }
+
+    let trust_target = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &config.cwd)
+        .await
+        .unwrap_or_else(|| config.cwd.clone());
+    if let Err(err) = set_project_trust_level(
+        &config.codex_home,
+        trust_target.as_path(),
+        TrustLevel::Trusted,
+    ) {
+        warn!(
+            "failed to persist trusted project state for {}; reloading with in-memory trust: {err}",
+            trust_target.display()
+        );
+
+        let trust_target_key = codex_config::loader::project_trust_key(trust_target.as_path());
+        let cli_overrides_with_trust = cli_kv_overrides
+            .iter()
+            .cloned()
+            .chain(std::iter::once((
+                "projects".to_string(),
+                toml::Value::Table(toml::map::Map::from_iter([(
+                    trust_target_key,
+                    toml::Value::Table(toml::map::Map::from_iter([(
+                        "trust_level".to_string(),
+                        toml::Value::String("trusted".to_string()),
+                    )])),
+                )])),
+            )))
+            .collect::<Vec<_>>();
+
+        return ConfigBuilder::default()
+            .codex_home(config.codex_home.to_path_buf())
+            .cli_overrides(cli_overrides_with_trust)
+            .harness_overrides(overrides.clone())
+            .cloud_requirements(cloud_requirements.clone())
+            .build()
+            .await
+            .wrap_err("failed to reload config with in-memory trusted project override");
+    }
+
+    ConfigBuilder::default()
+        .codex_home(config.codex_home.to_path_buf())
+        .cli_overrides(cli_kv_overrides.to_vec())
+        .harness_overrides(overrides.clone())
+        .cloud_requirements(cloud_requirements.clone())
+        .build()
+        .await
+        .wrap_err("failed to reload config after auto-trusting current directory")
+}
+
 /// Determine if the user has decided whether to trust the current directory.
 fn should_show_trust_screen(config: &Config) -> bool {
     config.active_project.trust_level.is_none()
@@ -1774,6 +1849,7 @@ mod tests {
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_config::config_toml::ProjectConfig;
+    use codex_config::loader::project_trust_key;
     use pretty_assertions::assert_eq;
     use serial_test::serial;
     use tempfile::TempDir;
@@ -2351,7 +2427,6 @@ mod tests {
     }
     #[tokio::test]
     async fn untrusted_project_skips_trust_prompt() -> std::io::Result<()> {
-        use codex_protocol::config_types::TrustLevel;
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
         config.active_project = ProjectConfig {
@@ -2363,6 +2438,53 @@ mod tests {
             !should_show,
             "Trust prompt should not be shown for projects explicitly marked as untrusted"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn auto_trust_current_directory_trusts_repo_root() -> color_eyre::Result<()> {
+        let codex_home = TempDir::new()?;
+        let repo_root = TempDir::new()?;
+        std::fs::create_dir(repo_root.path().join(".git"))?;
+        let nested = repo_root.path().join("nested/project");
+        std::fs::create_dir_all(&nested)?;
+        let overrides = ConfigOverrides {
+            cwd: Some(nested.clone()),
+            ..Default::default()
+        };
+        let initial_config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+            .harness_overrides(overrides.clone())
+            .build()
+            .await?;
+
+        assert!(should_show_trust_screen(&initial_config));
+
+        let trusted_config = auto_trust_current_directory(
+            initial_config,
+            &[],
+            &overrides,
+            &CloudRequirementsLoader::default(),
+        )
+        .await?;
+
+        assert_eq!(
+            trusted_config.active_project.trust_level,
+            Some(TrustLevel::Trusted)
+        );
+        assert!(!should_show_trust_screen(&trusted_config));
+
+        let config_toml = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+        let trusted_root =
+            resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &trusted_config.cwd)
+                .await
+                .unwrap_or_else(|| trusted_config.cwd.clone());
+        let trusted_root_key = project_trust_key(trusted_root.as_path());
+        assert!(config_toml.contains(&trusted_root_key));
+        assert!(config_toml.contains("trust_level = \"trusted\""));
+        assert!(!config_toml.contains(&project_trust_key(nested.as_path())));
+
         Ok(())
     }
 
