@@ -168,6 +168,19 @@ def _rewrite_project_version(pyproject_text: str, version: str) -> str:
     return updated
 
 
+def _rewrite_workspace_package_version(cargo_toml_text: str, version: str) -> str:
+    updated, count = re.subn(
+        r'^version = "[^"]+"$',
+        f'version = "{version}"',
+        cargo_toml_text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if count != 1:
+        raise RuntimeError("Could not rewrite workspace package version in Cargo.toml")
+    return updated
+
+
 def _rewrite_runtime_platform_tag(pyproject_text: str, platform_tag: str) -> str:
     section = "[tool.hatch.build.targets.wheel.hooks.custom]"
     section_index = pyproject_text.find(section)
@@ -278,6 +291,10 @@ def set_enhanced_runtime_version(runtime_version: str) -> Path:
     pyproject_path = python_runtime_root("enhanced") / "pyproject.toml"
     pyproject_path.write_text(
         _rewrite_project_version(pyproject_path.read_text(), runtime_version)
+    )
+    cargo_toml_path = repo_root() / "codex-rs" / "Cargo.toml"
+    cargo_toml_path.write_text(
+        _rewrite_workspace_package_version(cargo_toml_path.read_text(), runtime_version)
     )
     return pyproject_path
 
