@@ -59,6 +59,7 @@ impl App {
                     .ok();
                 return Ok(AppExitInfo {
                     token_usage: TokenUsage::default(),
+                    session_activity: SessionActivitySummary::default(),
                     thread_id: None,
                     thread_name: None,
                     update_action: None,
@@ -514,6 +515,7 @@ See the Codex keymap documentation for supported actions and examples."
         let respawn_target = app.current_displayed_thread_respawn_target().await;
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
+            session_activity: app.chat_widget.session_activity_summary(),
             thread_id: resumable_thread.as_ref().map(|thread| thread.thread_id),
             thread_name: resumable_thread.and_then(|thread| thread.thread_name),
             respawn_target,

@@ -63,6 +63,7 @@ use codex_utils_oss::get_default_model_for_oss_provider;
 use codex_utils_path as path_utils;
 use color_eyre::eyre::WrapErr;
 use cwd_prompt::CwdPromptAction;
+pub use session_activity::SessionActivitySummary;
 use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
@@ -167,6 +168,7 @@ mod render;
 mod resize_reflow_cap;
 mod resume_picker;
 mod selection_list;
+mod session_activity;
 mod session_log;
 mod session_resume;
 mod session_state;
@@ -1185,6 +1187,7 @@ async fn run_ratatui_app(
                     terminal_restore_guard.restore()?;
                     return Ok(AppExitInfo {
                         token_usage: crate::token_usage::TokenUsage::default(),
+                        session_activity: SessionActivitySummary::default(),
                         thread_id: None,
                         thread_name: None,
                         respawn_target: None,
@@ -1265,6 +1268,7 @@ async fn run_ratatui_app(
             let _ = tui.terminal.clear();
             return Ok(AppExitInfo {
                 token_usage: crate::token_usage::TokenUsage::default(),
+                session_activity: SessionActivitySummary::default(),
                 thread_id: None,
                 thread_name: None,
                 respawn_target: None,
@@ -1312,6 +1316,7 @@ async fn run_ratatui_app(
         let _ = tui.terminal.clear();
         Ok(AppExitInfo {
             token_usage: crate::token_usage::TokenUsage::default(),
+            session_activity: SessionActivitySummary::default(),
             thread_id: None,
             thread_name: None,
             respawn_target: None,
@@ -1375,6 +1380,7 @@ async fn run_ratatui_app(
                     session_log::log_session_end();
                     return Ok(AppExitInfo {
                         token_usage: crate::token_usage::TokenUsage::default(),
+                        session_activity: SessionActivitySummary::default(),
                         thread_id: None,
                         thread_name: None,
                         respawn_target: None,
@@ -1443,6 +1449,7 @@ async fn run_ratatui_app(
                 session_log::log_session_end();
                 return Ok(AppExitInfo {
                     token_usage: crate::token_usage::TokenUsage::default(),
+                    session_activity: SessionActivitySummary::default(),
                     thread_id: None,
                     thread_name: None,
                     respawn_target: None,
@@ -1490,6 +1497,7 @@ async fn run_ratatui_app(
                         session_log::log_session_end();
                         return Ok(AppExitInfo {
                             token_usage: crate::token_usage::TokenUsage::default(),
+                            session_activity: SessionActivitySummary::default(),
                             thread_id: None,
                             thread_name: None,
                             respawn_target: None,

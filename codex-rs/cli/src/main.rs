@@ -547,6 +547,7 @@ fn parse_socket_path(raw: &str) -> Result<AbsolutePathBuf, String> {
 fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<String> {
     let AppExitInfo {
         token_usage,
+        session_activity,
         thread_id: conversation_id,
         ..
     } = exit_info;
@@ -554,6 +555,9 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     let mut lines = Vec::new();
     if !token_usage.is_zero() {
         lines.push(token_usage.to_string());
+    }
+    if let Some(activity_line) = session_activity.summary_line() {
+        lines.push(activity_line);
     }
 
     if let Some(resume_cmd) =
@@ -2249,6 +2253,10 @@ mod tests {
         };
         AppExitInfo {
             token_usage,
+            session_activity: codex_tui::SessionActivitySummary {
+                interaction_rounds: 3,
+                tool_calls: 5,
+            },
             thread_id: conversation_id
                 .map(ThreadId::from_string)
                 .map(Result::unwrap),
@@ -2266,6 +2274,7 @@ mod tests {
     fn format_exit_messages_skips_zero_usage() {
         let exit_info = AppExitInfo {
             token_usage: TokenUsage::default(),
+            session_activity: codex_tui::SessionActivitySummary::default(),
             thread_id: None,
             thread_name: None,
             respawn_target: None,
@@ -2391,6 +2400,7 @@ mod tests {
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
+                "Session activity: 3 interaction rounds • 5 tool calls".to_string(),
                 "To continue this session, run codex resume 123e4567-e89b-12d3-a456-426614174000"
                     .to_string(),
             ]
@@ -2404,8 +2414,8 @@ mod tests {
             /*thread_name*/ None,
         );
         let lines = format_exit_messages(exit_info, /*color_enabled*/ true);
-        assert_eq!(lines.len(), 2);
-        assert!(lines[1].contains("\u{1b}[36m"));
+        assert_eq!(lines.len(), 3);
+        assert!(lines[2].contains("\u{1b}[36m"));
     }
 
     #[test]
@@ -2419,6 +2429,7 @@ mod tests {
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
+                "Session activity: 3 interaction rounds • 5 tool calls".to_string(),
                 "To continue this session, run codex resume 123e4567-e89b-12d3-a456-426614174000"
                     .to_string(),
             ]

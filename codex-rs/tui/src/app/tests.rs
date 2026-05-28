@@ -5574,6 +5574,7 @@ async fn session_summary_skips_when_no_usage_or_resume_hint() {
     assert!(
         session_summary(
             TokenUsage::default(),
+            SessionActivitySummary::default(),
             /*thread_id*/ None,
             /*thread_name*/ None,
             /*rollout_path*/ None,
@@ -5592,6 +5593,7 @@ async fn session_summary_skips_resume_hint_until_rollout_exists() {
     assert!(
         session_summary(
             usage,
+            SessionActivitySummary::default(),
             Some(conversation),
             /*thread_name*/ None,
             Some(&rollout_path),
@@ -5615,6 +5617,7 @@ async fn session_summary_includes_resume_hint_for_persisted_rollout() {
 
     let summary = session_summary(
         usage,
+        SessionActivitySummary::default(),
         Some(conversation),
         /*thread_name*/ None,
         Some(&rollout_path),
@@ -5628,6 +5631,7 @@ async fn session_summary_includes_resume_hint_for_persisted_rollout() {
         summary.resume_command,
         Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
     );
+    assert_eq!(summary.activity_line, None);
 }
 
 #[tokio::test]
@@ -5645,6 +5649,7 @@ async fn session_summary_uses_id_even_when_thread_has_name() {
 
     let summary = session_summary(
         usage,
+        SessionActivitySummary::default(),
         Some(conversation),
         Some("my-session".to_string()),
         Some(&rollout_path),
@@ -5653,5 +5658,29 @@ async fn session_summary_uses_id_even_when_thread_has_name() {
     assert_eq!(
         summary.resume_command,
         Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
+    );
+}
+
+#[tokio::test]
+async fn session_summary_includes_activity_line() {
+    let temp_dir = tempdir().expect("temp dir");
+    let rollout_path = temp_dir.path().join("rollout.jsonl");
+    std::fs::write(&rollout_path, "{}\n").expect("write rollout");
+
+    let summary = session_summary(
+        TokenUsage::default(),
+        SessionActivitySummary {
+            interaction_rounds: 4,
+            tool_calls: 9,
+        },
+        /*thread_id*/ None,
+        /*thread_name*/ None,
+        Some(&rollout_path),
+    )
+    .expect("summary");
+
+    assert_eq!(
+        summary.activity_line,
+        Some("Session activity: 4 interaction rounds • 9 tool calls".to_string())
     );
 }

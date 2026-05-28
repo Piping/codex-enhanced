@@ -31,6 +31,7 @@ use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 use crate::render::renderable::Renderable;
+use crate::session_activity::SessionActivitySummary;
 use crate::session_state::ThreadSessionState;
 use crate::style::proposed_plan_style;
 use crate::style::user_message_style;
@@ -3486,6 +3487,7 @@ pub struct FinalMessageSeparator {
     timestamp_label: Option<String>,
     turn_duration: Option<std::time::Duration>,
     elapsed_seconds: Option<u64>,
+    activity_summary: Option<SessionActivitySummary>,
     runtime_metrics: Option<RuntimeMetricsSummary>,
 }
 impl FinalMessageSeparator {
@@ -3494,12 +3496,14 @@ impl FinalMessageSeparator {
         timestamp_label: Option<String>,
         turn_duration: Option<std::time::Duration>,
         elapsed_seconds: Option<u64>,
+        activity_summary: Option<SessionActivitySummary>,
         runtime_metrics: Option<RuntimeMetricsSummary>,
     ) -> Self {
         Self {
             timestamp_label,
             turn_duration,
             elapsed_seconds,
+            activity_summary,
             runtime_metrics,
         }
     }
@@ -3518,6 +3522,12 @@ impl HistoryCell for FinalMessageSeparator {
             .map(super::status_indicator_widget::fmt_elapsed_compact)
         {
             label_parts.push(format!("Worked for {elapsed_seconds}"));
+        }
+        if let Some(activity_label) = self
+            .activity_summary
+            .and_then(SessionActivitySummary::label_fragment)
+        {
+            label_parts.push(activity_label);
         }
         if let Some(metrics_label) = self.runtime_metrics.and_then(runtime_metrics_label) {
             label_parts.push(metrics_label);
@@ -3546,6 +3556,12 @@ impl HistoryCell for FinalMessageSeparator {
             .map(super::status_indicator_widget::fmt_elapsed_compact)
         {
             label_parts.push(format!("Worked for {elapsed_seconds}"));
+        }
+        if let Some(activity_label) = self
+            .activity_summary
+            .and_then(SessionActivitySummary::label_fragment)
+        {
+            label_parts.push(activity_label);
         }
         if let Some(metrics_label) = self.runtime_metrics.and_then(runtime_metrics_label) {
             label_parts.push(metrics_label);
@@ -4164,8 +4180,13 @@ mod tests {
             turn_ttft_ms: 0,
             turn_ttfm_ms: 0,
         };
-        let cell =
-            FinalMessageSeparator::new(None, /*turn_duration*/ None, Some(12), Some(summary));
+        let cell = FinalMessageSeparator::new(
+            None,
+            /*turn_duration*/ None,
+            Some(12),
+            None,
+            Some(summary),
+        );
         let rendered = render_lines(&cell.display_lines(/*width*/ 600));
 
         assert_eq!(rendered.len(), 1);
@@ -4187,6 +4208,7 @@ mod tests {
             None,
             /*turn_duration*/ None,
             Some(61),
+            None,
             /*runtime_metrics*/ None,
         );
         let rendered = render_lines(&cell.display_lines(/*width*/ 200));
@@ -4201,6 +4223,7 @@ mod tests {
             None,
             Some(std::time::Duration::from_millis(2_000)),
             Some(61),
+            None,
             /*runtime_metrics*/ None,
         );
         let rendered = render_lines(&cell.display_lines(/*width*/ 200));
@@ -4215,12 +4238,31 @@ mod tests {
             Some("2026-04-08 03:04:05 +08:00".to_string()),
             /*turn_duration*/ None,
             /*elapsed_seconds*/ None,
+            None,
             /*runtime_metrics*/ None,
         );
         let rendered = render_lines(&cell.display_lines(/*width*/ 80));
 
         assert_eq!(rendered.len(), 1);
         assert!(rendered[0].contains("2026-04-08 03:04:05 +08:00"));
+    }
+
+    #[test]
+    fn final_message_separator_includes_activity_summary() {
+        let cell = FinalMessageSeparator::new(
+            None,
+            Some(std::time::Duration::from_secs(2)),
+            Some(61),
+            Some(SessionActivitySummary {
+                interaction_rounds: 3,
+                tool_calls: 5,
+            }),
+            None,
+        );
+        let rendered = render_lines(&cell.display_lines(/*width*/ 200));
+
+        assert_eq!(rendered.len(), 1);
+        assert!(rendered[0].contains("3 interaction rounds • 5 tool calls"));
     }
 
     #[test]

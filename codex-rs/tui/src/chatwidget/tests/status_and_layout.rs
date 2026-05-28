@@ -2076,7 +2076,9 @@ async fn runtime_metrics_websocket_timing_logs_and_final_separator_sums_totals()
     assert!(second_log.contains("TTFT: 80ms (iapi)"));
 
     chat.on_task_complete(
-        /*last_agent_message*/ None, /*turn_duration_ms*/ None,
+        /*last_agent_message*/ None,
+        /*turn_duration_ms*/ None,
+        crate::session_activity::SessionActivitySummary::default(),
         /*from_replay*/ false,
     );
     let mut final_separator = None;
@@ -2127,6 +2129,39 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     let first_idx = combined.find("First message").unwrap();
     let second_idx = combined.find("Second message").unwrap();
     assert!(first_idx < second_idx, "messages out of order: {combined}");
+}
+
+#[tokio::test]
+async fn live_turn_activity_summary_uses_streamed_items_when_turn_items_are_not_loaded() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    handle_turn_started(&mut chat, "turn-1");
+    complete_user_message(&mut chat, "user-1", "Reply with exactly OK.");
+    let exec = begin_exec_with_source(
+        &mut chat,
+        "exec-1",
+        "pwd",
+        codex_app_server_protocol::CommandExecutionSource::UserShell,
+    );
+    end_exec(&mut chat, exec, "/tmp\n", "", /*exit_code*/ 0);
+    complete_assistant_message(&mut chat, "msg-1", "OK", /*phase*/ None);
+    handle_turn_completed(&mut chat, "turn-1", Some(3_660));
+
+    let combined = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(
+        combined.contains("2 interaction rounds"),
+        "missing live activity summary: {combined}"
+    );
+    assert_eq!(
+        chat.session_activity_summary(),
+        crate::session_activity::SessionActivitySummary {
+            interaction_rounds: 2,
+            tool_calls: 1,
+        }
+    );
 }
 
 #[tokio::test]

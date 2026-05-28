@@ -72,6 +72,8 @@ use crate::multi_agents;
 use crate::multi_agents::AgentMetadata;
 use crate::profile_router::ProfileFallbackAction;
 use crate::profile_router::app_server_profile_fallback_action;
+use crate::session_activity::SessionActivitySummary;
+use crate::session_activity::TurnActivityTracker;
 use crate::session_state::SessionNetworkProxyRuntime;
 use crate::session_state::ThreadSessionState;
 use crate::status::RateLimitWindowDisplay;
@@ -1030,6 +1032,10 @@ pub(crate) struct ChatWidget {
     plan_item_active: bool,
     // Runtime metrics accumulated across delta snapshots for the active turn.
     turn_runtime_metrics: RuntimeMetricsSummary,
+    // Ordered, deduplicated item activity observed for the active live turn.
+    turn_activity_tracker: TurnActivityTracker,
+    // Runtime activity accumulated across completed turns in the current live session.
+    session_activity_summary: SessionActivitySummary,
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
     feedback: codex_feedback::CodexFeedback,
@@ -2106,6 +2112,8 @@ impl ChatWidget {
         self.last_agent_markdown = None;
         self.agent_turn_markdowns.clear();
         self.visible_user_turn_count = 0;
+        self.turn_activity_tracker.reset();
+        self.session_activity_summary = SessionActivitySummary::default();
         self.copy_history_evicted_by_rollback = false;
         self.saw_copy_source_this_turn = false;
         let history_metadata = session.message_history.unwrap_or_default();
@@ -2536,6 +2544,7 @@ impl ChatWidget {
         self.adaptive_chunking.reset();
         self.plan_stream_controller = None;
         self.turn_runtime_metrics = RuntimeMetricsSummary::default();
+        self.turn_activity_tracker.reset();
         self.session_telemetry.reset_runtime_metrics();
         self.bottom_pane.clear_quit_shortcut_hint();
         self.quit_shortcut_expires_at = None;
@@ -2561,8 +2570,20 @@ impl ChatWidget {
         &mut self,
         last_agent_message: Option<String>,
         turn_duration_ms: Option<i64>,
+        turn_activity_summary: SessionActivitySummary,
         from_replay: bool,
     ) {
+        let turn_activity_summary = if from_replay {
+            self.turn_activity_tracker.reset();
+            turn_activity_summary
+        } else {
+            let tracked_turn_activity = self.turn_activity_tracker.finish_turn();
+            if tracked_turn_activity.is_empty() {
+                turn_activity_summary
+            } else {
+                tracked_turn_activity
+            }
+        };
         self.submit_pending_steers_after_interrupt = false;
         // Use `last_agent_message` from the turn-complete notification as the copy
         // source only when no earlier item-level event (AgentMessageItem, plan
@@ -2605,10 +2626,13 @@ impl ChatWidget {
         self.flush_unified_exec_wait_streak();
         if !from_replay {
             self.collect_runtime_metrics_delta();
+            let completed_turn_metrics = self.turn_runtime_metrics;
+            self.session_activity_summary.merge(turn_activity_summary);
             let runtime_metrics =
-                (!self.turn_runtime_metrics.is_empty()).then_some(self.turn_runtime_metrics);
-            let should_add_turn_separator =
-                self.needs_final_message_separator || runtime_metrics.is_some();
+                (!completed_turn_metrics.is_empty()).then_some(completed_turn_metrics);
+            let should_add_turn_separator = self.needs_final_message_separator
+                || runtime_metrics.is_some()
+                || !turn_activity_summary.is_empty();
             if should_add_turn_separator {
                 let elapsed_seconds = if self.had_work_activity {
                     self.bottom_pane
@@ -2623,6 +2647,7 @@ impl ChatWidget {
                     turn_duration_ms
                         .map(|duration_ms| Duration::from_millis(duration_ms.max(0) as u64)),
                     elapsed_seconds,
+                    (!turn_activity_summary.is_empty()).then_some(turn_activity_summary),
                     runtime_metrics,
                 ));
             }
@@ -3090,6 +3115,7 @@ impl ChatWidget {
         self.adaptive_chunking.reset();
         self.stream_controller = None;
         self.plan_stream_controller = None;
+        self.turn_activity_tracker.reset();
         self.pending_status_indicator_restore = false;
         self.request_status_line_branch_refresh();
         self.request_status_line_git_summary_refresh();
@@ -4501,6 +4527,7 @@ impl ChatWidget {
                     None,
                     elapsed_seconds,
                     None,
+                    None,
                 ));
                 self.needs_final_message_separator = false;
             } else if self.needs_final_message_separator {
@@ -5232,6 +5259,8 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             turn_runtime_metrics: RuntimeMetricsSummary::default(),
+            turn_activity_tracker: TurnActivityTracker::default(),
+            session_activity_summary: SessionActivitySummary::default(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
@@ -6354,6 +6383,9 @@ impl ChatWidget {
     ) {
         let from_replay = render_source.is_replay();
         let replay_kind = render_source.replay_kind();
+        if !from_replay {
+            self.turn_activity_tracker.record_item(&item);
+        }
         match item {
             ThreadItem::UserMessage { content, .. } => {
                 self.on_committed_user_message(&content, from_replay);
@@ -6760,9 +6792,12 @@ impl ChatWidget {
         match notification.turn.status {
             TurnStatus::Completed => {
                 self.last_non_retry_error = None;
+                let turn_activity_summary =
+                    SessionActivitySummary::from_turn_items(&notification.turn.items);
                 self.on_task_complete(
                     /*last_agent_message*/ None,
                     notification.turn.duration_ms,
+                    turn_activity_summary,
                     replay_kind.is_some(),
                 )
             }
@@ -6803,6 +6838,9 @@ impl ChatWidget {
         notification: ItemStartedNotification,
         from_replay: bool,
     ) {
+        if !from_replay {
+            self.turn_activity_tracker.record_item(&notification.item);
+        }
         match notification.item {
             item @ ThreadItem::CommandExecution { .. } => self.on_command_execution_started(item),
             ThreadItem::FileChange { id: _, changes, .. } => {
@@ -6964,7 +7002,12 @@ impl ChatWidget {
                 duration_ms,
                 ..
             }) => {
-                self.on_task_complete(last_agent_message, duration_ms, from_replay);
+                self.on_task_complete(
+                    last_agent_message,
+                    duration_ms,
+                    SessionActivitySummary::default(),
+                    from_replay,
+                );
             }
             EventMsg::PatchApplyBegin(ev) => self.on_patch_apply_begin(
                 ev.changes
@@ -11352,6 +11395,10 @@ impl ChatWidget {
             .as_ref()
             .map(|ti| ti.total_token_usage.clone())
             .unwrap_or_default()
+    }
+
+    pub(crate) fn session_activity_summary(&self) -> SessionActivitySummary {
+        self.session_activity_summary
     }
 
     pub(crate) fn thread_id(&self) -> Option<ThreadId> {

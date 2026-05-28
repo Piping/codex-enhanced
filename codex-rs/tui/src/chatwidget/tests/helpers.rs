@@ -311,6 +311,8 @@ pub(super) async fn make_chatwidget_manual(
         plan_delta_buffer: String::new(),
         plan_item_active: false,
         turn_runtime_metrics: RuntimeMetricsSummary::default(),
+        turn_activity_tracker: crate::session_activity::TurnActivityTracker::default(),
+        session_activity_summary: crate::session_activity::SessionActivitySummary::default(),
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,

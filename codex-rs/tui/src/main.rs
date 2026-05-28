@@ -13,6 +13,7 @@ use supports_color::Stream;
 fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<String> {
     let AppExitInfo {
         token_usage,
+        session_activity,
         thread_id,
         ..
     } = exit_info;
@@ -20,6 +21,9 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     let mut lines = Vec::new();
     if !token_usage.is_zero() {
         lines.push(token_usage.to_string());
+    }
+    if let Some(activity_line) = session_activity.summary_line() {
+        lines.push(activity_line);
     }
 
     if let Some(resume_cmd) =

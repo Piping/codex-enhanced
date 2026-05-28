@@ -507,6 +507,7 @@ impl App {
         let config = self.fresh_session_config();
         let summary = session_summary(
             self.chat_widget.token_usage(),
+            self.chat_widget.session_activity_summary(),
             self.chat_widget.thread_id(),
             self.chat_widget.thread_name(),
             self.chat_widget.rollout_path().as_deref(),
@@ -541,6 +542,9 @@ impl App {
                     let mut lines: Vec<Line<'static>> = Vec::new();
                     if let Some(usage_line) = summary.usage_line {
                         lines.push(usage_line.into());
+                    }
+                    if let Some(activity_line) = summary.activity_line {
+                        lines.push(activity_line.into());
                     }
                     if let Some(command) = summary.resume_command {
                         let spans = vec!["To continue this session, run ".into(), command.cyan()];
@@ -754,6 +758,7 @@ impl App {
 
         let summary = session_summary(
             self.chat_widget.token_usage(),
+            self.chat_widget.session_activity_summary(),
             self.chat_widget.thread_id(),
             self.chat_widget.thread_name(),
             self.chat_widget.rollout_path().as_deref(),
@@ -783,6 +788,9 @@ impl App {
                             let mut lines: Vec<Line<'static>> = Vec::new();
                             if let Some(usage_line) = summary.usage_line {
                                 lines.push(usage_line.into());
+                            }
+                            if let Some(activity_line) = summary.activity_line {
+                                lines.push(activity_line.into());
                             }
                             if let Some(command) = summary.resume_command {
                                 let spans =

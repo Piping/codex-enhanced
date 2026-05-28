@@ -66,6 +66,7 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
 use crate::resume_picker::SessionTarget;
+use crate::session_activity::SessionActivitySummary;
 use crate::session_state::ThreadSessionState;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
@@ -435,6 +436,7 @@ const COMMIT_ANIMATION_TICK: Duration = tui::TARGET_FRAME_INTERVAL;
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
     pub token_usage: TokenUsage,
+    pub session_activity: SessionActivitySummary,
     pub thread_id: Option<ThreadId>,
     pub thread_name: Option<String>,
     pub respawn_target: Option<String>,
@@ -447,6 +449,7 @@ impl AppExitInfo {
     pub fn fatal(message: impl Into<String>) -> Self {
         Self {
             token_usage: TokenUsage::default(),
+            session_activity: SessionActivitySummary::default(),
             thread_id: None,
             thread_name: None,
             respawn_target: None,
@@ -472,22 +475,25 @@ pub enum ExitReason {
 
 fn session_summary(
     token_usage: TokenUsage,
+    session_activity: SessionActivitySummary,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
     rollout_path: Option<&Path>,
 ) -> Option<SessionSummary> {
     let usage_line = (!token_usage.is_zero()).then(|| token_usage.to_string());
+    let activity_line = session_activity.summary_line();
     let thread_id =
         resumable_thread(thread_id, thread_name, rollout_path).map(|thread| thread.thread_id);
     let resume_command =
         crate::legacy_core::util::resume_command(/*thread_name*/ None, thread_id);
 
-    if usage_line.is_none() && resume_command.is_none() {
+    if usage_line.is_none() && activity_line.is_none() && resume_command.is_none() {
         return None;
     }
 
     Some(SessionSummary {
         usage_line,
+        activity_line,
         resume_command,
     })
 }
@@ -527,6 +533,7 @@ fn errors_for_cwd(cwd: &Path, response: &SkillsListResponse) -> Vec<SkillErrorIn
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionSummary {
     usage_line: Option<String>,
+    activity_line: Option<String>,
     resume_command: Option<String>,
 }
 
@@ -756,6 +763,7 @@ async fn handle_model_migration_prompt_if_needed(
             ModelMigrationOutcome::Exit => {
                 return Some(AppExitInfo {
                     token_usage: TokenUsage::default(),
+                    session_activity: SessionActivitySummary::default(),
                     thread_id: None,
                     thread_name: None,
                     respawn_target: None,
@@ -7876,6 +7884,7 @@ model = "gpt-5.2"
         assert!(
             session_summary(
                 TokenUsage::default(),
+                SessionActivitySummary::default(),
                 /*thread_id*/ None,
                 /*thread_name*/ None,
                 /*rollout_path*/ None,
@@ -7894,6 +7903,7 @@ model = "gpt-5.2"
         assert!(
             session_summary(
                 usage,
+                SessionActivitySummary::default(),
                 Some(conversation),
                 /*thread_name*/ None,
                 Some(&rollout_path),
@@ -7917,6 +7927,7 @@ model = "gpt-5.2"
 
         let summary = session_summary(
             usage,
+            SessionActivitySummary::default(),
             Some(conversation),
             /*thread_name*/ None,
             Some(&rollout_path),
@@ -7930,10 +7941,11 @@ model = "gpt-5.2"
             summary.resume_command,
             Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
         );
+        assert_eq!(summary.activity_line, None);
     }
 
     #[tokio::test]
-    async fn session_summary_prefers_name_over_id() {
+    async fn session_summary_uses_id_even_when_thread_has_name() {
         let usage = TokenUsage {
             input_tokens: 10,
             output_tokens: 2,
@@ -7947,6 +7959,7 @@ model = "gpt-5.2"
 
         let summary = session_summary(
             usage,
+            SessionActivitySummary::default(),
             Some(conversation),
             Some("my-session".to_string()),
             Some(&rollout_path),
@@ -7954,7 +7967,31 @@ model = "gpt-5.2"
         .expect("summary");
         assert_eq!(
             summary.resume_command,
-            Some("codex resume my-session".to_string())
+            Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn session_summary_includes_activity_line() {
+        let temp_dir = tempdir().expect("temp dir");
+        let rollout_path = temp_dir.path().join("rollout.jsonl");
+        std::fs::write(&rollout_path, "{}\n").expect("write rollout");
+
+        let summary = session_summary(
+            TokenUsage::default(),
+            SessionActivitySummary {
+                interaction_rounds: 4,
+                tool_calls: 9,
+            },
+            /*thread_id*/ None,
+            /*thread_name*/ None,
+            Some(&rollout_path),
+        )
+        .expect("summary");
+
+        assert_eq!(
+            summary.activity_line,
+            Some("Session activity: 4 interaction rounds • 9 tool calls".to_string())
         );
     }
 }

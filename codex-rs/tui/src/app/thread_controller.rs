@@ -53,6 +53,7 @@ impl ThreadController {
                 );
                 let summary = super::session_summary(
                     app.chat_widget.token_usage(),
+                    app.chat_widget.session_activity_summary(),
                     app.chat_widget.thread_id(),
                     app.chat_widget.thread_name(),
                     app.chat_widget.rollout_path().as_deref(),
@@ -76,6 +77,9 @@ impl ThreadController {
                                         let mut lines: Vec<Line<'static>> = Vec::new();
                                         if let Some(usage_line) = summary.usage_line.clone() {
                                             lines.push(usage_line.into());
+                                        }
+                                        if let Some(activity_line) = summary.activity_line.clone() {
+                                            lines.push(activity_line.into());
                                         }
                                         if let Some(command) = summary.resume_command {
                                             let spans = vec![

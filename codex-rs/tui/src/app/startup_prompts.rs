@@ -313,6 +313,7 @@ pub(super) async fn handle_model_migration_prompt_if_needed(
             ModelMigrationOutcome::Exit => {
                 return Some(AppExitInfo {
                     token_usage: TokenUsage::default(),
+                    session_activity: SessionActivitySummary::default(),
                     thread_id: None,
                     thread_name: None,
                     respawn_target: None,
