@@ -8,7 +8,7 @@
 
 </div>
 
-`codex-enhanced` is a Codex distribution built on top of the OpenAI Codex CLI Rust stack. It is focused less on prompt theater and more on turning Codex into an operator surface that can stay online across accounts, sessions, workflows, and external message channels.
+`codex-enhanced` is a Codex distribution built on top of the OpenAI Codex CLI Rust stack. It is focused less on prompt theater and more on turning Codex into an operator surface that can stay online across accounts, sessions, and workflows.
 
 If you need a terminal chatbot, the base Codex experience is already strong. This distribution is for the next step: keeping Codex running as a controllable workspace system instead of a single ephemeral chat loop.
 
@@ -22,7 +22,6 @@ Most AI CLI projects compete on model access and UI polish.
 - multi-profile routing and fallback instead of a single fragile default
 - resumable sessions instead of repeated context rebuilds
 - workflow triggers and background jobs instead of one-turn-at-a-time operation
-- Feishu bridge entrypoints instead of terminal-only interaction
 - lower-noise operator UX instead of more surface-level prompt ceremony
 
 That is the core idea: make Codex feel less like a terminal chatbot and more like a persistent control surface.
@@ -35,7 +34,6 @@ That is the core idea: make Codex feel less like a terminal chatbot and more lik
 | Workflow orchestration | `/workflow` | Manage `.codex/workflows/*.yaml`, run jobs manually, and attach triggers such as `before_turn`, `after_turn`, `interval`, `cron`, and `file_watch`. |
 | Session insight report | `/insight` | Scan local Codex sessions and generate an offline HTML report under `~/.codex/reports/` for rollout analysis and drill-down. |
 | Session continuity | `/resume` | Reconnect to saved work instead of reconstructing long-running context from scratch. |
-| External message bridge | `/clawbot` | Bind workspace-local Feishu sessions to Codex threads, capture unread messages, and forward final replies back out. |
 | UI and alignment control | `/settings`, `question`, keyboard chords | Reduce noise, collect structured answers in the TUI, and keep operator interactions explicit. |
 
 ## Quickstart
@@ -116,17 +114,6 @@ Documentation:
 
 This matters once Codex is doing real work over hours or days rather than a single short exchange.
 
-### 4. Bring Feishu into the same loop
-
-`/clawbot` connects workspace-local Feishu sessions, thread binding, unread message queues, and reply forwarding into the same runtime.
-
-In practice, that means:
-
-- a Feishu chat can be bound to the current Codex thread
-- inbound messages can enter the active workspace loop
-- final replies can be sent back to Feishu
-- session and binding state stays local to the workspace runtime
-
 ## What Ships Today
 
 These capabilities are already implemented in the repository:
@@ -136,7 +123,6 @@ These capabilities are already implemented in the repository:
 - `/workflow` task orchestration
 - `/resume` for saved sessions
 - `/settings` for UI information control
-- `/clawbot` for Feishu send and receive flows
 - stronger `question`-based alignment interactions
 - keyboard chord support
 - PyPI packaging and release flow for `codex-enhanced`
@@ -147,7 +133,6 @@ This project is intentionally built so the important runtime state stays visible
 
 - profile routing state lives in `accounts/profile-router.json`
 - workflows live in `.codex/workflows/*.yaml`
-- clawbot state is stored under `.codex/clawbot/`
 - structured operator answers are collected through the TUI `question` flow instead of being guessed from ambiguous free text
 
 This distribution is opinionated, but it is not trying to hide the system from the operator.
@@ -156,7 +141,7 @@ This distribution is opinionated, but it is not trying to hide the system from t
 
 If you want to inspect or extend the project, start here:
 
-- [`codex-rs/`](./codex-rs) contains the Rust workspace, including the CLI, TUI, workflow support, app-server pieces, and clawbot integration
+- [`codex-rs/`](./codex-rs) contains the Rust workspace, including the CLI, TUI, workflow support, and app-server pieces
 - [`sdk/python-runtime-enhanced/`](./sdk/python-runtime-enhanced) contains the Python wheel packaging for `codex-enhanced`
 - [`docs/workflows.md`](./docs/workflows.md) explains workflow files, triggers, and job management
 - [`docs/slash_commands.md`](./docs/slash_commands.md) documents TUI slash commands including `/insight`
@@ -173,19 +158,17 @@ Current strengths:
 - multi-account and multi-profile routing
 - long-session recovery and continuity
 - workspace-local workflow orchestration
-- Feishu clawbot integration
 - local TUI information shaping and visibility control
 - stronger alignment flows for human-in-the-loop operation
 
 ### What it is not trying to be
 
 - a replacement for every official hosted or distributed Codex surface
-- a general-purpose IM automation hub beyond the current Feishu focus
 - a zero-configuration black box for business workflow automation
 
 ## Project Attribution
 
-This project builds on the OpenAI Codex CLI Rust, TUI, and app-server foundation, then pushes harder on the parts that matter in sustained use: account operations, session continuity, workflows, Feishu entrypoints, lower-noise UI, and operator ergonomics.
+This project builds on the OpenAI Codex CLI Rust, TUI, and app-server foundation, then pushes harder on the parts that matter in sustained use: account operations, session continuity, workflows, lower-noise UI, and operator ergonomics.
 
 If you only need a Codex that chats in a terminal, the official distribution is already enough.
 

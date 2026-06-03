@@ -1,7 +1,6 @@
 //! App-level orchestration tests for the TUI.
 
 mod btw_tests;
-mod clawbot_tests;
 mod model_catalog;
 
 use super::*;
@@ -4005,13 +4004,6 @@ pub(crate) async fn make_test_app() -> App {
         workflow_scheduler: WorkflowSchedulerState::default(),
         workflow_history: WorkflowHistoryState::default(),
         btw_session: None,
-        clawbot_controls_destination: ClawbotControlsDestination::default(),
-        clawbot_workspace_root: None,
-        clawbot_provider_task: None,
-        clawbot_pending_turns: HashMap::new(),
-        clawbot_outbound_messages: Vec::new(),
-        clawbot_outbound_reactions: Vec::new(),
-        clawbot_removed_outbound_reactions: Vec::new(),
     }
 }
 
@@ -4088,13 +4080,6 @@ pub(crate) async fn make_test_app_with_channels() -> (
             workflow_scheduler: WorkflowSchedulerState::default(),
             workflow_history: WorkflowHistoryState::default(),
             btw_session: None,
-            clawbot_controls_destination: ClawbotControlsDestination::default(),
-            clawbot_workspace_root: None,
-            clawbot_provider_task: None,
-            clawbot_pending_turns: HashMap::new(),
-            clawbot_outbound_messages: Vec::new(),
-            clawbot_outbound_reactions: Vec::new(),
-            clawbot_removed_outbound_reactions: Vec::new(),
         },
         rx,
         op_rx,

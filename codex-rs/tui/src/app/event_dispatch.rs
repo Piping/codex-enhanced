@@ -3,7 +3,6 @@
 //! This module contains the exhaustive `AppEvent` dispatcher and exit-mode handling. Large domain
 //! actions are delegated to focused app submodules so the central match remains the routing layer.
 
-use super::clawbot_controller::ClawbotController;
 use super::profile_controller::ProfileController;
 use super::resize_reflow::trailing_run_start;
 use super::thread_controller::ThreadController;
@@ -153,9 +152,6 @@ impl App {
             }
             AppEvent::Workflow(event) => {
                 WorkflowController::handle(self, tui, app_server, event).await;
-            }
-            AppEvent::Clawbot(event) => {
-                ClawbotController::handle(self, tui, app_server, event).await;
             }
             AppEvent::BeginInitialHistoryReplayBuffer => {
                 self.begin_initial_history_replay_buffer();

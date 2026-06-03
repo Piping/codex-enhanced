@@ -20,8 +20,8 @@
 
 ## Scope And Goal Level
 
-- Scope: `codex-enhanced` 作为一个面向长期 Codex 工作的 persistent user/developer surface，覆盖 sessions、profiles、workflows、hidden helper threads、external message channels、repo-local memory、offline insight，以及 release/developer workflow。
-- System boundary: 把 `codex-enhanced` 视为一个 black-box system，而不是把 TUI、app-server、protocol、workflow runtime、clawbot、Cargo 配置分别看成多个产品。
+- Scope: `codex-enhanced` 作为一个面向长期 Codex 工作的 persistent user/developer surface，覆盖 sessions、profiles、workflows、hidden helper threads、repo-local memory、offline insight，以及 release/developer workflow。
+- System boundary: 把 `codex-enhanced` 视为一个 black-box system，而不是把 TUI、app-server、protocol、workflow runtime、Cargo 配置分别看成多个产品。
 - Goal level: 以 sea-level user-goal use cases 为主，补充少量 maintainer-facing 和 contributor-facing operational use cases。
 
 ### Non-goals
@@ -35,7 +35,6 @@
 ### Primary actors
 
 - Workspace user: 日常在 TUI/CLI 中使用 Codex，运行、恢复、引导、监控并自动化长生命周期工作。
-- External collaborator: 从 Feishu 向一个已绑定的 Codex 会话或 workflow 发消息，并期待收到正确路由后的回复。
 - Repository contributor: 在 `codex-rs` 中做本地开发、调试、验证和知识沉淀。
 - Release maintainer: 将 `codex-enhanced` 发布为多平台 Python runtime release。
 
@@ -44,8 +43,6 @@
 - Model provider / profile endpoint: 提供 inference，并可能出现 rate-limit、auth failure 或 overload。
 - Workflow scheduler 和 app-server runtime: 执行 triggers、jobs、follow-up turns 和 hidden helper threads。
 - Hidden helper thread runtime: 为 `/btw` 提供独立但继承上下文的隐藏线程。
-- Feishu platform: 提供 inbound messages，并接受 outbound replies、reactions 与 websocket ownership coordination。
-- Feishu Base: 存储 clawbot 共享 coordination state。
 - Local filesystem 和 repo state: 存储 workflow YAML、progress、memory artifacts、reports、repo-local bindings 和 instructions。
 - Rust toolchain / Cargo backend: 为 contributor 提供本地开发与构建路径。
 
@@ -57,16 +54,12 @@
 - Repository maintainers: 希望 repo-local 经验能沉淀为 memory、`AGENTS.md` 和 skills，而不是散落在临时聊天里。
 - Future contributors: 希望本地 dev build 足够快、足够稳定，并有 repo-local 规则可复用。
 - PyPI/runtime consumers: 希望安装到的 enhanced runtime 与 release tag 对齐且平台正确。
-- 同时运行多个 Codex processes 的 users: 希望某个 Feishu websocket 任一时刻只由一个 elected owner 持有，并允许显式 preemption。
-
 ## Commit Theme Clusters
 
 | Cluster | Representative range or commits | Inferred behavior direction |
 | --- | --- | --- |
 | Profile routing and session continuity | `4fd5c35 -> ce67c2093` | 让 Codex 在 profile failure、respawn、thread routing 和 resumed work 场景下继续可用。 |
 | Workflow orchestration and follow-up automation | `4fd5c35 -> ce67c2093` | 把 prompts 变成可重复执行的 jobs，并支持 triggers、timeouts、retries、bound-thread routing 和 non-blocking follow-up turns。 |
-| Feishu clawbot bridge and message routing | `4fd5c35 -> ce67c2093` | 把外部 chats 绑定到 Codex threads，并保持 inbound/outbound message delivery 稳定。 |
-| Feishu websocket ownership coordination | `4fd5c35 -> ce67c2093` | 让多个 Codex processes 通过 Feishu Base 协调 embedded Feishu websocket ownership，包括 force-preempt 与 auto-provisioned coordination tables。 |
 | Human-in-the-loop control and low-noise TUI | `4fd5c35 -> ce67c2093` | 让 user surface 在长会话中更可导航、更结构化、噪音更低。 |
 | Insight and retrospective memory | `4fd5c35 -> ce67c2093` | 把 session history 转成 reports、repo memory、更新后的 instructions 和可复用 skills。 |
 | 编辑回退与纯文本复制恢复 | `fe65971e4`, `0484f4d8e` | 恢复高频键盘流工作方式，让复制结果更适合外部粘贴，并避免主消息因为 viewport 宽度被预先拆成多条逻辑行。 |
@@ -83,8 +76,6 @@
 | UC-2 | Resume and navigate long-running workspace sessions | Workspace user | 重新进入已保存 thread，并快速恢复 operational context。 |
 | UC-3 | Define and manage workspace-local workflows | Workspace user | 把重复性工作变成保存在 repo-local YAML 中、可运行的 jobs 和 triggers。 |
 | UC-4 | Run follow-up automation without blocking the main thread | Workspace user | 让 turn completion 或 file events 触发更多工作，同时保持主会话响应。 |
-| UC-5 | Bridge Feishu conversations into Codex threads | External collaborator 和 workspace user | 接收来自 Feishu 的 inbound messages，把它们绑定到正确 thread，并把最终回复发回外部。 |
-| UC-6 | Coordinate Feishu websocket ownership across Codex processes | Workspace user | 确保某个 Feishu app 的 embedded websocket 只由目标 Codex process 持有，并允许显式 preemption。 |
 | UC-7 | Keep the user in the loop with structured control | Workspace user | 通过显式回答、隐藏状态检查、历史跳转和降噪 UI 维持操作可控。 |
 | UC-8 | Use keyboard shortcuts to revise and export current content | Workspace user | 在不中断编辑流的情况下回退上一条输入，或把当前内容导出成干净纯文本。 |
 | UC-9 | Start a real hidden helper discussion beside the current thread | Workspace user | 用 `/btw` 启动一个继承当前线程能力的隐藏子线程，同时不丢失主线程上下文。 |
@@ -217,88 +208,6 @@
     - Workflow 输出作为 transcript cell 展示，不继续驱动主线程 user turn。
   - `response: user`
     - Workflow 输出被重新提交为主线程 user follow-up，可继续触发 after-turn 语义。
-
-## UC-5 Bridge Feishu Conversations Into Codex Threads
-
-- Scope: `codex-enhanced`
-- Level: sea-level user goal
-- Primary actor: external collaborator，由 workspace user 支持
-- Stakeholders and interests:
-  - External collaborator: 消息应该到达正确的 Codex thread，并拿到回复。
-  - User: bindings 应保持 local、可检查、可恢复。
-  - Runtime: stale bindings 和 delivery failures 应被修复和协调，而不是持续累积。
-- Preconditions:
-  - Workspace 已配置 Feishu integration。
-  - 一个 Codex thread 可以绑定到 Feishu session 或 channel。
-- Minimal guarantees:
-  - 即使 binding state 已陈旧，incoming messages 也不会被静默丢弃。
-  - 发送 reactions 或 replies 失败时，错误会被暴露，并允许 retry 或 reconciliation。
-  - Bindings 仍保存在 workspace-local state 中。
-- Success guarantees:
-  - Inbound message 会被路由进正确的 Codex operational loop。
-  - Final reply 会被送回 Feishu。
-  - Session jump 和 bound-thread continuity 在 reload 或 respawn 后仍可使用。
-- Trigger:
-  - 某个已绑定会话收到新的 Feishu message，或 user 在 `/clawbot` 中管理 bindings。
-- Main success scenario:
-  1. User 把一个 Feishu session 绑定到当前 Codex thread。
-  2. Collaborator 在 Feishu 中发送消息。
-  3. Codex runtime 接收事件，并把它映射到对应的 workspace thread。
-  4. Codex 在正确的 execution mode 中处理这条 inbound message。
-  5. Codex 把 final reply 发回 Feishu，并更新本地状态。
-- Extensions:
-  - 3a. Binding 已陈旧，或引用了尚未加载的 thread state：
-    Codex 会做 binding reconciliation 或恢复 jump continuity，而不是让会话悬空。
-  - 4a. Runtime 发生 respawn：
-    Clawbot runtime 会重启并重新连接现有 operational state。
-  - 5a. Reaction cancellation 或 delivery update 失败：
-    Codex 会报告失败，而不是假装外部状态已经更新。
-
-## UC-6 Coordinate Feishu Websocket Ownership Across Codex Processes
-
-- Scope: `codex-clawbot` 的 Feishu coordination，属于 `codex-enhanced` 的一部分
-- Level: sea-level operational goal
-- Primary actor: workspace user
-- Stakeholders and interests:
-  - 同时运行多个 workspaces 或 terminals 的 user: 对于同一个 Feishu app，只有目标 process 应该持有 embedded websocket。
-  - External collaborators: inbound messages 应持续流向一个 live owner，而不是被重复消费或直接丢失。
-  - Feishu app owner: runtime ownership state 应由 app 自身拥有、可检查、可修复，而不是依赖额外的付费协调器。
-  - Runtime: stale leader、split-brain 和 schema drift 必须可见，而不是被静默容忍。
-- Preconditions:
-  - 已配置 Feishu app credentials。
-  - `feishu.coordination.base_token` 指向一个该 app 可读可写的 Base。
-  - 可能存在一个或多个 Codex processes 竞争同一个 Feishu `app_id`。
-- Minimal guarantees:
-  - 非 leader process 不会继续假装自己拥有 websocket。
-  - 过期的 force-intent 或 heartbeat state 不再影响 leadership。
-  - Permission、schema 或 table-resolution failures 会带着可修复指引被暴露出来。
-  - Coordination state 存在于 Feishu Base 中，并由 app credentials 持有，而不是写进一个隐藏 sidecar service。
-- Success guarantees:
-  - 对于当前 `app_id`，恰好有一个预期中的 process 作为 websocket owner。
-  - User 可以为当前 session 显式发起 ownership preemption。
-  - 如果没有提供 table IDs，clawbot 会自动发现或创建必需的 coordination tables 和 fields。
-- Trigger:
-  - 一个配置了 coordination 的 clawbot runtime 启动、刷新 leadership，或 user 在 `/clawbot` 中启用 forced websocket preemption。
-- Main success scenario:
-  1. Codex 以启用了 Feishu coordination 的方式启动 clawbot runtime。
-  2. Clawbot 解析自己的 process identity，并在 Feishu Base 中发现或创建 coordination tables。
-  3. Clawbot 为当前 `app_id` 和 instance 写入或刷新 heartbeat row。
-  4. Clawbot 读取 active heartbeat 和 force-intent rows，并以 deterministic 规则计算 elected owner。
-  5. 如果当前 process 被选为 leader，它就打开或保持 websocket，并处理 inbound Feishu events。
-  6. 如果未当选 leader，它就保持 follower mode，只继续发布 heartbeat。
-  7. 当 user 启用 `force connect` 时，clawbot 会持续为当前 session 刷新 force-intent row，直到该状态被关闭。
-  8. 其他 contenders 会在下一次 coordination refresh 时观察到新的 intent，并让出 websocket ownership。
-- Extensions:
-  - 2a. 配置的 `base_token` 无效或不可访问：
-    Clawbot 会暴露失败，而不是假装 coordination 已生效。
-  - 2b. 配置的 table IDs 已陈旧，或 schema 出现 drift：
-    Clawbot 会校验 table shape，说明具体问题，并允许 repair 或 recreation，而不是写进一个不兼容 schema。
-  - 4a. 上一个 leader 没有清理就消失：
-    它的 heartbeat 会在 TTL 过期后失效，随后由下一个 live contender 接管 owner 身份。
-  - 4b. 多个 contenders 具有相同 priority：
-    Deterministic tie-break 会回退到 `instance_id`，再回退到 `session_id`。
-  - 7a. `force connect` 被关闭，或 owning process 停止刷新：
-    Force-intent 会自然过期，leader election 恢复为普通的 priority-based 模式。
 
 ## UC-8 Use Keyboard Shortcuts To Revise And Export Current Content
 
@@ -467,10 +376,6 @@
 - After-turn 和 background workflow activity 不会冻结主 interactive thread。
 - `response: user` 的 workflow 回复会被提交回正确的 primary thread；若回复非空，它可以再次驱动 `after_turn`，若回复为空，递归链会自然停止。
 - main-thread compact follow-up 失败时，错误是可见的，并且不会静默吞掉或错误提交 follow-up。
-- Feishu session bindings 能在常见 runtime disruptions 下保持可用，并支持可见的 inbound/outbound handling。
-- 当多个 Codex processes 共用同一个 Feishu app 时，只有 elected owner 会保持 embedded websocket active。
-- Users 可以为当前 session 显式 preempt websocket ownership，并且当 force refresh 停止后，这种 preemption 会自然失效。
-- 当 table IDs 未预配置时，clawbot 可以发现或 auto-provision 必需的 Feishu Base coordination tables 和 fields。
 - `/dream` 通过 managed sections 生成 repo-local memory updates，而不是做 ad hoc file rewrites。
 - `/insight` 可以从本地 rollout history 生成 offline report。
 - `Ctrl-X Ctrl-U` 与 `Ctrl-X Ctrl-Y` 恢复可用。
@@ -509,43 +414,36 @@
    - after-turn follow-up routing and retrigger behavior
    - TUI workflow controls
 
-4. Feishu bridge and coordination
-   - clawbot bridge
-   - binding store
-   - inbound/outbound delivery
-   - heartbeat/force-intent election
-   - auto-provisioned schema management
-
-5. Structured human-in-the-loop controls
+4. Structured human-in-the-loop controls
    - `question`
    - hidden state inspection
    - low-noise TUI affordances
    - keyboard revision/export shortcuts
    - hidden helper discussion threads
 
-6. Completed-turn observability
+5. Completed-turn observability
    - completion timestamp
    - precise turn duration
    - completion-state separators
 
-7. Retrospective and repo-local memory
+6. Retrospective and repo-local memory
    - `/dream`
    - repo-local memory storage
    - managed `AGENTS.md` updates
    - generated skill updates
 
-8. Offline observability
+7. Offline observability
    - `/insight`
    - local rollout-derived reports
 
-9. Contributor workflow sustainability
+8. Contributor workflow sustainability
    - repo-local `AGENTS.md`
    - `progress.md`
    - nightly + cranelift dev path
    - LLVM exceptions for incompatible crates
    - schema/export recipe consistency
 
-10. Release automation
+9. Release automation
    - Python runtime packaging
    - artifact reuse
    - multi-platform validation
@@ -553,9 +451,6 @@
 
 ## Open Questions
 
-- Feishu Base coordination 是否应该一直保持 `app_id`-global，还是未来要按 channel 或 bound conversation 进一步切分 ownership？
-- `force-connect` 应继续作为 persistent workspace setting，还是应该演进为一个显式的 session-scoped lease，并带有更强的 expiry semantics？
-- Feishu 是否会一直是唯一 external bridge，还是长期目标其实是一个更通用的 “generic external user inbox”，而 Feishu 只是第一个 adapter？
 - `/dream` 是否应继续以 repo-root 为中心，还是未来要自动下钻到 nested `AGENTS.md` scopes？
 - `/insight` 是否应继续保持为纯本地 offline artifact，还是未来应反过来 feeding runtime guidance，以及 profile/workflow tuning loops？
 - `/btw` 目前仍明确拒绝某些客户端无法安全承载的交互型请求；后续是否要把这些请求也纳入 hidden thread UI surface？

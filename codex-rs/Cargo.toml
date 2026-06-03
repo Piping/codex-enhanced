@@ -27,7 +27,6 @@ members = [
     "cloud-tasks-client",
     "cloud-tasks-mock-client",
     "cli",
-    "clawbot",
     "collaboration-mode-templates",
     "connectors",
     "config",
@@ -144,7 +143,6 @@ codex-backend-client = { path = "backend-client" }
 codex-builtin-mcps = { path = "builtin-mcps" }
 codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli" }
-codex-clawbot = { path = "clawbot" }
 codex-client = { path = "codex-client" }
 codex-collaboration-mode-templates = { path = "collaboration-mode-templates" }
 codex-cloud-requirements = { path = "cloud-requirements" }

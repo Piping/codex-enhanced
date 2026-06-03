@@ -1,6 +1,5 @@
 use super::*;
 use crate::app_event::BtwEvent;
-use crate::app_event::ClawbotEvent;
 use crate::app_event::ThreadEvent;
 use crate::app_event::WorkflowEvent;
 use pretty_assertions::assert_eq;
@@ -2120,19 +2119,6 @@ async fn slash_memories_opens_memory_menu() {
 
     assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Use memories"));
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
-    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
-}
-
-#[tokio::test]
-async fn slash_clawbot_opens_management_popup() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    chat.dispatch_command(SlashCommand::Clawbot);
-
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::Clawbot(ClawbotEvent::OpenClawbotManagement))
-    );
     assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
 }
 

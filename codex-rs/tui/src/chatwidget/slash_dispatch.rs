@@ -8,7 +8,6 @@
 use super::goal_validation::GoalObjectiveValidationSource;
 use super::*;
 use crate::app_event::BtwEvent;
-use crate::app_event::ClawbotEvent;
 use crate::app_event::ProfileEvent;
 use crate::app_event::ThreadEvent;
 use crate::app_event::ThreadGoalSetMode;
@@ -213,10 +212,6 @@ impl ChatWidget {
             }
             SlashCommand::Settings => {
                 self.open_settings_popup();
-            }
-            SlashCommand::Clawbot => {
-                self.app_event_tx
-                    .send(AppEvent::Clawbot(ClawbotEvent::OpenClawbotManagement));
             }
             SlashCommand::Personality => {
                 self.open_personality_popup();
@@ -1005,7 +1000,6 @@ impl ChatWidget {
             | SlashCommand::Workflow
             | SlashCommand::Respawn
             | SlashCommand::Btw
-            | SlashCommand::Clawbot
             | SlashCommand::DelAgent
             | SlashCommand::Insight => QueueDrain::Stop,
         }

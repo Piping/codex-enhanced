@@ -13,8 +13,6 @@ Website: `https://codex-enhanced.com`
   - `ephemeral`: fork compacted context for one run, then discard it
   - `persistent`: keep a private retained context and refresh it with recent
     main-thread messages
-- Feishu clawbot integration for bound sessions, automatic inbound handling, and
-  plain-text outbound replies
 - Fast `respawn` support so the CLI can restart and resume the current session
 
 ## Install

@@ -8,7 +8,7 @@
 
 </div>
 
-`codex-enhanced` 是一个基于 OpenAI Codex CLI Rust 技术栈继续演进的 Codex 发行版。它的重点不是再包一层 prompt，而是把 Codex 变成一个可以跨账户、跨会话、跨工作流、跨外部消息入口持续在线的 operator surface。
+`codex-enhanced` 是一个基于 OpenAI Codex CLI Rust 技术栈继续演进的 Codex 发行版。它的重点不是再包一层 prompt，而是把 Codex 变成一个可以跨账户、跨会话、跨工作流持续在线的 operator surface。
 
 如果你只需要一个终端聊天工具，基础 Codex 体验已经足够强。这个发行版要解决的是下一层问题：让 Codex 不只是一次性的对话循环，而是一个可持续运转的工作台。
 
@@ -22,7 +22,6 @@
 - 多 profile 路由和 fallback，而不是只有一个脆弱默认值
 - 会话续接，而不是反复重建上下文
 - 工作流触发器和后台任务，而不是永远一问一答
-- 飞书桥接入口，而不是只接受终端输入
 - 更低噪音的 operator UX，而不是继续堆 prompt 仪式感
 
 核心目标只有一个：让 Codex 更像持续在线的控制台，而不是终端里的聊天框。
@@ -35,7 +34,6 @@
 | 工作流编排 | `/workflow` | 直接管理 `.codex/workflows/*.yaml`，手动运行 job，或者挂接 `before_turn`、`after_turn`、`interval`、`cron`、`file_watch` 等触发器。 |
 | 会话洞察报告 | `/insight` | 扫描本地 Codex session，并在 `~/.codex/reports/` 下生成离线 HTML 分析报告，便于回看 rollout 和逐层钻取。 |
 | 会话连续性 | `/resume` | 把保存过的工作续上，而不是每次从零重建长上下文。 |
-| 外部消息桥接 | `/clawbot` | 把 workspace-local 的飞书会话绑定到 Codex thread，接收未读消息并把最终回复发回外部。 |
 | UI 与对齐控制 | `/settings`、`question`、键盘 chord | 降低界面噪音，在 TUI 中收集结构化答案，并让人工参与点更明确。 |
 
 ## Quickstart
@@ -116,17 +114,6 @@ jobs:
 
 当 Codex 开始承担按小时或按天推进的任务时，这一点会非常重要。
 
-### 4. 把飞书接进同一个闭环
-
-`/clawbot` 把 workspace-local 的飞书会话、线程绑定、未读消息队列和回复回传放进同一个运行时。
-
-具体来说，它支持：
-
-- 把飞书会话绑定到当前 Codex thread
-- 让外部消息进入当前 workspace 的执行闭环
-- 把最终回复发回飞书
-- 让 session 和 binding 状态保持在 workspace 本地
-
 ## 当前已经落地的能力
 
 下面这些能力都已经在仓库中实现：
@@ -136,7 +123,6 @@ jobs:
 - `/workflow` 任务编排
 - `/resume` 恢复已保存会话
 - `/settings` 控制 UI 展示信息
-- `/clawbot` 对接飞书收发消息
 - 更强的 `question` 式对齐交互
 - 键盘 chord 支持
 - `codex-enhanced` 的 PyPI 打包与发布流程
@@ -147,7 +133,6 @@ jobs:
 
 - profile 路由状态保存在 `accounts/profile-router.json`
 - workflow 定义直接保存在 `.codex/workflows/*.yaml`
-- clawbot 相关状态保存在 `.codex/clawbot/`
 - operator 的结构化回答通过 TUI 中的 `question` 流收集，而不是靠自由文本猜测
 
 它是有观点的，但不是黑盒。
@@ -156,7 +141,7 @@ jobs:
 
 如果你要继续查看实现或扩展能力，可以从这些位置开始：
 
-- [`codex-rs/`](./codex-rs) 是 Rust 工作区，包含 CLI、TUI、workflow、app-server 和 clawbot 集成
+- [`codex-rs/`](./codex-rs) 是 Rust 工作区，包含 CLI、TUI、workflow 和 app-server
 - [`sdk/python-runtime-enhanced/`](./sdk/python-runtime-enhanced) 是 `codex-enhanced` 的 Python wheel 打包目录
 - [`docs/workflows.md`](./docs/workflows.md) 说明 workflow 文件、trigger 和 job 管理方式
 - [`docs/slash_commands.md`](./docs/slash_commands.md) 说明 TUI slash commands，包括 `/insight`
@@ -173,19 +158,17 @@ jobs:
 - 多账户和多 profile 路由
 - 长会话恢复与连续性
 - workspace-local workflow orchestration
-- Feishu clawbot 集成
 - 本地 TUI 信息展示裁剪和可见性控制
 - 更强的人在环对齐交互
 
 ### 它不打算解决什么
 
 - 替代官方原版的全部托管和分发形态
-- 在飞书之外直接变成通用 IM 自动化中台
 - 把业务流程自动化做成零配置黑盒
 
 ## 项目说明
 
-这个项目不是从零开始。它建立在 OpenAI Codex CLI 的 Rust、TUI 和 app-server 基础之上，然后把精力进一步放到长期使用更痛的部分：账户运营、会话连续性、workflow、飞书入口、更低噪音的 UI 和 operator ergonomics。
+这个项目不是从零开始。它建立在 OpenAI Codex CLI 的 Rust、TUI 和 app-server 基础之上，然后把精力进一步放到长期使用更痛的部分：账户运营、会话连续性、workflow、更低噪音的 UI 和 operator ergonomics。
 
 如果你只需要一个在终端里聊天的 Codex，官方原版已经够用。
 

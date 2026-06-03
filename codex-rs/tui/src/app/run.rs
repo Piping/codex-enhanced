@@ -330,16 +330,6 @@ See the Codex keymap documentation for supported actions and examples."
             workflow_scheduler: WorkflowSchedulerState::default(),
             workflow_history: WorkflowHistoryState::default(),
             btw_session: None,
-            clawbot_controls_destination: ClawbotControlsDestination::Root,
-            clawbot_workspace_root: None,
-            clawbot_provider_task: None,
-            clawbot_pending_turns: HashMap::new(),
-            #[cfg(test)]
-            clawbot_outbound_messages: Vec::new(),
-            #[cfg(test)]
-            clawbot_outbound_reactions: Vec::new(),
-            #[cfg(test)]
-            clawbot_removed_outbound_reactions: Vec::new(),
         };
         match WorkflowFileWatchState::new(app.config.cwd.as_path(), app.app_event_tx.clone()) {
             Ok(state) => app.workflow_file_watch = Some(state),
@@ -363,8 +353,6 @@ See the Codex keymap documentation for supported actions and examples."
                 .await,
             "failed to load skills on startup",
         );
-        app.sync_clawbot_workspace(&mut app_server).await;
-
         #[cfg(target_os = "windows")]
         {
             let startup_permission_profile = app.config.permissions.permission_profile();
@@ -490,7 +478,6 @@ See the Codex keymap documentation for supported actions and examples."
                 }
             }
         };
-        app.abort_clawbot_provider_runtime();
         if let Err(err) = app_server.shutdown().await {
             tracing::warn!(error = %err, "failed to shut down embedded app server");
         }

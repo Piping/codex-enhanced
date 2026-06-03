@@ -6,7 +6,6 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
-use crate::app_event::ClawbotControlsDestination;
 use crate::app_event::ExitMode;
 use crate::app_event::FeedbackCategory;
 use crate::app_event::HistoryLookupResponse;
@@ -128,11 +127,6 @@ use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
-use codex_clawbot::PendingClawbotTurn;
-#[cfg(test)]
-use codex_clawbot::ProviderOutboundReaction;
-#[cfg(test)]
-use codex_clawbot::ProviderOutboundTextMessage;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::ModelAvailabilityNuxConfig;
@@ -201,9 +195,6 @@ mod app_server_events;
 pub(crate) mod app_server_requests;
 mod background_requests;
 mod btw;
-mod clawbot;
-mod clawbot_controller;
-mod clawbot_controls;
 mod config_persistence;
 mod editor_helpers;
 mod event_dispatch;
@@ -870,16 +861,6 @@ pub(crate) struct App {
     workflow_scheduler: WorkflowSchedulerState,
     workflow_history: WorkflowHistoryState,
     btw_session: Option<BtwSessionState>,
-    clawbot_controls_destination: ClawbotControlsDestination,
-    clawbot_workspace_root: Option<PathBuf>,
-    clawbot_provider_task: Option<JoinHandle<()>>,
-    clawbot_pending_turns: HashMap<ThreadId, VecDeque<PendingClawbotTurn>>,
-    #[cfg(test)]
-    clawbot_outbound_messages: Vec<ProviderOutboundTextMessage>,
-    #[cfg(test)]
-    clawbot_outbound_reactions: Vec<ProviderOutboundReaction>,
-    #[cfg(test)]
-    clawbot_removed_outbound_reactions: Vec<ProviderOutboundReaction>,
 }
 
 #[derive(Default)]
@@ -1010,7 +991,6 @@ mod tests;
 mod tests {
     use super::*;
     mod btw_tests;
-    mod clawbot_tests;
 
     use crate::app_backtrack::BacktrackSelection;
     use crate::app_backtrack::BacktrackState;
@@ -1031,7 +1011,6 @@ mod tests {
     use assert_matches::assert_matches;
     use codex_app_server_client::AppServerEvent;
 
-    use crate::app_event::ClawbotForwardingChannel;
     use crate::legacy_core::config::ConfigBuilder;
     use crate::legacy_core::config::ConfigOverrides;
     use crate::render::renderable::Renderable;
@@ -4262,16 +4241,6 @@ guardian_approval = true
             workflow_scheduler: WorkflowSchedulerState::default(),
             workflow_history: WorkflowHistoryState::default(),
             btw_session: None,
-            clawbot_controls_destination: ClawbotControlsDestination::Root,
-            clawbot_workspace_root: None,
-            clawbot_provider_task: None,
-            clawbot_pending_turns: HashMap::new(),
-            #[cfg(test)]
-            clawbot_outbound_messages: Vec::new(),
-            #[cfg(test)]
-            clawbot_outbound_reactions: Vec::new(),
-            #[cfg(test)]
-            clawbot_removed_outbound_reactions: Vec::new(),
         }
     }
 
@@ -4345,16 +4314,6 @@ guardian_approval = true
                 workflow_scheduler: WorkflowSchedulerState::default(),
                 workflow_history: WorkflowHistoryState::default(),
                 btw_session: None,
-                clawbot_controls_destination: ClawbotControlsDestination::Root,
-                clawbot_workspace_root: None,
-                clawbot_provider_task: None,
-                clawbot_pending_turns: HashMap::new(),
-                #[cfg(test)]
-                clawbot_outbound_messages: Vec::new(),
-                #[cfg(test)]
-                clawbot_outbound_reactions: Vec::new(),
-                #[cfg(test)]
-                clawbot_removed_outbound_reactions: Vec::new(),
             },
             rx,
             op_rx,
@@ -6725,8 +6684,7 @@ model = "gpt-5.2"
 
         while let Ok(event) = app_event_rx.try_recv() {
             match event {
-                AppEvent::Clawbot(ClawbotEvent::ClawbotTurnCompleted { .. })
-                | AppEvent::InsertHistoryCell(_)
+                AppEvent::InsertHistoryCell(_)
                 | AppEvent::Workflow(WorkflowEvent::ReplayWorkflowHistory { .. }) => {
                     continue;
                 }
@@ -7020,8 +6978,7 @@ model = "gpt-5.2"
                 }) => {
                     break (run_id, result);
                 }
-                AppEvent::Clawbot(ClawbotEvent::ClawbotTurnCompleted { .. })
-                | AppEvent::InsertHistoryCell(_)
+                AppEvent::InsertHistoryCell(_)
                 | AppEvent::Workflow(WorkflowEvent::ReplayWorkflowHistory { .. }) => {
                     continue;
                 }
@@ -7432,8 +7389,7 @@ model = "gpt-5.2"
         assert!(app.background_workflow_labels().is_empty());
         while let Ok(event) = app_event_rx.try_recv() {
             match event {
-                AppEvent::Clawbot(ClawbotEvent::ClawbotTurnCompleted { .. })
-                | AppEvent::InsertHistoryCell(_)
+                AppEvent::InsertHistoryCell(_)
                 | AppEvent::Workflow(WorkflowEvent::ReplayWorkflowHistory { .. }) => {}
                 other => panic!("unexpected event after workflow follow-up completion: {other:?}"),
             }

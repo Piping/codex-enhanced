@@ -26,9 +26,6 @@ use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
-use codex_app_server_protocol::Turn as AppServerTurn;
-use codex_clawbot::ClawbotTurnMode;
-use codex_clawbot::ProviderEvent as ClawbotProviderEvent;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
@@ -96,53 +93,6 @@ impl RealtimeAudioDeviceKind {
 pub(crate) enum RuntimeProfileTarget {
     Default,
     Named(String),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ClawbotFeishuConfigField {
-    AppId,
-    AppSecret,
-    VerificationToken,
-    EncryptKey,
-    BotOpenId,
-    BotUserId,
-    CoordinationBaseToken,
-    CoordinationHeartbeatTableId,
-    CoordinationForceTableId,
-    CoordinationInstanceId,
-    CoordinationOwnerPriority,
-    CoordinationForceConnect,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ClawbotForwardingChannel {
-    Inbound,
-    Outbound,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ClawbotSessionBindSource {
-    DiscoveredSession,
-    #[cfg(test)]
-    ManualSessionId,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) enum ClawbotControlsDestination {
-    #[default]
-    Root,
-    Channels,
-    BoundChannels,
-    BoundChannel {
-        thread_id: String,
-    },
-    UnboundSessions,
-    UnboundSession {
-        session_id: String,
-    },
-    Cleanup,
-    Configuration,
-    Diagnostics,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -334,53 +284,6 @@ pub(crate) enum WorkflowEvent {
     },
 }
 
-#[derive(Debug)]
-pub(crate) enum ClawbotEvent {
-    ClawbotProviderEvent {
-        event: ClawbotProviderEvent,
-    },
-    ClawbotTurnCompleted {
-        thread_id: ThreadId,
-        turn: AppServerTurn,
-    },
-    OpenClawbotManagement,
-    OpenClawbotManagementView {
-        destination: ClawbotControlsDestination,
-    },
-    OpenClawbotFeishuConfigPrompt {
-        field: ClawbotFeishuConfigField,
-    },
-    SaveClawbotFeishuConfigValue {
-        field: ClawbotFeishuConfigField,
-        value: String,
-    },
-    BindClawbotDiscoveredSession {
-        session_id: String,
-    },
-    BindClawbotSessionAndPreempt {
-        session_id: String,
-    },
-    ClawbotSetTurnMode {
-        mode: ClawbotTurnMode,
-    },
-    ClawbotSetThreadForwarding {
-        thread_id: ThreadId,
-        channel: ClawbotForwardingChannel,
-        enabled: bool,
-    },
-    ScanClawbotFeishuSessions,
-    ClearClawbotFeishuSessions,
-    RetryClawbotFeishuConnection,
-    ToggleClawbotForceConnect,
-    ClawbotDisconnectThread {
-        thread_id: ThreadId,
-    },
-    EditClawbotStateFile {
-        label: &'static str,
-        path: PathBuf,
-    },
-}
-
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
@@ -462,7 +365,6 @@ pub(crate) enum AppEvent {
     Thread(ThreadEvent),
     Btw(BtwEvent),
     Workflow(WorkflowEvent),
-    Clawbot(ClawbotEvent),
 
     /// Request to exit the application.
     ///
