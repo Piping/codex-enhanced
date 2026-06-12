@@ -120,6 +120,18 @@ wire_api = "chat"
 }
 
 #[test]
+fn test_deserialize_message_wire_api() {
+    let provider_toml = r#"
+name = "Anthropic"
+base_url = "https://api.anthropic.com/v1"
+wire_api = "message"
+        "#;
+
+    let provider = toml::from_str::<ModelProviderInfo>(provider_toml).unwrap();
+    assert_eq!(provider.wire_api, WireApi::Message);
+}
+
+#[test]
 fn test_deserialize_websocket_connect_timeout() {
     let provider_toml = r#"
 name = "OpenAI"
@@ -277,6 +289,21 @@ fn test_built_in_model_providers_include_amazon_bedrock() {
             .get(AMAZON_BEDROCK_PROVIDER_ID)
             .map(ModelProviderInfo::is_amazon_bedrock),
         Some(true)
+    );
+}
+
+#[test]
+fn test_built_in_model_providers_include_anthropic() {
+    let providers = built_in_model_providers(/*openai_base_url*/ None);
+    let provider = providers
+        .get(ANTHROPIC_PROVIDER_ID)
+        .expect("anthropic provider should exist");
+
+    assert_eq!(provider.name, "Anthropic");
+    assert_eq!(provider.wire_api, WireApi::Message);
+    assert_eq!(
+        provider.base_url.as_deref(),
+        Some("https://api.anthropic.com/v1")
     );
 }
 

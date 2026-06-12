@@ -15,6 +15,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -23,6 +25,7 @@ use tracing::debug;
 use tracing::trace;
 
 const OPENAI_MODEL_HEADER: &str = "openai-model";
+static NEXT_SYNTHETIC_ITEM_ID: AtomicU64 = AtomicU64::new(1);
 
 pub fn spawn_chat_completions_stream(
     stream_response: StreamResponse,
@@ -274,6 +277,11 @@ fn extract_reasoning_text(reasoning: &Value) -> Option<&str> {
         .or_else(|| reasoning.get("content").and_then(Value::as_str))
 }
 
+fn synthetic_item_id(kind: &str) -> String {
+    let id = NEXT_SYNTHETIC_ITEM_ID.fetch_add(1, Ordering::Relaxed);
+    format!("chatcmpl-{kind}-{id}")
+}
+
 async fn append_delta_content(
     tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>,
     assistant_item: &mut Option<ResponseItem>,
@@ -300,7 +308,7 @@ async fn append_assistant_text(
 ) {
     if assistant_item.is_none() {
         let item = ResponseItem::Message {
-            id: None,
+            id: Some(synthetic_item_id("assistant")),
             role: "assistant".to_string(),
             content: Vec::new(),
             phase: None,
@@ -326,7 +334,7 @@ async fn append_reasoning_text(
 ) {
     if reasoning_item.is_none() {
         let item = ResponseItem::Reasoning {
-            id: String::new(),
+            id: synthetic_item_id("reasoning"),
             summary: Vec::new(),
             content: Some(Vec::new()),
             encrypted_content: None,
@@ -435,17 +443,27 @@ mod tests {
         );
         assert_matches!(
             &events[2],
-            ResponseEvent::OutputItemAdded(ResponseItem::Message { .. })
+            ResponseEvent::OutputItemAdded(ResponseItem::Message { id, .. }) if id.is_some()
         );
         assert_matches!(&events[3], ResponseEvent::OutputTextDelta(delta) if delta == "hi");
         assert_matches!(
             &events[4],
-            ResponseEvent::OutputItemDone(ResponseItem::Reasoning { .. })
+            ResponseEvent::OutputItemDone(ResponseItem::Reasoning { id, .. }) if !id.is_empty()
         );
         assert_matches!(
             &events[5],
-            ResponseEvent::OutputItemDone(ResponseItem::Message { role, .. }) if role == "assistant"
+            ResponseEvent::OutputItemDone(ResponseItem::Message { id, role, .. })
+                if id.is_some() && role == "assistant"
         );
+        let ResponseEvent::OutputItemAdded(ResponseItem::Message { id: added_id, .. }) = &events[2]
+        else {
+            panic!("expected assistant item added");
+        };
+        let ResponseEvent::OutputItemDone(ResponseItem::Message { id: done_id, .. }) = &events[5]
+        else {
+            panic!("expected assistant item done");
+        };
+        assert_eq!(added_id, done_id);
         assert_matches!(&events[6], ResponseEvent::Completed { .. });
     }
 

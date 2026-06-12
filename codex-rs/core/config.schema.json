@@ -2463,6 +2463,19 @@
           "description": "Enable animations (welcome screen, shimmer effects, spinners). Defaults to `true`.",
           "type": "boolean"
         },
+        "display_preferences": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiDisplayPreferences"
+            }
+          ],
+          "default": {
+            "show_hook_output": true,
+            "show_patch_diffs": true,
+            "show_tool_results": true
+          },
+          "description": "Transcript visibility preferences that affect only local TUI rendering."
+        },
         "keymap": {
           "allOf": [
             {
@@ -2581,19 +2594,6 @@
             }
           },
           "description": "Keybinding overrides for the TUI.\n\nThis supports rebinding selected actions globally and by context. Context bindings take precedence over `global` bindings."
-        },
-        "display_preferences": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/TuiDisplayPreferences"
-            }
-          ],
-          "default": {
-            "show_hook_output": true,
-            "show_patch_diffs": true,
-            "show_tool_results": true
-          },
-          "description": "Transcript visibility preferences that affect only local TUI rendering."
         },
         "model_availability_nux": {
           "allOf": [
@@ -2836,6 +2836,27 @@
             }
           ],
           "description": "Toggle the composer shortcut overlay."
+        }
+      },
+      "type": "object"
+    },
+    "TuiDisplayPreferences": {
+      "additionalProperties": false,
+      "properties": {
+        "show_hook_output": {
+          "default": true,
+          "description": "Show hook lifecycle and hook output entries in the transcript. Defaults to `true`.",
+          "type": "boolean"
+        },
+        "show_patch_diffs": {
+          "default": true,
+          "description": "Show patch/edit diff summaries in transcript cells. Defaults to `true`.",
+          "type": "boolean"
+        },
+        "show_tool_results": {
+          "default": true,
+          "description": "Show MCP/custom tool result bodies in transcript cells. Defaults to `true`.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -3661,27 +3682,6 @@
       },
       "type": "object"
     },
-    "TuiDisplayPreferences": {
-      "additionalProperties": false,
-      "properties": {
-        "show_hook_output": {
-          "default": true,
-          "description": "Show hook lifecycle and hook output entries in the transcript. Defaults to `true`.",
-          "type": "boolean"
-        },
-        "show_patch_diffs": {
-          "default": true,
-          "description": "Show patch/edit diff summaries in transcript cells. Defaults to `true`.",
-          "type": "boolean"
-        },
-        "show_tool_results": {
-          "default": true,
-          "description": "Show MCP/custom tool result bodies in transcript cells. Defaults to `true`.",
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
     "UriBasedFileOpener": {
       "oneOf": [
         {
@@ -3786,6 +3786,20 @@
     "WireApi": {
       "description": "Wire protocol that the provider speaks.",
       "oneOf": [
+        {
+          "description": "The legacy Chat Completions API exposed at `/v1/chat/completions`.",
+          "enum": [
+            "chat"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The Anthropic Messages API exposed at `/v1/messages`.",
+          "enum": [
+            "message"
+          ],
+          "type": "string"
+        },
         {
           "description": "The Responses API exposed by OpenAI at `/v1/responses`.",
           "enum": [

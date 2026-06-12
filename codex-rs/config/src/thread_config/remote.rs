@@ -153,6 +153,7 @@ fn model_provider_from_proto(
     let id = provider.id;
     let wire_api = match proto::WireApi::try_from(provider.wire_api) {
         Ok(proto::WireApi::Responses) => WireApi::Responses,
+        Ok(proto::WireApi::Message) => WireApi::Message,
         Ok(proto::WireApi::Unspecified) => {
             return Err(parse_error("remote thread config omitted wire_api"));
         }
@@ -285,6 +286,7 @@ fn proto_wire_api(wire_api: WireApi) -> proto::WireApi {
         WireApi::Chat => {
             panic!("thread config proto does not support chat wire api")
         }
+        WireApi::Message => proto::WireApi::Message,
         WireApi::Responses => proto::WireApi::Responses,
     }
 }

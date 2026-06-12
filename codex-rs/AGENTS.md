@@ -2,7 +2,7 @@
 
 This file keeps durable, repo-specific guidance for future Codex work in `codex-rs`.
 
-Detailed task history and validation logs live in [progress.md](codex-rs/progress.md).
+Detailed task history and validation logs live in [progress.md](progress.md).
 
 ## Working Agreement
 

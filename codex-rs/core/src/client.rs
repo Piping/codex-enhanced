@@ -25,6 +25,8 @@
 
 #[path = "client/chat_completions.rs"]
 mod chat_completions;
+#[path = "client/messages.rs"]
+mod messages;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -1552,6 +1554,9 @@ impl ModelClientSession {
                     session_telemetry,
                 )
                 .await
+            }
+            WireApi::Message => {
+                messages::stream_messages(self, prompt, model_info, session_telemetry).await
             }
             WireApi::Responses => {
                 if self.client.responses_websocket_enabled() {
