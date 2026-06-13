@@ -1,5 +1,7 @@
-use starlark::Error as StarlarkError;
 use thiserror::Error;
+
+#[cfg(feature = "starlark")]
+use starlark::Error as StarlarkError;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -47,6 +49,7 @@ pub enum Error {
         location: Option<ErrorLocation>,
     },
     #[error("starlark error: {0}")]
+    #[cfg(feature = "starlark")]
     Starlark(StarlarkError),
 }
 
@@ -79,6 +82,7 @@ impl Error {
         match self {
             Error::ExampleDidNotMatch { location, .. }
             | Error::ExampleDidMatch { location, .. } => location.clone(),
+            #[cfg(feature = "starlark")]
             Error::Starlark(err) => err.span().map(|span| {
                 let resolved = span.resolve_span();
                 ErrorLocation {

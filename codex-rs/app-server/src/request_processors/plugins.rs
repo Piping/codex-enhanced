@@ -3,12 +3,17 @@ use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallPolicy;
+#[cfg(feature = "mcp")]
 use codex_config::types::McpServerConfig;
 use codex_core_plugins::remote::is_valid_remote_plugin_id;
 use codex_core_plugins::remote::validate_remote_plugin_id;
+#[cfg(feature = "mcp")]
 use codex_mcp::McpOAuthLoginSupport;
+#[cfg(feature = "mcp")]
 use codex_mcp::oauth_login_support;
+#[cfg(feature = "mcp")]
 use codex_mcp::should_retry_without_scopes;
+#[cfg(feature = "mcp")]
 use codex_rmcp_client::perform_oauth_login_silent;
 
 #[derive(Clone)]
@@ -303,7 +308,10 @@ impl PluginRequestProcessor {
             if thread_manager.list_thread_ids().await.is_empty() {
                 return;
             }
+            #[cfg(feature = "mcp")]
             crate::mcp_refresh::queue_best_effort_refresh(&thread_manager, &config_manager).await;
+            #[cfg(not(feature = "mcp"))]
+            let _ = config_manager;
         });
     }
 
@@ -909,7 +917,9 @@ impl PluginRequestProcessor {
 
         self.on_effective_plugins_changed();
 
+        #[cfg(feature = "mcp")]
         let plugin_mcp_servers = load_plugin_mcp_servers(result.installed_path.as_path()).await;
+        #[cfg(feature = "mcp")]
         if !plugin_mcp_servers.is_empty() {
             self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
                 .await;
@@ -1025,7 +1035,9 @@ impl PluginRequestProcessor {
         self.analytics_events_client
             .track_plugin_installed(plugin_metadata);
 
+        #[cfg(feature = "mcp")]
         let plugin_mcp_servers = load_plugin_mcp_servers(result.installed_path.as_path()).await;
+        #[cfg(feature = "mcp")]
         if !plugin_mcp_servers.is_empty() {
             self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
                 .await;
@@ -1111,6 +1123,7 @@ impl PluginRequestProcessor {
         )
     }
 
+    #[cfg(feature = "mcp")]
     async fn start_plugin_mcp_oauth_logins(
         &self,
         config: &Config,

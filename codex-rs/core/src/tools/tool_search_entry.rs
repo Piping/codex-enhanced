@@ -1,10 +1,14 @@
+#[cfg(feature = "mcp")]
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_tools::LoadableToolSpec;
+#[cfg(feature = "mcp")]
 use codex_tools::ToolSearchResultSource;
 use codex_tools::ToolsConfig;
 use codex_tools::dynamic_tool_to_loadable_tool_spec;
+#[cfg(feature = "mcp")]
 use codex_tools::tool_search_result_source_to_loadable_tool_spec;
+#[cfg(feature = "mcp")]
 use std::collections::HashMap;
 
 #[derive(Clone)]
@@ -15,23 +19,26 @@ pub(crate) struct ToolSearchEntry {
 }
 
 pub(crate) fn build_tool_search_entries(
-    mcp_tools: Option<&HashMap<String, ToolInfo>>,
+    #[cfg(feature = "mcp")] mcp_tools: Option<&HashMap<String, ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> Vec<ToolSearchEntry> {
     let mut entries = Vec::new();
 
-    let mut mcp_tools = mcp_tools
-        .map(|tools| tools.values().collect::<Vec<_>>())
-        .unwrap_or_default();
-    mcp_tools.sort_by_key(|info| info.canonical_tool_name().display());
-    for info in mcp_tools {
-        match mcp_tool_search_entry(info) {
-            Ok(entry) => entries.push(entry),
-            Err(error) => {
-                let tool_name = info.canonical_tool_name();
-                tracing::error!(
-                    "Failed to convert deferred MCP tool `{tool_name}` to OpenAI tool: {error:?}"
-                );
+    #[cfg(feature = "mcp")]
+    {
+        let mut mcp_tools = mcp_tools
+            .map(|tools| tools.values().collect::<Vec<_>>())
+            .unwrap_or_default();
+        mcp_tools.sort_by_key(|info| info.canonical_tool_name().display());
+        for info in mcp_tools {
+            match mcp_tool_search_entry(info) {
+                Ok(entry) => entries.push(entry),
+                Err(error) => {
+                    let tool_name = info.canonical_tool_name();
+                    tracing::error!(
+                        "Failed to convert deferred MCP tool `{tool_name}` to OpenAI tool: {error:?}"
+                    );
+                }
             }
         }
     }
@@ -55,9 +62,10 @@ pub(crate) fn build_tool_search_entries(
 
 pub(crate) fn build_tool_search_entries_for_config(
     config: &ToolsConfig,
-    mcp_tools: Option<&HashMap<String, ToolInfo>>,
+    #[cfg(feature = "mcp")] mcp_tools: Option<&HashMap<String, ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> Vec<ToolSearchEntry> {
+    #[cfg(feature = "mcp")]
     let mcp_tools = if config.namespace_tools {
         mcp_tools
     } else {
@@ -68,9 +76,14 @@ pub(crate) fn build_tool_search_entries_for_config(
         .filter(|tool| config.namespace_tools || tool.namespace.is_none())
         .cloned()
         .collect::<Vec<_>>();
-    build_tool_search_entries(mcp_tools, &dynamic_tools)
+    build_tool_search_entries(
+        #[cfg(feature = "mcp")]
+        mcp_tools,
+        &dynamic_tools,
+    )
 }
 
+#[cfg(feature = "mcp")]
 fn mcp_tool_search_entry(info: &ToolInfo) -> Result<ToolSearchEntry, serde_json::Error> {
     Ok(ToolSearchEntry {
         search_text: build_mcp_search_text(info),
@@ -94,6 +107,7 @@ fn dynamic_tool_search_entry(tool: &DynamicToolSpec) -> Result<ToolSearchEntry, 
     })
 }
 
+#[cfg(feature = "mcp")]
 fn build_mcp_search_text(info: &ToolInfo) -> String {
     let mut parts = vec![
         info.canonical_tool_name().display(),

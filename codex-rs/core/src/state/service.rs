@@ -8,6 +8,7 @@ use crate::config::StartedNetworkProxy;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianRejection;
 use crate::guardian::GuardianRejectionCircuitBreaker;
+#[cfg(feature = "mcp")]
 use crate::mcp::McpManager;
 use crate::skills_watcher::SkillsWatcher;
 use crate::tools::code_mode::CodeModeService;
@@ -20,6 +21,7 @@ use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
 use codex_hooks::Hooks;
 use codex_login::AuthManager;
+#[cfg(feature = "mcp")]
 use codex_mcp::McpConnectionManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_otel::SessionTelemetry;
@@ -30,12 +32,16 @@ use codex_thread_store::ThreadStore;
 use std::path::PathBuf;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
+#[cfg(feature = "mcp")]
 use tokio::sync::RwLock;
 use tokio::sync::watch;
+#[cfg(feature = "mcp")]
 use tokio_util::sync::CancellationToken;
 
 pub(crate) struct SessionServices {
+    #[cfg(feature = "mcp")]
     pub(crate) mcp_connection_manager: Arc<RwLock<McpConnectionManager>>,
+    #[cfg(feature = "mcp")]
     pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
     #[cfg_attr(not(unix), allow(dead_code))]
@@ -58,6 +64,7 @@ pub(crate) struct SessionServices {
     pub(crate) runtime_handle: Handle,
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
+    #[cfg(feature = "mcp")]
     pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) skills_watcher: Arc<SkillsWatcher>,
     pub(crate) agent_control: AgentControl,

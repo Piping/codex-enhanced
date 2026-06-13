@@ -1835,7 +1835,7 @@ impl App {
                     ));
                 }
             },
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(feature = "voice")]
             AppEvent::UpdateRecordingMeter { id, text } => {
                 // Update in place to preserve the element id for subsequent frames.
                 let updated = self.chat_widget.update_recording_meter_in_place(&id, &text);

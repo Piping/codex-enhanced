@@ -861,3 +861,35 @@ async fn live_app_server_thread_closed_requests_immediate_exit() {
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::Immediate)));
 }
+
+#[tokio::test]
+async fn live_app_server_item_completed_after_replay_does_not_duplicate_reasoning_summary() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let item = AppServerThreadItem::Reasoning {
+        id: "reasoning-1".to_string(),
+        summary: vec!["**Checked state**\n\nThe relevant state was inspected.".to_string()],
+        content: Vec::new(),
+    };
+
+    chat.replay_thread_item(
+        item.clone(),
+        "turn-1".to_string(),
+        ReplayKind::ThreadSnapshot,
+    );
+
+    let replayed = drain_insert_history(&mut rx);
+    assert_eq!(replayed.len(), 1);
+    assert!(lines_to_single_string(&replayed[0]).contains("The relevant state was inspected."));
+
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+            item,
+        }),
+        /*replay_kind*/ None,
+    );
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+}

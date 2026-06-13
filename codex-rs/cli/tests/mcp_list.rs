@@ -1,3 +1,5 @@
+#![cfg(feature = "mcp")]
+
 use std::path::Path;
 
 use anyhow::Result;

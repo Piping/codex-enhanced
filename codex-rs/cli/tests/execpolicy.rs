@@ -1,3 +1,5 @@
+#![cfg(feature = "execpolicy")]
+
 use std::fs;
 
 use assert_cmd::Command;

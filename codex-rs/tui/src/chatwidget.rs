@@ -49,7 +49,7 @@ use crate::app_event::RealtimeAudioDeviceKind;
 use crate::app_server_approval_conversions::file_update_changes_to_display;
 use crate::approval_events::ApplyPatchApprovalRequestEvent;
 use crate::approval_events::ExecApprovalRequestEvent;
-#[cfg(not(target_os = "linux"))]
+#[cfg(feature = "voice")]
 use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::StatusLineItem;
@@ -1034,6 +1034,8 @@ pub(crate) struct ChatWidget {
     turn_runtime_metrics: RuntimeMetricsSummary,
     // Ordered, deduplicated item activity observed for the active live turn.
     turn_activity_tracker: TurnActivityTracker,
+    // Item ids already rendered from completed app-server thread items.
+    rendered_completed_item_ids: HashSet<String>,
     // Runtime activity accumulated across completed turns in the current live session.
     session_activity_summary: SessionActivitySummary,
     last_rendered_width: std::cell::Cell<Option<usize>>,
@@ -1760,8 +1762,7 @@ impl ChatWidget {
     }
 
     fn realtime_conversation_enabled(&self) -> bool {
-        self.config.features.enabled(Feature::RealtimeConversation)
-            && cfg!(not(target_os = "linux"))
+        self.config.features.enabled(Feature::RealtimeConversation) && cfg!(feature = "voice")
     }
 
     fn realtime_audio_device_selection_enabled(&self) -> bool {
@@ -5260,6 +5261,7 @@ impl ChatWidget {
             plan_item_active: false,
             turn_runtime_metrics: RuntimeMetricsSummary::default(),
             turn_activity_tracker: TurnActivityTracker::default(),
+            rendered_completed_item_ids: HashSet::new(),
             session_activity_summary: SessionActivitySummary::default(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
@@ -5617,6 +5619,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    #[allow(dead_code)]
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
         self.bottom_pane.show_view(view);
         self.request_redraw();
@@ -6381,8 +6384,19 @@ impl ChatWidget {
         turn_id: String,
         render_source: ThreadItemRenderSource,
     ) {
+        if matches!(render_source, ThreadItemRenderSource::Live)
+            && !self
+                .rendered_completed_item_ids
+                .insert(item.id().to_string())
+        {
+            return;
+        }
         let from_replay = render_source.is_replay();
         let replay_kind = render_source.replay_kind();
+        if from_replay {
+            self.rendered_completed_item_ids
+                .insert(item.id().to_string());
+        }
         if !from_replay {
             self.turn_activity_tracker.record_item(&item);
         }
@@ -7997,7 +8011,7 @@ impl ChatWidget {
         });
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(feature = "voice")]
     pub(crate) fn open_realtime_audio_device_selection(&mut self, kind: RealtimeAudioDeviceKind) {
         match list_realtime_audio_device_names(kind) {
             Ok(device_names) => {
@@ -8012,12 +8026,12 @@ impl ChatWidget {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(not(feature = "voice"))]
     pub(crate) fn open_realtime_audio_device_selection(&mut self, kind: RealtimeAudioDeviceKind) {
         let _ = kind;
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(any(feature = "voice", test))]
     fn open_realtime_audio_device_selection_with_names(
         &mut self,
         kind: RealtimeAudioDeviceKind,
@@ -11512,7 +11526,7 @@ impl ChatWidget {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(any(feature = "voice", test))]
 impl ChatWidget {
     pub(crate) fn update_recording_meter_in_place(&mut self, id: &str, text: &str) -> bool {
         let updated = self.bottom_pane.update_recording_meter_in_place(id, text);

@@ -3,6 +3,7 @@ use crate::ResponsesApiNamespace;
 use crate::ResponsesApiNamespaceTool;
 use crate::ToolName;
 use crate::default_namespace_description;
+#[cfg(feature = "mcp")]
 use crate::mcp_tool_to_deferred_responses_api_tool;
 use codex_app_server_protocol::AppInfo;
 use serde::Deserialize;
@@ -26,6 +27,7 @@ pub struct ToolSearchSource<'a> {
     pub description: Option<&'a str>,
 }
 
+#[cfg(feature = "mcp")]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ToolSearchResultSource<'a> {
     pub server_name: &'a str,
@@ -133,6 +135,7 @@ pub struct RequestPluginInstallEntry {
     pub app_connector_ids: Vec<String>,
 }
 
+#[cfg(feature = "mcp")]
 pub fn tool_search_result_source_to_loadable_tool_spec(
     source: ToolSearchResultSource<'_>,
 ) -> Result<LoadableToolSpec, serde_json::Error> {
@@ -143,6 +146,7 @@ pub fn tool_search_result_source_to_loadable_tool_spec(
     }))
 }
 
+#[cfg(feature = "mcp")]
 fn tool_search_result_source_namespace_description(source: ToolSearchResultSource<'_>) -> String {
     source
         .description
@@ -159,6 +163,7 @@ fn tool_search_result_source_namespace_description(source: ToolSearchResultSourc
         .unwrap_or_else(|| default_namespace_description(source.tool_namespace))
 }
 
+#[cfg(feature = "mcp")]
 fn tool_search_result_source_to_namespace_tool(
     source: ToolSearchResultSource<'_>,
 ) -> Result<ResponsesApiNamespaceTool, serde_json::Error> {

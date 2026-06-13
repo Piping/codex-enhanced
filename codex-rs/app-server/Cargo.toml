@@ -19,6 +19,12 @@ path = "src/lib.rs"
 [lints]
 workspace = true
 
+[features]
+default = []
+cloud-requirements = ["dep:codex-cloud-requirements"]
+memories-write = ["dep:codex-memories-write"]
+mcp = ["dep:codex-mcp", "dep:codex-rmcp-client", "codex-core/mcp"]
+
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
@@ -31,7 +37,7 @@ axum = { workspace = true, default-features = false, features = [
 ] }
 codex-analytics = { workspace = true }
 codex-arg0 = { workspace = true }
-codex-cloud-requirements = { workspace = true }
+codex-cloud-requirements = { workspace = true, optional = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
 codex-core-plugins = { workspace = true }
@@ -51,15 +57,15 @@ codex-backend-client = { workspace = true }
 codex-file-search = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-login = { workspace = true }
-codex-memories-write = { workspace = true }
-codex-mcp = { workspace = true }
+codex-memories-write = { workspace = true, optional = true }
+codex-mcp = { workspace = true, optional = true }
 codex-model-provider = { workspace = true }
 codex-models-manager = { workspace = true }
 codex-protocol = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-app-server-transport = { workspace = true }
 codex-feedback = { workspace = true }
-codex-rmcp-client = { workspace = true }
+codex-rmcp-client = { workspace = true, optional = true }
 codex-rollout = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }

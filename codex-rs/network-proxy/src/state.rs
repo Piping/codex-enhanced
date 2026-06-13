@@ -2,8 +2,6 @@ use crate::config::NetworkDomainPermissions;
 use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
 use crate::config::NetworkUnixSocketPermissions;
-use crate::mitm::MitmState;
-use crate::mitm::MitmUpstreamConfig;
 use crate::policy::DomainPattern;
 use crate::policy::compile_allowlist_globset;
 use crate::policy::compile_denylist_globset;
@@ -11,7 +9,13 @@ use crate::policy::is_global_wildcard_domain_pattern;
 use crate::runtime::ConfigState;
 use serde::Deserialize;
 use std::collections::HashSet;
+#[cfg(feature = "runtime")]
 use std::sync::Arc;
+
+#[cfg(feature = "runtime")]
+use crate::mitm::MitmState;
+#[cfg(feature = "runtime")]
+use crate::mitm::MitmUpstreamConfig;
 
 pub use crate::runtime::BlockedRequest;
 pub use crate::runtime::BlockedRequestArgs;
@@ -66,6 +70,7 @@ pub fn build_config_state(
         .map_err(NetworkProxyConstraintError::into_anyhow)?;
     let deny_set = compile_denylist_globset(&denied_domains)?;
     let allow_set = compile_allowlist_globset(&allowed_domains)?;
+    #[cfg(feature = "runtime")]
     let mitm = if config.network.mitm {
         Some(Arc::new(MitmState::new(MitmUpstreamConfig {
             allow_upstream_proxy: config.network.allow_upstream_proxy,
@@ -78,6 +83,7 @@ pub fn build_config_state(
         config,
         allow_set,
         deny_set,
+        #[cfg(feature = "runtime")]
         mitm,
         constraints,
         blocked: std::collections::VecDeque::new(),

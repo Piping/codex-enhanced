@@ -1,13 +1,16 @@
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_tools::DiscoverableTool;
+#[cfg(feature = "mcp")]
 use codex_tools::ToolName;
 use codex_tools::ToolsConfig;
 use std::collections::HashMap;
 
 #[derive(Clone, Copy)]
 pub struct ToolRegistryBuildParams<'a> {
+    #[cfg(feature = "mcp")]
     pub mcp_tools: Option<&'a [ToolRegistryBuildMcpTool<'a>]>,
+    #[cfg(feature = "mcp")]
     pub deferred_mcp_tools: Option<&'a [ToolRegistryBuildDeferredTool<'a>]>,
     pub tool_namespaces: Option<&'a HashMap<String, ToolNamespace>>,
     pub discoverable_tools: Option<&'a [DiscoverableTool]>,
@@ -26,12 +29,14 @@ pub struct ToolNamespace {
 /// Direct MCP tool metadata needed to expose the Responses API namespace tool
 /// while registering its runtime handler with the canonical namespace/name
 /// identity.
+#[cfg(feature = "mcp")]
 #[derive(Debug, Clone)]
 pub struct ToolRegistryBuildMcpTool<'a> {
     pub name: ToolName,
     pub tool: &'a rmcp::model::Tool,
 }
 
+#[cfg(feature = "mcp")]
 #[derive(Debug, Clone)]
 pub struct ToolRegistryBuildDeferredTool<'a> {
     pub name: ToolName,

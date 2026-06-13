@@ -14,6 +14,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+#[cfg(feature = "mcp")]
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ContentItem;
@@ -39,6 +40,7 @@ use codex_thread_store::ThreadMetadataPatch;
 use codex_thread_store::ThreadStoreError;
 use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
+#[cfg(feature = "mcp")]
 use rmcp::model::ReadResourceRequestParams;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -464,6 +466,7 @@ impl CodexThread {
         self.codex.session.get_config().await
     }
 
+    #[cfg(feature = "mcp")]
     pub async fn read_mcp_resource(
         &self,
         server: &str,
@@ -484,6 +487,7 @@ impl CodexThread {
         Ok(serde_json::to_value(result)?)
     }
 
+    #[cfg(feature = "mcp")]
     pub async fn call_mcp_tool(
         &self,
         server: &str,

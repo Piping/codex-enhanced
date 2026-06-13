@@ -200,7 +200,10 @@ impl AccountRequestProcessor {
             if thread_manager.list_thread_ids().await.is_empty() {
                 return;
             }
+            #[cfg(feature = "mcp")]
             crate::mcp_refresh::queue_best_effort_refresh(&thread_manager, &config_manager).await;
+            #[cfg(not(feature = "mcp"))]
+            let _ = config_manager;
         });
     }
 

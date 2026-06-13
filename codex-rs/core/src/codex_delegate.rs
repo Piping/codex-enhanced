@@ -9,6 +9,7 @@ use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
+#[cfg(feature = "mcp")]
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RequestUserInputEvent;
@@ -35,11 +36,17 @@ use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::routes_approval_to_guardian;
 use crate::guardian::spawn_approval_request_review;
+#[cfg(feature = "mcp")]
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT;
+#[cfg(feature = "mcp")]
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION;
+#[cfg(feature = "mcp")]
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
+#[cfg(feature = "mcp")]
 use crate::mcp_tool_call::build_guardian_mcp_tool_review_request;
+#[cfg(feature = "mcp")]
 use crate::mcp_tool_call::is_mcp_tool_approval_question_id;
+#[cfg(feature = "mcp")]
 use crate::mcp_tool_call::lookup_mcp_tool_metadata;
 use crate::session::Codex;
 use crate::session::CodexSpawnArgs;
@@ -82,6 +89,7 @@ pub(crate) async fn run_codex_thread_interactive(
         environment_manager: Arc::clone(&parent_session.services.environment_manager),
         skills_manager: Arc::clone(&parent_session.services.skills_manager),
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
+        #[cfg(feature = "mcp")]
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
         skills_watcher: Arc::clone(&parent_session.services.skills_watcher),
         conversation_history: initial_history.unwrap_or(InitialHistory::New),
@@ -126,6 +134,7 @@ pub(crate) async fn run_codex_thread_interactive(
     // Cache delegated MCP invocations so guardian can recover the full tool call
     // context when the later legacy RequestUserInput approval event only carries
     // a call_id plus approval question metadata.
+    #[cfg(feature = "mcp")]
     let pending_mcp_invocations = Arc::new(Mutex::new(HashMap::<String, McpInvocation>::new()));
     tokio::spawn(async move {
         forward_events(
@@ -133,6 +142,7 @@ pub(crate) async fn run_codex_thread_interactive(
             tx_sub,
             parent_session_clone,
             parent_ctx_clone,
+            #[cfg(feature = "mcp")]
             pending_mcp_invocations,
             cancel_token_events,
         )
@@ -242,7 +252,7 @@ async fn forward_events(
     tx_sub: Sender<Event>,
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
-    pending_mcp_invocations: Arc<Mutex<HashMap<String, McpInvocation>>>,
+    #[cfg(feature = "mcp")] pending_mcp_invocations: Arc<Mutex<HashMap<String, McpInvocation>>>,
     cancel_token: CancellationToken,
 ) {
     let cancelled = cancel_token.cancelled();
@@ -319,12 +329,14 @@ async fn forward_events(
                             id,
                             &parent_session,
                             &parent_ctx,
+                            #[cfg(feature = "mcp")]
                             &pending_mcp_invocations,
                             event,
                             &cancel_token,
                         )
                         .await;
                     }
+                    #[cfg(feature = "mcp")]
                     Event {
                         id,
                         msg: EventMsg::McpToolCallBegin(event),
@@ -347,6 +359,7 @@ async fn forward_events(
                             break;
                         }
                     }
+                    #[cfg(feature = "mcp")]
                     Event {
                         id,
                         msg: EventMsg::McpToolCallEnd(event),
@@ -614,10 +627,11 @@ async fn handle_request_user_input(
     id: String,
     parent_session: &Arc<Session>,
     parent_ctx: &Arc<TurnContext>,
-    pending_mcp_invocations: &Arc<Mutex<HashMap<String, McpInvocation>>>,
+    #[cfg(feature = "mcp")] pending_mcp_invocations: &Arc<Mutex<HashMap<String, McpInvocation>>>,
     event: RequestUserInputEvent,
     cancel_token: &CancellationToken,
 ) {
+    #[cfg(feature = "mcp")]
     if routes_approval_to_guardian(parent_ctx)
         && let Some(response) = maybe_auto_review_mcp_request_user_input(
             parent_session,
@@ -647,6 +661,7 @@ async fn handle_request_user_input(
     let _ = codex.submit(Op::UserInputAnswer { id, response }).await;
 }
 
+#[cfg(feature = "mcp")]
 /// Intercepts delegated legacy MCP approval prompts on the RequestUserInput
 /// compatibility path and, when guardian is active, answers them
 /// programmatically after running the guardian review.

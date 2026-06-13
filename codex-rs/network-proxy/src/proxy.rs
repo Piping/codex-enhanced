@@ -1,9 +1,12 @@
 use crate::config;
+#[cfg(feature = "runtime")]
 use crate::http_proxy;
 use crate::network_policy::NetworkPolicyDecider;
 use crate::runtime::BlockedRequestObserver;
 use crate::runtime::ConfigState;
+#[cfg(feature = "runtime")]
 use crate::runtime::unix_socket_permissions_supported;
+#[cfg(feature = "runtime")]
 use crate::socks5;
 use crate::state::NetworkProxyState;
 use anyhow::Context;
@@ -16,6 +19,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 use tokio::task::JoinHandle;
+#[cfg(feature = "runtime")]
 use tracing::warn;
 
 #[derive(Debug, Clone, Parser)]
@@ -645,71 +649,82 @@ impl NetworkProxy {
     }
 
     pub async fn run(&self) -> Result<NetworkProxyHandle> {
-        let current_cfg = self.state.current_cfg().await?;
-        if !current_cfg.network.enabled {
-            warn!("network.enabled is false; skipping proxy listeners");
+        #[cfg(not(feature = "runtime"))]
+        {
             return Ok(NetworkProxyHandle::noop());
         }
-
-        if !unix_socket_permissions_supported() {
-            warn!(
-                "allowUnixSockets and dangerouslyAllowAllUnixSockets are macOS-only; requests will be rejected on this platform"
-            );
-        }
-
-        let reserved_listeners = self.reserved_listeners.as_ref();
-        let http_listener = reserved_listeners.and_then(|listeners| listeners.take_http());
-        let socks_listener = reserved_listeners.and_then(|listeners| listeners.take_socks());
-
-        let http_state = self.state.clone();
-        let http_decider = self.policy_decider.clone();
-        let http_addr = self.http_addr;
-        let http_task = tokio::spawn(async move {
-            match http_listener {
-                Some(listener) => {
-                    http_proxy::run_http_proxy_with_std_listener(http_state, listener, http_decider)
-                        .await
-                }
-                None => http_proxy::run_http_proxy(http_state, http_addr, http_decider).await,
+        #[cfg(feature = "runtime")]
+        {
+            let current_cfg = self.state.current_cfg().await?;
+            if !current_cfg.network.enabled {
+                warn!("network.enabled is false; skipping proxy listeners");
+                return Ok(NetworkProxyHandle::noop());
             }
-        });
 
-        let socks_task = if current_cfg.network.enable_socks5 {
-            let socks_state = self.state.clone();
-            let socks_decider = self.policy_decider.clone();
-            let socks_addr = self.socks_addr;
-            let enable_socks5_udp = current_cfg.network.enable_socks5_udp;
-            Some(tokio::spawn(async move {
-                match socks_listener {
+            if !unix_socket_permissions_supported() {
+                warn!(
+                    "allowUnixSockets and dangerouslyAllowAllUnixSockets are macOS-only; requests will be rejected on this platform"
+                );
+            }
+
+            let reserved_listeners = self.reserved_listeners.as_ref();
+            let http_listener = reserved_listeners.and_then(|listeners| listeners.take_http());
+            let socks_listener = reserved_listeners.and_then(|listeners| listeners.take_socks());
+
+            let http_state = self.state.clone();
+            let http_decider = self.policy_decider.clone();
+            let http_addr = self.http_addr;
+            let http_task = tokio::spawn(async move {
+                match http_listener {
                     Some(listener) => {
-                        socks5::run_socks5_with_std_listener(
-                            socks_state,
+                        http_proxy::run_http_proxy_with_std_listener(
+                            http_state,
                             listener,
-                            socks_decider,
-                            enable_socks5_udp,
+                            http_decider,
                         )
                         .await
                     }
-                    None => {
-                        socks5::run_socks5(
-                            socks_state,
-                            socks_addr,
-                            socks_decider,
-                            enable_socks5_udp,
-                        )
-                        .await
-                    }
+                    None => http_proxy::run_http_proxy(http_state, http_addr, http_decider).await,
                 }
-            }))
-        } else {
-            None
-        };
+            });
 
-        Ok(NetworkProxyHandle {
-            http_task: Some(http_task),
-            socks_task,
-            completed: false,
-        })
+            let socks_task = if current_cfg.network.enable_socks5 {
+                let socks_state = self.state.clone();
+                let socks_decider = self.policy_decider.clone();
+                let socks_addr = self.socks_addr;
+                let enable_socks5_udp = current_cfg.network.enable_socks5_udp;
+                Some(tokio::spawn(async move {
+                    match socks_listener {
+                        Some(listener) => {
+                            socks5::run_socks5_with_std_listener(
+                                socks_state,
+                                listener,
+                                socks_decider,
+                                enable_socks5_udp,
+                            )
+                            .await
+                        }
+                        None => {
+                            socks5::run_socks5(
+                                socks_state,
+                                socks_addr,
+                                socks_decider,
+                                enable_socks5_udp,
+                            )
+                            .await
+                        }
+                    }
+                }))
+            } else {
+                None
+            };
+
+            Ok(NetworkProxyHandle {
+                http_task: Some(http_task),
+                socks_task,
+                completed: false,
+            })
+        }
     }
 }
 

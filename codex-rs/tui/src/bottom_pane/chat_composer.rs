@@ -392,7 +392,7 @@ pub(crate) struct ChatComposer {
     footer_flash: Option<FooterFlash>,
     context_window_percent: Option<i64>,
     // Monotonically increasing identifier for textarea elements we insert.
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(any(feature = "voice", test))]
     next_element_id: u64,
     context_window_used_tokens: Option<i64>,
     skills: Option<Vec<SkillMetadata>>,
@@ -573,7 +573,7 @@ impl ChatComposer {
             pending_slash_command_history: None,
             footer_flash: None,
             context_window_percent: None,
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(any(feature = "voice", test))]
             next_element_id: 0,
             context_window_used_tokens: None,
             skills: None,
@@ -639,7 +639,7 @@ impl ChatComposer {
         this
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(any(feature = "voice", test))]
     fn next_id(&mut self) -> String {
         let id = self.next_element_id;
         self.next_element_id = self.next_element_id.wrapping_add(1);
@@ -4390,7 +4390,7 @@ fn footer_insert_newline_key(
         .or_else(|| bindings.first().copied())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(any(feature = "voice", test))]
 impl ChatComposer {
     pub fn update_recording_meter_in_place(&mut self, id: &str, text: &str) -> bool {
         self.textarea.update_named_element_by_id(id, text)
@@ -5012,7 +5012,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(any(feature = "voice", test))]
     #[test]
     fn remove_recording_meter_placeholder_clears_placeholder_text() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();

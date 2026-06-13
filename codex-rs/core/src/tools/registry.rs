@@ -50,12 +50,13 @@ pub trait ToolHandler: Send + Sync {
     fn kind(&self) -> ToolKind;
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(
-            (self.kind(), payload),
+        match (self.kind(), payload) {
             (ToolKind::Function, ToolPayload::Function { .. })
-                | (ToolKind::Function, ToolPayload::ToolSearch { .. })
-                | (ToolKind::Mcp, ToolPayload::Mcp { .. })
-        )
+            | (ToolKind::Function, ToolPayload::ToolSearch { .. }) => true,
+            #[cfg(feature = "mcp")]
+            (ToolKind::Mcp, ToolPayload::Mcp { .. }) => true,
+            _ => false,
+        }
     }
 
     /// Returns `true` if the [ToolInvocation] *might* mutate the environment of the
@@ -125,6 +126,7 @@ impl AnyToolResult {
         result.to_response_item(&call_id, &payload)
     }
 
+    #[cfg_attr(not(feature = "code-mode"), allow(dead_code))]
     pub(crate) fn code_mode_result(self) -> serde_json::Value {
         let Self {
             payload, result, ..
@@ -286,6 +288,7 @@ impl ToolRegistry {
             ),
         ];
         let (mcp_server, mcp_server_origin) = match &invocation.payload {
+            #[cfg(feature = "mcp")]
             ToolPayload::Mcp { server, .. } => {
                 let manager = invocation
                     .session
@@ -296,7 +299,7 @@ impl ToolRegistry {
                 let origin = manager.server_origin(server).map(str::to_owned);
                 (Some(server.clone()), origin)
             }
-            _ => (None, None),
+            _ => (Option::<String>::None, Option::<String>::None),
         };
         let mcp_server_ref = mcp_server.as_deref();
         let mcp_server_origin_ref = mcp_server_origin.as_deref();
@@ -603,6 +606,7 @@ impl From<&ToolPayload> for HookToolInput {
                     justification: params.justification.clone(),
                 },
             },
+            #[cfg(feature = "mcp")]
             ToolPayload::Mcp {
                 server,
                 tool,

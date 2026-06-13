@@ -120,6 +120,7 @@ fn tool_dispatch_payload(payload: &ToolPayload) -> ToolDispatchPayload {
             additional_permissions: params.additional_permissions.clone(),
             justification: params.justification.clone(),
         },
+        #[cfg(feature = "mcp")]
         ToolPayload::Mcp {
             server,
             tool,

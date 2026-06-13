@@ -1,4 +1,5 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
+#![cfg_attr(not(feature = "mcp"), allow(dead_code, unused_imports))]
 
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::ConfigLayerStackOrdering;
@@ -86,6 +87,7 @@ mod filters;
 mod fs_watch;
 mod fuzzy_file_search;
 pub mod in_process;
+#[cfg(feature = "mcp")]
 mod mcp_refresh;
 mod message_processor;
 mod models;

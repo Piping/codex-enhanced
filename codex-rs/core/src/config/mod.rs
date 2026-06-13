@@ -71,8 +71,11 @@ use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
+#[cfg(all(feature = "mcp", feature = "builtin-mcps"))]
 use codex_mcp::BuiltinMcpServerOptions;
+#[cfg(feature = "mcp")]
 use codex_mcp::McpConfig;
+#[cfg(all(feature = "mcp", feature = "builtin-mcps"))]
 use codex_mcp::configured_builtin_mcp_servers;
 use codex_memories_read::memory_root;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
@@ -1089,12 +1092,14 @@ impl Config {
         )
     }
 
+    #[cfg(feature = "mcp")]
     pub async fn to_mcp_config(
         &self,
         plugins_manager: &codex_core_plugins::PluginsManager,
     ) -> McpConfig {
         let plugins_input = self.plugins_config_input();
         let loaded_plugins = plugins_manager.plugins_for_config(&plugins_input).await;
+        #[cfg(all(feature = "mcp", feature = "builtin-mcps"))]
         let builtin_mcp_servers = configured_builtin_mcp_servers(BuiltinMcpServerOptions {
             codex_self_exe: self.codex_self_exe.as_deref(),
             codex_home: self.codex_home.as_path(),
@@ -1102,6 +1107,8 @@ impl Config {
                 && self.features.enabled(Feature::MemoryTool)
                 && self.memories.use_memories,
         });
+        #[cfg(not(all(feature = "mcp", feature = "builtin-mcps")))]
+        let builtin_mcp_servers = HashMap::new();
         let mut configured_mcp_servers = self.mcp_servers.get().clone();
         for plugin in loaded_plugins
             .plugins()

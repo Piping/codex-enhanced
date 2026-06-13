@@ -16,6 +16,8 @@ use serde_json::Value as JsonValue;
 use serde_json::json;
 use tracing::warn;
 
+const CODE_MODE_EXEC_TOOL_NAME: &str = "exec";
+
 use crate::model::AgentThreadId;
 use crate::model::CodeModeRuntimeToolId;
 use crate::model::CodexTurnId;
@@ -199,7 +201,7 @@ impl ToolDispatchTraceContext {
 fn suppresses_tool_dispatch_trace(invocation: &ToolDispatchInvocation) -> bool {
     matches!(invocation.payload, ToolDispatchPayload::Custom { .. })
         && invocation.tool_namespace.is_none()
-        && invocation.tool_name == codex_code_mode::PUBLIC_TOOL_NAME
+        && invocation.tool_name == CODE_MODE_EXEC_TOOL_NAME
 }
 
 fn record_started(context: &EnabledToolDispatchTraceContext, invocation: ToolDispatchInvocation) {
@@ -421,7 +423,7 @@ mod tests {
     #[test]
     fn suppresses_only_noncanonical_dispatch_boundaries() {
         assert!(suppresses_tool_dispatch_trace(&invocation(
-            codex_code_mode::PUBLIC_TOOL_NAME,
+            CODE_MODE_EXEC_TOOL_NAME,
             /*tool_namespace*/ None,
             ToolDispatchRequester::Model {
                 model_visible_call_id: "call-exec".to_string(),
@@ -441,7 +443,7 @@ mod tests {
             },
         )));
         assert!(!suppresses_tool_dispatch_trace(&invocation(
-            codex_code_mode::PUBLIC_TOOL_NAME,
+            CODE_MODE_EXEC_TOOL_NAME,
             Some("mcp__server".to_string()),
             ToolDispatchRequester::Model {
                 model_visible_call_id: "call-namespaced".to_string(),

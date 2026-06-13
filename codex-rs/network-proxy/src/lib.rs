@@ -1,18 +1,26 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
+#![cfg_attr(not(feature = "runtime"), allow(dead_code, unused_imports))]
 
+#[cfg(feature = "runtime")]
 mod certs;
 mod config;
+#[cfg(feature = "runtime")]
 mod connect_policy;
+#[cfg(feature = "runtime")]
 mod http_proxy;
+#[cfg(feature = "runtime")]
 mod mitm;
 mod network_policy;
 mod policy;
 mod proxy;
 mod reasons;
+#[cfg(feature = "runtime")]
 mod responses;
 mod runtime;
+#[cfg(feature = "runtime")]
 mod socks5;
 mod state;
+#[cfg(feature = "runtime")]
 mod upstream;
 
 pub use config::NetworkDomainPermission;

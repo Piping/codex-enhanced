@@ -19,8 +19,10 @@ use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
+#[cfg(feature = "mcp")]
 use crate::connectors;
 use crate::context::ApprovedCommandPrefixSaved;
+#[cfg(feature = "mcp")]
 use crate::context::AppsInstructions;
 use crate::context::AvailablePluginsInstructions;
 use crate::context::AvailableSkillsInstructions;
@@ -47,8 +49,11 @@ use chrono::Local;
 use chrono::Utc;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::SubAgentThreadStartedInput;
+#[cfg(feature = "mcp")]
 use codex_app_server_protocol::McpServerElicitationRequest;
+#[cfg(feature = "mcp")]
 use codex_app_server_protocol::McpServerElicitationRequestParams;
+#[cfg(feature = "mcp")]
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
@@ -62,9 +67,13 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
+#[cfg(feature = "mcp")]
 use codex_mcp::McpConnectionManager;
+#[cfg(feature = "mcp")]
 use codex_mcp::McpRuntimeEnvironment;
+#[cfg(feature = "mcp")]
 use codex_mcp::ToolInfo;
+#[cfg(feature = "mcp")]
 use codex_mcp::codex_apps_tools_cache_key;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
@@ -75,8 +84,10 @@ use codex_otel::current_span_trace_id;
 use codex_otel::current_span_w3c_trace_context;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::ThreadId;
+#[cfg(feature = "mcp")]
 use codex_protocol::ToolName;
 use codex_protocol::account::PlanType as AccountPlanType;
+#[cfg(feature = "mcp")]
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyAmendment;
@@ -89,6 +100,7 @@ use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
+#[cfg(feature = "mcp")]
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -121,6 +133,7 @@ use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
+#[cfg(feature = "mcp")]
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::state_db;
 use codex_rollout_trace::AgentResultTracePayload;
@@ -141,11 +154,17 @@ use codex_utils_output_truncation::TruncationPolicy;
 use futures::future::BoxFuture;
 use futures::future::Shared;
 use futures::prelude::*;
+#[cfg(feature = "mcp")]
 use rmcp::model::ListResourceTemplatesResult;
+#[cfg(feature = "mcp")]
 use rmcp::model::ListResourcesResult;
+#[cfg(feature = "mcp")]
 use rmcp::model::PaginatedRequestParams;
+#[cfg(feature = "mcp")]
 use rmcp::model::ReadResourceRequestParams;
+#[cfg(feature = "mcp")]
 use rmcp::model::ReadResourceResult;
+#[cfg(feature = "mcp")]
 use rmcp::model::RequestId;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -176,6 +195,7 @@ use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
+#[cfg(feature = "mcp")]
 use codex_config::types::McpServerConfig;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
@@ -186,6 +206,7 @@ use codex_protocol::exec_output::StreamOutput;
 
 mod config_lock;
 mod handlers;
+#[cfg(feature = "mcp")]
 mod mcp;
 mod multi_agents;
 mod review;
@@ -286,6 +307,7 @@ use crate::agents_md::AgentsMdManager;
 use crate::context::UserInstructions;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
+#[cfg(feature = "mcp")]
 use crate::mcp::McpManager;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::rollout::map_session_init_error;
@@ -316,8 +338,11 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core_plugins::PluginsManager;
 use codex_git_utils::get_git_repo_root;
+#[cfg(feature = "mcp")]
 use codex_mcp::compute_auth_statuses;
+#[cfg(feature = "mcp")]
 use codex_mcp::host_owned_codex_apps_enabled;
+#[cfg(feature = "mcp")]
 use codex_mcp::with_codex_apps_mcp;
 use codex_otel::SessionTelemetry;
 use codex_otel::THREAD_STARTED_METRIC;
@@ -341,6 +366,7 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::InitialHistory;
+#[cfg(feature = "mcp")]
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::ModelRerouteEvent;
 use codex_protocol::protocol::ModelRerouteReason;
@@ -401,6 +427,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
+    #[cfg(feature = "mcp")]
     pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) skills_watcher: Arc<SkillsWatcher>,
     pub(crate) conversation_history: InitialHistory,
@@ -464,6 +491,7 @@ impl Codex {
             environment_manager,
             skills_manager,
             plugins_manager,
+            #[cfg(feature = "mcp")]
             mcp_manager,
             skills_watcher,
             conversation_history,
@@ -659,6 +687,7 @@ impl Codex {
             session_source_clone,
             skills_manager,
             plugins_manager,
+            #[cfg(feature = "mcp")]
             mcp_manager.clone(),
             skills_watcher,
             agent_control,
@@ -780,8 +809,13 @@ impl Codex {
                 ..Default::default()
             })
             .await?;
-        let mcp_connection_manager = self.session.services.mcp_connection_manager.read().await;
-        mcp_connection_manager.set_elicitations_auto_deny(mcp_elicitations_auto_deny);
+        #[cfg(feature = "mcp")]
+        {
+            let mcp_connection_manager = self.session.services.mcp_connection_manager.read().await;
+            mcp_connection_manager.set_elicitations_auto_deny(mcp_elicitations_auto_deny);
+        }
+        #[cfg(not(feature = "mcp"))]
+        let _ = mcp_elicitations_auto_deny;
         Ok(())
     }
 
@@ -2656,6 +2690,7 @@ impl Session {
                     .push(PersonalitySpecInstructions::new(personality_message).render());
             }
         }
+        #[cfg(feature = "mcp")]
         if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
             let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
             let accessible_and_enabled_connectors =
@@ -2890,11 +2925,13 @@ impl Session {
         self.send_token_count_event(turn_context).await;
     }
 
+    #[cfg(feature = "mcp")]
     pub(crate) async fn mcp_dependency_prompted(&self) -> HashSet<String> {
         let state = self.state.lock().await;
         state.mcp_dependency_prompted()
     }
 
+    #[cfg(feature = "mcp")]
     pub(crate) async fn record_mcp_dependency_prompted<I>(&self, names: I)
     where
         I: IntoIterator<Item = String>,
@@ -3239,9 +3276,12 @@ impl Session {
         let had_active_turn = self.active_turn.lock().await.is_some();
         // Even without an active task, interrupt handling pauses any active goal.
         self.abort_all_tasks(TurnAbortReason::Interrupted).await;
+        #[cfg(feature = "mcp")]
         if !had_active_turn {
             self.cancel_mcp_startup().await;
         }
+        #[cfg(not(feature = "mcp"))]
+        let _ = had_active_turn;
     }
 
     pub(crate) fn hooks(&self) -> Arc<Hooks> {

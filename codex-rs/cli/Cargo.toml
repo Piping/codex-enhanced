@@ -16,33 +16,52 @@ path = "src/lib.rs"
 [lints]
 workspace = true
 
+[features]
+default = []
+cloud = ["cloud-requirements", "dep:codex-cloud-tasks"]
+cloud-requirements = [
+    "codex-app-server/cloud-requirements",
+    "codex-exec/cloud-requirements",
+    "codex-tui/cloud-requirements",
+]
+exec-server = ["dep:codex-exec-server"]
+execpolicy = ["codex-execpolicy/starlark", "codex-core/starlark-execpolicy"]
+internal-debug-tools = [
+    "dep:codex-app-server-test-client",
+    "dep:codex-responses-api-proxy",
+]
+memories-write = ["codex-app-server/memories-write", "dep:codex-memories-write"]
+mcp = ["dep:codex-mcp", "dep:codex-rmcp-client", "codex-core/mcp", "codex-tui/mcp"]
+mcp-server = ["mcp", "codex-mcp/builtin-mcps", "dep:codex-builtin-mcps", "dep:codex-mcp-server"]
+oss = ["codex-exec/oss", "codex-tui/oss"]
+
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 clap_complete = { workspace = true }
 codex-app-server = { workspace = true }
 codex-app-server-protocol = { workspace = true }
-codex-app-server-test-client = { workspace = true }
+codex-app-server-test-client = { workspace = true, optional = true }
 codex-arg0 = { workspace = true }
-codex-builtin-mcps = { workspace = true }
+codex-builtin-mcps = { workspace = true, optional = true }
 codex-chatgpt = { workspace = true }
-codex-cloud-tasks = { path = "../cloud-tasks" }
+codex-cloud-tasks = { path = "../cloud-tasks", optional = true }
 codex-utils-cli = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
 codex-core-plugins = { workspace = true }
 codex-exec = { workspace = true }
-codex-exec-server = { workspace = true }
+codex-exec-server = { workspace = true, optional = true }
 codex-execpolicy = { workspace = true }
 codex-features = { workspace = true }
 codex-login = { workspace = true }
-codex-memories-write = { workspace = true }
-codex-mcp = { workspace = true }
-codex-mcp-server = { workspace = true }
+codex-memories-write = { workspace = true, optional = true }
+codex-mcp = { workspace = true, optional = true }
+codex-mcp-server = { workspace = true, optional = true }
 codex-models-manager = { workspace = true }
 codex-protocol = { workspace = true }
-codex-responses-api-proxy = { workspace = true }
-codex-rmcp-client = { workspace = true }
+codex-responses-api-proxy = { workspace = true, optional = true }
+codex-rmcp-client = { workspace = true, optional = true }
 codex-rollout-trace = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }

@@ -11,12 +11,16 @@ path = "src/lib.rs"
 [lints]
 workspace = true
 
+[features]
+default = []
+builtin-mcps = ["dep:codex-builtin-mcps"]
+
 [dependencies]
 anyhow = { workspace = true }
 async-channel = { workspace = true }
 codex-async-utils = { workspace = true }
 codex-api = { workspace = true }
-codex-builtin-mcps = { workspace = true }
+codex-builtin-mcps = { workspace = true, optional = true }
 codex-config = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-login = { workspace = true }

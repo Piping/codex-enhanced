@@ -8,6 +8,10 @@ use crate::SpawnAgentToolOptions;
 use crate::TOOL_SEARCH_DEFAULT_LIMIT;
 use crate::TOOL_SEARCH_TOOL_NAME;
 use crate::TOOL_SUGGEST_TOOL_NAME;
+use crate::CodeModeToolDefinition;
+use crate::CodeModeToolNamespaceDescription;
+use crate::CODE_MODE_EXEC_TOOL_NAME;
+use crate::CODE_MODE_WAIT_TOOL_NAME;
 use crate::ToolHandlerKind;
 use crate::ToolRegistryPlan;
 use crate::ToolRegistryPlanParams;
@@ -32,11 +36,14 @@ use crate::create_js_repl_reset_tool;
 use crate::create_js_repl_tool;
 use crate::create_list_agents_tool;
 use crate::create_list_dir_tool;
+#[cfg(feature = "mcp")]
 use crate::create_list_mcp_resource_templates_tool;
+#[cfg(feature = "mcp")]
 use crate::create_list_mcp_resources_tool;
 use crate::create_local_shell_tool;
 use crate::create_question_tool;
 use crate::create_read_file_tool;
+#[cfg(feature = "mcp")]
 use crate::create_read_mcp_resource_tool;
 use crate::create_report_agent_job_result_tool;
 use crate::create_request_permissions_tool;
@@ -61,6 +68,7 @@ use crate::create_web_search_tool;
 use crate::create_write_stdin_tool;
 use crate::default_namespace_description;
 use crate::dynamic_tool_to_responses_api_tool;
+#[cfg(feature = "mcp")]
 use crate::mcp_tool_to_responses_api_tool;
 use crate::question_tool_description;
 use crate::request_permissions_tool_description;
@@ -85,7 +93,7 @@ pub fn build_tool_registry_plan(
             .map(|(namespace, detail)| {
                 (
                     namespace.clone(),
-                    codex_code_mode::ToolNamespaceDescription {
+                    CodeModeToolNamespaceDescription {
                         name: detail.name.clone(),
                         description: detail.description.clone().unwrap_or_default(),
                     },
@@ -122,7 +130,7 @@ pub fn build_tool_registry_plan(
             config.code_mode_enabled,
         );
         plan.register_handler(
-            codex_code_mode::PUBLIC_TOOL_NAME,
+            CODE_MODE_EXEC_TOOL_NAME,
             ToolHandlerKind::CodeModeExecute,
         );
         plan.push_spec(
@@ -131,7 +139,7 @@ pub fn build_tool_registry_plan(
             config.code_mode_enabled,
         );
         plan.register_handler(
-            codex_code_mode::WAIT_TOOL_NAME,
+            CODE_MODE_WAIT_TOOL_NAME,
             ToolHandlerKind::CodeModeWait,
         );
     }
@@ -192,6 +200,7 @@ pub fn build_tool_registry_plan(
         plan.register_handler("shell_command", ToolHandlerKind::ShellCommand);
     }
 
+    #[cfg(feature = "mcp")]
     if params.mcp_tools.is_some() {
         plan.push_spec(
             create_list_mcp_resources_tool(),
@@ -514,6 +523,7 @@ pub fn build_tool_registry_plan(
         }
     }
 
+    #[cfg(feature = "mcp")]
     if let Some(mcp_tools) = params.mcp_tools {
         let mut entries = mcp_tools.to_vec();
         entries.sort_by_key(|tool| tool.name.display());
@@ -600,9 +610,9 @@ pub fn build_tool_registry_plan(
 }
 
 fn compare_code_mode_tools(
-    left: &codex_code_mode::ToolDefinition,
-    right: &codex_code_mode::ToolDefinition,
-    namespace_descriptions: &BTreeMap<String, codex_code_mode::ToolNamespaceDescription>,
+    left: &CodeModeToolDefinition,
+    right: &CodeModeToolDefinition,
+    namespace_descriptions: &BTreeMap<String, CodeModeToolNamespaceDescription>,
 ) -> std::cmp::Ordering {
     let left_namespace = code_mode_namespace_name(left, namespace_descriptions);
     let right_namespace = code_mode_namespace_name(right, namespace_descriptions);
@@ -614,8 +624,8 @@ fn compare_code_mode_tools(
 }
 
 fn code_mode_namespace_name<'a>(
-    tool: &codex_code_mode::ToolDefinition,
-    namespace_descriptions: &'a BTreeMap<String, codex_code_mode::ToolNamespaceDescription>,
+    tool: &CodeModeToolDefinition,
+    namespace_descriptions: &'a BTreeMap<String, CodeModeToolNamespaceDescription>,
 ) -> Option<&'a str> {
     tool.tool_name
         .namespace

@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "macos", allow(linker_messages))]
+
 use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;
@@ -18,13 +20,18 @@ use codex_cli::run_login_with_api_key;
 use codex_cli::run_login_with_chatgpt;
 use codex_cli::run_login_with_device_code;
 use codex_cli::run_logout;
+#[cfg(feature = "cloud")]
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_exec::Cli as ExecCli;
 use codex_exec::Command as ExecCommand;
 use codex_exec::ReviewArgs;
+#[cfg(feature = "execpolicy")]
 use codex_execpolicy::ExecPolicyCheckCommand;
+#[cfg(feature = "internal-debug-tools")]
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
+#[cfg(feature = "internal-debug-tools")]
 use codex_rollout_trace::REDUCED_STATE_FILE_NAME;
+#[cfg(feature = "internal-debug-tools")]
 use codex_rollout_trace::replay_bundle;
 use codex_state::StateRuntime;
 use codex_state::state_db_path;
@@ -45,11 +52,13 @@ mod app_cmd;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod desktop_app;
 mod marketplace_cmd;
+#[cfg(feature = "mcp")]
 mod mcp_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
 use crate::marketplace_cmd::MarketplaceCli;
+#[cfg(feature = "mcp")]
 use crate::mcp_cmd::McpCli;
 
 use codex_core::build_models_manager;
@@ -61,7 +70,6 @@ use codex_features::FEATURES;
 use codex_features::Stage;
 use codex_features::is_known_feature_key;
 use codex_login::AuthManager;
-use codex_memories_write::clear_memory_roots_contents;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::protocol::AskForApproval;
@@ -116,15 +124,18 @@ enum Subcommand {
     Logout(LogoutCommand),
 
     /// Manage external MCP servers for Codex.
+    #[cfg(feature = "mcp")]
     Mcp(McpCli),
 
     /// Manage Codex plugins.
     Plugin(PluginCli),
 
     /// Start Codex as an MCP server (stdio).
+    #[cfg(feature = "mcp-server")]
     McpServer,
 
     /// Internal: start a Codex-shipped MCP server (stdio).
+    #[cfg(feature = "mcp-server")]
     #[clap(hide = true, name = "builtin-mcp")]
     BuiltinMcp(BuiltinMcpCommand),
 
@@ -148,6 +159,7 @@ enum Subcommand {
     Debug(DebugCommand),
 
     /// Execpolicy tooling.
+    #[cfg(feature = "execpolicy")]
     #[clap(hide = true)]
     Execpolicy(ExecpolicyCommand),
 
@@ -162,10 +174,12 @@ enum Subcommand {
     Fork(ForkCommand),
 
     /// [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally.
+    #[cfg(feature = "cloud")]
     #[clap(name = "cloud", alias = "cloud-tasks")]
     Cloud(CloudTasksCli),
 
     /// Internal: run the responses API proxy.
+    #[cfg(feature = "internal-debug-tools")]
     #[clap(hide = true)]
     ResponsesApiProxy(ResponsesApiProxyArgs),
 
@@ -174,6 +188,7 @@ enum Subcommand {
     StdioToUds(StdioToUdsCommand),
 
     /// [EXPERIMENTAL] Run the standalone exec-server service.
+    #[cfg(feature = "exec-server")]
     ExecServer(ExecServerCommand),
 
     /// Inspect feature flags.
@@ -181,6 +196,7 @@ enum Subcommand {
 }
 
 #[derive(Debug, Args)]
+#[cfg(feature = "mcp-server")]
 struct BuiltinMcpCommand {
     name: String,
     #[arg(long)]
@@ -222,12 +238,14 @@ enum DebugSubcommand {
     Models(DebugModelsCommand),
 
     /// Tooling: helps debug the app server.
+    #[cfg(feature = "internal-debug-tools")]
     AppServer(DebugAppServerCommand),
 
     /// Render the model-visible prompt input list as JSON.
     PromptInput(DebugPromptInputCommand),
 
     /// Replay a rollout trace bundle and write reduced state JSON.
+    #[cfg(feature = "internal-debug-tools")]
     #[clap(hide = true)]
     TraceReduce(DebugTraceReduceCommand),
 
@@ -237,18 +255,21 @@ enum DebugSubcommand {
 }
 
 #[derive(Debug, Parser)]
+#[cfg(feature = "internal-debug-tools")]
 struct DebugAppServerCommand {
     #[command(subcommand)]
     subcommand: DebugAppServerSubcommand,
 }
 
 #[derive(Debug, clap::Subcommand)]
+#[cfg(feature = "internal-debug-tools")]
 enum DebugAppServerSubcommand {
     // Send message to app server V2.
     SendMessageV2(DebugAppServerSendMessageV2Command),
 }
 
 #[derive(Debug, Parser)]
+#[cfg(feature = "internal-debug-tools")]
 struct DebugAppServerSendMessageV2Command {
     #[arg(value_name = "USER_MESSAGE", required = true)]
     user_message: String,
@@ -273,6 +294,7 @@ struct DebugModelsCommand {
 }
 
 #[derive(Debug, Parser)]
+#[cfg(feature = "internal-debug-tools")]
 struct DebugTraceReduceCommand {
     /// Trace bundle directory containing manifest.json and trace.jsonl.
     #[arg(value_name = "TRACE_BUNDLE")]
@@ -351,12 +373,14 @@ enum SandboxCommand {
     Windows(WindowsCommand),
 }
 
+#[cfg(feature = "execpolicy")]
 #[derive(Debug, Parser)]
 struct ExecpolicyCommand {
     #[command(subcommand)]
     sub: ExecpolicySubcommand,
 }
 
+#[cfg(feature = "execpolicy")]
 #[derive(Debug, clap::Subcommand)]
 enum ExecpolicySubcommand {
     /// Check execpolicy files against a command.
@@ -457,6 +481,7 @@ struct AppServerCommand {
 }
 
 #[derive(Debug, Parser)]
+#[cfg(feature = "exec-server")]
 struct ExecServerCommand {
     /// Transport endpoint URL. Supported values: `ws://IP:PORT` (default), `stdio`, `stdio://`.
     #[arg(long = "listen", value_name = "URL", conflicts_with = "remote")]
@@ -829,10 +854,12 @@ fn run_update_command() -> anyhow::Result<()> {
     }
 }
 
+#[cfg(feature = "execpolicy")]
 fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
     cmd.run()
 }
 
+#[cfg(feature = "internal-debug-tools")]
 async fn run_debug_app_server_command(cmd: DebugAppServerCommand) -> anyhow::Result<()> {
     match cmd.subcommand {
         DebugAppServerSubcommand::SendMessageV2(cmd) => {
@@ -996,6 +1023,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             );
             codex_exec::run_main(exec_cli, arg0_paths.clone()).await?;
         }
+        #[cfg(feature = "mcp-server")]
         Some(Subcommand::McpServer) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
@@ -1004,6 +1032,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             )?;
             codex_mcp_server::run_main(arg0_paths.clone(), root_config_overrides).await?;
         }
+        #[cfg(feature = "mcp-server")]
         Some(Subcommand::BuiltinMcp(command)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
@@ -1013,6 +1042,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             let codex_home = AbsolutePathBuf::try_from(command.codex_home)?;
             codex_builtin_mcps::run_builtin_mcp_server(&command.name, &codex_home).await?;
         }
+        #[cfg(feature = "mcp")]
         Some(Subcommand::Mcp(mut mcp_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
@@ -1245,6 +1275,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             )?;
             run_update_command()?;
         }
+        #[cfg(feature = "cloud")]
         Some(Subcommand::Cloud(mut cloud_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
@@ -1317,6 +1348,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 )?;
                 run_debug_models_command(cmd, root_config_overrides).await?;
             }
+            #[cfg(feature = "internal-debug-tools")]
             DebugSubcommand::AppServer(cmd) => {
                 reject_remote_mode_for_subcommand(
                     root_remote.as_deref(),
@@ -1339,6 +1371,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 )
                 .await?;
             }
+            #[cfg(feature = "internal-debug-tools")]
             DebugSubcommand::TraceReduce(cmd) => {
                 reject_remote_mode_for_subcommand(
                     root_remote.as_deref(),
@@ -1356,6 +1389,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 run_debug_clear_memories_command(&root_config_overrides, &interactive).await?;
             }
         },
+        #[cfg(feature = "execpolicy")]
         Some(Subcommand::Execpolicy(ExecpolicyCommand { sub })) => match sub {
             ExecpolicySubcommand::Check(cmd) => {
                 reject_remote_mode_for_subcommand(
@@ -1378,6 +1412,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             );
             run_apply_command(apply_cli, /*cwd*/ None).await?;
         }
+        #[cfg(feature = "internal-debug-tools")]
         Some(Subcommand::ResponsesApiProxy(args)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
@@ -1396,6 +1431,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             let socket_path = cmd.socket_path;
             codex_stdio_to_uds::run(socket_path.as_path()).await?;
         }
+        #[cfg(feature = "exec-server")]
         Some(Subcommand::ExecServer(cmd)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
@@ -1474,6 +1510,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "exec-server")]
 async fn run_exec_server_command(
     cmd: ExecServerCommand,
     arg0_paths: &Arg0DispatchPaths,
@@ -1555,6 +1592,7 @@ fn maybe_print_under_development_feature_warning(
     );
 }
 
+#[cfg(feature = "internal-debug-tools")]
 async fn run_debug_trace_reduce_command(cmd: DebugTraceReduceCommand) -> anyhow::Result<()> {
     let output = cmd
         .output
@@ -1679,17 +1717,25 @@ async fn run_debug_clear_memories_command(
         cleared_state_db = true;
     }
 
-    clear_memory_roots_contents(&config.codex_home).await?;
+    #[cfg(feature = "memories-write")]
+    codex_memories_write::clear_memory_roots_contents(&config.codex_home).await?;
+    #[cfg(not(feature = "memories-write"))]
+    let _ = &config.codex_home;
 
     let mut message = if cleared_state_db {
         format!("Cleared memory state from {}.", state_path.display())
     } else {
         format!("No state db found at {}.", state_path.display())
     };
+    #[cfg(feature = "memories-write")]
     message.push_str(&format!(
         " Cleared memory directories under {}.",
         config.codex_home.display()
     ));
+    #[cfg(not(feature = "memories-write"))]
+    message.push_str(
+        " Memory directories were not cleared because memories-write support is not compiled into this binary.",
+    );
 
     println!("{message}");
 

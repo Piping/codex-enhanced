@@ -7,7 +7,11 @@ autobins = false
 
 [features]
 default = ["realtime-webrtc"]
+cloud-requirements = ["codex-app-server-client/cloud-requirements", "dep:codex-cloud-requirements"]
+oss = ["dep:codex-utils-oss"]
+voice = ["dep:cpal"]
 realtime-webrtc = ["dep:codex-realtime-webrtc"]
+mcp = ["codex-app-server-client/mcp", "dep:rmcp"]
 
 [[bin]]
 name = "codex-tui"
@@ -35,7 +39,7 @@ codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-install-context = { workspace = true }
 codex-chatgpt = { workspace = true }
-codex-cloud-requirements = { workspace = true }
+codex-cloud-requirements = { workspace = true, optional = true }
 codex-config = { workspace = true }
 codex-connectors = { workspace = true }
 codex-core-plugins = { workspace = true }
@@ -62,7 +66,7 @@ codex-utils-absolute-path = { workspace = true }
 codex-utils-cli = { workspace = true }
 codex-utils-elapsed = { workspace = true }
 codex-utils-fuzzy-match = { workspace = true }
-codex-utils-oss = { workspace = true }
+codex-utils-oss = { workspace = true, optional = true }
 codex-utils-path = { workspace = true }
 codex-utils-plugins = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
@@ -93,7 +97,7 @@ ratatui = { workspace = true, features = [
 ratatui-macros = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
-rmcp = { workspace = true }
+rmcp = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 serde_yaml = { workspace = true }
@@ -132,7 +136,7 @@ codex-windows-sandbox = { workspace = true }
 tokio-util = { workspace = true, features = ["time"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-cpal = "0.15"
+cpal = { version = "0.15", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

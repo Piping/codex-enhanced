@@ -30,7 +30,9 @@ use crate::hook_runtime::run_user_prompt_submit_hooks;
 use crate::injection::ToolMentionKind;
 use crate::injection::app_id_from_path;
 use crate::injection::tool_kind_for_path;
+#[cfg(feature = "mcp")]
 use crate::mcp_skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
+#[cfg(feature = "mcp")]
 use crate::mcp_tool_exposure::build_mcp_tool_exposure;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
@@ -38,6 +40,7 @@ use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::parse_turn_item;
+#[cfg(feature = "mcp")]
 use crate::plugins::build_plugin_injections;
 use crate::resolve_skill_dependencies_for_turn;
 use crate::session::PreviousTurnSettings;
@@ -181,6 +184,7 @@ pub(crate) async fn run_turn(
     // enabled plugins, then converted into turn-scoped guidance below.
     let mentioned_plugins =
         collect_explicit_plugin_mentions(&input, loaded_plugins.capability_summaries());
+    #[cfg(feature = "mcp")]
     let mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
         // Plugin mentions need raw MCP/app inventory even when app tools
         // are normally hidden so we can describe the plugin's currently
@@ -201,13 +205,24 @@ pub(crate) async fn run_turn(
     } else {
         HashMap::new()
     };
+    #[cfg(not(feature = "mcp"))]
+    let _ = &mentioned_plugins;
     let available_connectors = if turn_context.apps_enabled() {
+        #[cfg(feature = "mcp")]
         let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
             loaded_plugins
                 .effective_apps()
                 .into_iter()
                 .map(|connector_id| connector_id.0),
             connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+        );
+        #[cfg(not(feature = "mcp"))]
+        let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
+            loaded_plugins
+                .effective_apps()
+                .into_iter()
+                .map(|connector_id| connector_id.0),
+            Vec::new(),
         );
         connectors::with_app_enabled_state(connectors, &turn_context.config)
     } else {
@@ -236,6 +251,7 @@ pub(crate) async fn run_turn(
         resolve_skill_dependencies_for_turn(&sess, &turn_context, &env_var_dependencies).await;
     }
 
+    #[cfg(feature = "mcp")]
     maybe_prompt_and_install_mcp_dependencies(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -274,8 +290,11 @@ pub(crate) async fn run_turn(
         .map(|skill| ContextualUserFragment::into(crate::context::SkillInstructions::from(skill)))
         .collect();
 
+    #[cfg(feature = "mcp")]
     let plugin_items =
         build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
+    #[cfg(not(feature = "mcp"))]
+    let plugin_items = Vec::new();
     let mentioned_plugin_metadata = mentioned_plugins
         .iter()
         .filter_map(crate::plugins::PluginCapabilitySummary::telemetry_metadata)
@@ -1153,134 +1172,154 @@ pub(crate) async fn built_tools(
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
-    let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
-    let has_mcp_servers = mcp_connection_manager.has_servers();
-    let all_mcp_tools = mcp_connection_manager
-        .list_all_tools()
-        .or_cancel(cancellation_token)
-        .await?;
-    drop(mcp_connection_manager);
-    let loaded_plugins = sess
-        .services
-        .plugins_manager
-        .plugins_for_config(&turn_context.config.plugins_config_input())
-        .await;
+    #[cfg(not(feature = "mcp"))]
+    {
+        let _ = sess;
+        let _ = input;
+        let _ = explicitly_enabled_connectors;
+        let _ = skills_outcome;
+        let _ = cancellation_token;
+        return Ok(Arc::new(ToolRouter::from_config(
+            &turn_context.tools_config,
+            ToolRouterParams {
+                unavailable_called_tools: Vec::new(),
+                discoverable_tools: None,
+                dynamic_tools: turn_context.dynamic_tools.as_slice(),
+            },
+        )));
+    }
 
-    let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
-    effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
+    #[cfg(feature = "mcp")]
+    {
+        let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
+        let has_mcp_servers = mcp_connection_manager.has_servers();
+        let all_mcp_tools = mcp_connection_manager
+            .list_all_tools()
+            .or_cancel(cancellation_token)
+            .await?;
+        drop(mcp_connection_manager);
+        let loaded_plugins = sess
+            .services
+            .plugins_manager
+            .plugins_for_config(&turn_context.config.plugins_config_input())
+            .await;
 
-    let apps_enabled = turn_context.apps_enabled();
-    let accessible_connectors =
-        apps_enabled.then(|| connectors::accessible_connectors_from_mcp_tools(&all_mcp_tools));
-    let accessible_connectors_with_enabled_state =
-        accessible_connectors.as_ref().map(|connectors| {
-            connectors::with_app_enabled_state(connectors.clone(), &turn_context.config)
-        });
-    let connectors = if apps_enabled {
-        let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
-            loaded_plugins
-                .effective_apps()
-                .into_iter()
-                .map(|connector_id| connector_id.0),
-            accessible_connectors.clone().unwrap_or_default(),
-        );
-        Some(connectors::with_app_enabled_state(
-            connectors,
-            &turn_context.config,
-        ))
-    } else {
-        None
-    };
-    let auth = sess.services.auth_manager.auth().await;
-    let discoverable_tools = if apps_enabled && turn_context.tools_config.tool_suggest {
-        if let Some(accessible_connectors) = accessible_connectors_with_enabled_state.as_ref() {
-            match connectors::list_tool_suggest_discoverable_tools_with_auth(
+        let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
+        effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
+
+        let apps_enabled = turn_context.apps_enabled();
+        let accessible_connectors =
+            apps_enabled.then(|| connectors::accessible_connectors_from_mcp_tools(&all_mcp_tools));
+        let accessible_connectors_with_enabled_state =
+            accessible_connectors.as_ref().map(|connectors| {
+                connectors::with_app_enabled_state(connectors.clone(), &turn_context.config)
+            });
+        let connectors = if apps_enabled {
+            let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
+                loaded_plugins
+                    .effective_apps()
+                    .into_iter()
+                    .map(|connector_id| connector_id.0),
+                accessible_connectors.clone().unwrap_or_default(),
+            );
+            Some(connectors::with_app_enabled_state(
+                connectors,
                 &turn_context.config,
-                auth.as_ref(),
-                accessible_connectors.as_slice(),
-            )
-            .await
-            .map(|discoverable_tools| {
-                filter_request_plugin_install_discoverable_tools_for_client(
-                    discoverable_tools,
-                    turn_context.app_server_client_name.as_deref(),
+            ))
+        } else {
+            None
+        };
+        let auth = sess.services.auth_manager.auth().await;
+        let discoverable_tools = if apps_enabled && turn_context.tools_config.tool_suggest {
+            if let Some(accessible_connectors) = accessible_connectors_with_enabled_state.as_ref() {
+                match connectors::list_tool_suggest_discoverable_tools_with_auth(
+                    &turn_context.config,
+                    auth.as_ref(),
+                    accessible_connectors.as_slice(),
                 )
-            }) {
-                Ok(discoverable_tools) if discoverable_tools.is_empty() => None,
-                Ok(discoverable_tools) => Some(discoverable_tools),
-                Err(err) => {
-                    warn!("failed to load discoverable tool suggestions: {err:#}");
-                    None
+                .await
+                .map(|discoverable_tools| {
+                    filter_request_plugin_install_discoverable_tools_for_client(
+                        discoverable_tools,
+                        turn_context.app_server_client_name.as_deref(),
+                    )
+                }) {
+                    Ok(discoverable_tools) if discoverable_tools.is_empty() => None,
+                    Ok(discoverable_tools) => Some(discoverable_tools),
+                    Err(err) => {
+                        warn!("failed to load discoverable tool suggestions: {err:#}");
+                        None
+                    }
                 }
+            } else {
+                None
             }
         } else {
             None
-        }
-    } else {
-        None
-    };
+        };
 
-    let explicitly_enabled = if let Some(connectors) = connectors.as_ref() {
-        let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
-            build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
-        });
+        let explicitly_enabled = if let Some(connectors) = connectors.as_ref() {
+            let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
+                build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
+            });
 
-        filter_connectors_for_input(
-            connectors,
-            input,
-            &effective_explicitly_enabled_connectors,
-            &skill_name_counts_lower,
-        )
-    } else {
-        Vec::new()
-    };
-    let mcp_tool_exposure = build_mcp_tool_exposure(
-        &all_mcp_tools,
-        connectors.as_deref(),
-        explicitly_enabled.as_slice(),
-        &turn_context.config,
-        &turn_context.tools_config,
-    );
-    let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
-    let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
-    let unavailable_called_tools = if turn_context
-        .config
-        .features
-        .enabled(Feature::UnavailableDummyTools)
-    {
-        let exposed_tool_names = mcp_tools
+            filter_connectors_for_input(
+                connectors,
+                input,
+                &effective_explicitly_enabled_connectors,
+                &skill_name_counts_lower,
+            )
+        } else {
+            Vec::new()
+        };
+        let mcp_tool_exposure = build_mcp_tool_exposure(
+            &all_mcp_tools,
+            connectors.as_deref(),
+            explicitly_enabled.as_slice(),
+            &turn_context.config,
+            &turn_context.tools_config,
+        );
+        let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
+        let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
+        let unavailable_called_tools = if turn_context
+            .config
+            .features
+            .enabled(Feature::UnavailableDummyTools)
+        {
+            let exposed_tool_names = mcp_tools
+                .iter()
+                .chain(deferred_mcp_tools.iter())
+                .flat_map(|tools| tools.keys().map(String::as_str))
+                .collect::<HashSet<_>>();
+            collect_unavailable_called_tools(input, &exposed_tool_names)
+        } else {
+            Vec::new()
+        };
+
+        let parallel_mcp_server_names = turn_context
+            .config
+            .mcp_servers
+            .get()
             .iter()
-            .chain(deferred_mcp_tools.iter())
-            .flat_map(|tools| tools.keys().map(String::as_str))
+            .filter_map(|(server_name, server_config)| {
+                server_config
+                    .supports_parallel_tool_calls
+                    .then_some(server_name.clone())
+            })
             .collect::<HashSet<_>>();
-        collect_unavailable_called_tools(input, &exposed_tool_names)
-    } else {
-        Vec::new()
-    };
 
-    let parallel_mcp_server_names = turn_context
-        .config
-        .mcp_servers
-        .get()
-        .iter()
-        .filter_map(|(server_name, server_config)| {
-            server_config
-                .supports_parallel_tool_calls
-                .then_some(server_name.clone())
-        })
-        .collect::<HashSet<_>>();
-
-    Ok(Arc::new(ToolRouter::from_config(
-        &turn_context.tools_config,
-        ToolRouterParams {
-            mcp_tools,
-            deferred_mcp_tools,
-            unavailable_called_tools,
-            parallel_mcp_server_names,
-            discoverable_tools,
-            dynamic_tools: turn_context.dynamic_tools.as_slice(),
-        },
-    )))
+        Ok(Arc::new(ToolRouter::from_config(
+            &turn_context.tools_config,
+            ToolRouterParams {
+                mcp_tools,
+                deferred_mcp_tools,
+                unavailable_called_tools,
+                parallel_mcp_server_names,
+                discoverable_tools,
+                dynamic_tools: turn_context.dynamic_tools.as_slice(),
+            },
+        )))
+    }
 }
 
 #[derive(Debug)]

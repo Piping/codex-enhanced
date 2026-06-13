@@ -3,6 +3,7 @@
 // alternate‑screen mode starts; that file opts‑out locally via `allow`.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 #![deny(clippy::disallowed_methods)]
+#![cfg_attr(not(feature = "mcp"), allow(unused_imports))]
 use crate::legacy_core::check_execpolicy_for_warnings;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
@@ -34,7 +35,6 @@ use codex_app_server_protocol::Thread as AppServerThread;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
-use codex_cloud_requirements::cloud_requirements_loader_for_storage;
 use codex_config::CloudRequirementsLoader;
 use codex_config::ConfigLoadError;
 use codex_config::LoaderOverrides;
@@ -58,8 +58,6 @@ use codex_state::log_db;
 use codex_terminal_detection::terminal_info;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
-use codex_utils_oss::ensure_oss_provider_ready;
-use codex_utils_oss::get_default_model_for_oss_provider;
 use codex_utils_path as path_utils;
 use color_eyre::eyre::WrapErr;
 use cwd_prompt::CwdPromptAction;
@@ -79,6 +77,68 @@ use tracing_subscriber::prelude::*;
 use url::Url;
 use uuid::Uuid;
 
+#[cfg(feature = "cloud-requirements")]
+async fn cloud_requirements_loader_for_storage(
+    codex_home: PathBuf,
+    enable_codex_api_key_env: bool,
+    cli_auth_credentials_store: codex_config::types::AuthCredentialsStoreMode,
+    chatgpt_base_url: String,
+) -> CloudRequirementsLoader {
+    codex_cloud_requirements::cloud_requirements_loader_for_storage(
+        codex_home,
+        enable_codex_api_key_env,
+        cli_auth_credentials_store,
+        chatgpt_base_url,
+    )
+    .await
+}
+
+#[cfg(not(feature = "cloud-requirements"))]
+async fn cloud_requirements_loader_for_storage(
+    codex_home: PathBuf,
+    enable_codex_api_key_env: bool,
+    cli_auth_credentials_store: codex_config::types::AuthCredentialsStoreMode,
+    chatgpt_base_url: String,
+) -> CloudRequirementsLoader {
+    let _ = (
+        codex_home,
+        enable_codex_api_key_env,
+        cli_auth_credentials_store,
+        chatgpt_base_url,
+    );
+    CloudRequirementsLoader::default()
+}
+
+#[cfg(feature = "oss")]
+fn get_default_model_for_oss_provider(provider_id: &str) -> Option<&'static str> {
+    codex_utils_oss::get_default_model_for_oss_provider(provider_id)
+}
+
+#[cfg(not(feature = "oss"))]
+fn get_default_model_for_oss_provider(provider_id: &str) -> Option<&'static str> {
+    let _ = provider_id;
+    None
+}
+
+#[cfg(feature = "oss")]
+async fn ensure_oss_provider_ready(
+    provider_id: &str,
+    config: &Config,
+) -> Result<(), std::io::Error> {
+    codex_utils_oss::ensure_oss_provider_ready(provider_id, config).await
+}
+
+#[cfg(not(feature = "oss"))]
+async fn ensure_oss_provider_ready(
+    provider_id: &str,
+    config: &Config,
+) -> Result<(), std::io::Error> {
+    let _ = (provider_id, config);
+    Err(std::io::Error::other(
+        "OSS provider support is not compiled into this binary",
+    ))
+}
+
 pub(crate) use codex_app_server_client::legacy_core;
 
 mod additional_dirs;
@@ -91,9 +151,9 @@ mod app_server_approval_conversions;
 mod app_server_session;
 mod approval_events;
 mod ascii_animation;
-#[cfg(not(target_os = "linux"))]
+#[cfg(feature = "voice")]
 mod audio_device;
-#[cfg(target_os = "linux")]
+#[cfg(not(feature = "voice"))]
 #[allow(dead_code)]
 mod audio_device {
     use crate::app_event::RealtimeAudioDeviceKind;
@@ -158,6 +218,7 @@ mod notifications;
 #[cfg(any(not(debug_assertions), test))]
 mod npm_registry;
 pub(crate) mod onboarding;
+#[cfg(feature = "oss")]
 mod oss_selection;
 mod pager_overlay;
 mod permission_compat;
@@ -198,11 +259,11 @@ mod update_prompt;
 mod update_versions;
 mod updates;
 mod version;
-#[cfg(not(target_os = "linux"))]
+#[cfg(feature = "voice")]
 mod voice;
 mod width;
 mod workspace_command;
-#[cfg(target_os = "linux")]
+#[cfg(not(feature = "voice"))]
 #[allow(dead_code)]
 mod voice {
     use crate::app_event_sender::AppEventSender;
@@ -864,14 +925,22 @@ pub async fn run_main(
         if let Some(provider) = resolved {
             Some(provider)
         } else {
+            #[cfg(not(feature = "oss"))]
+            return Err(std::io::Error::other(
+                "OSS provider support is not compiled into this binary",
+            ));
+
             // No provider configured, prompt the user
-            let provider = oss_selection::select_oss_provider(&codex_home).await?;
-            if provider == "__CANCELLED__" {
-                return Err(std::io::Error::other(
-                    "OSS provider selection was cancelled by user",
-                ));
+            #[cfg(feature = "oss")]
+            {
+                let provider = oss_selection::select_oss_provider(&codex_home).await?;
+                if provider == "__CANCELLED__" {
+                    return Err(std::io::Error::other(
+                        "OSS provider selection was cancelled by user",
+                    ));
+                }
+                Some(provider)
             }
-            Some(provider)
         }
     } else {
         None

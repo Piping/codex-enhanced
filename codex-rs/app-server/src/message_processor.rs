@@ -24,6 +24,7 @@ use crate::request_processors::FsRequestProcessor;
 use crate::request_processors::GitRequestProcessor;
 use crate::request_processors::InitializeRequestProcessor;
 use crate::request_processors::MarketplaceRequestProcessor;
+#[cfg(feature = "mcp")]
 use crate::request_processors::McpRequestProcessor;
 use crate::request_processors::PluginRequestProcessor;
 use crate::request_processors::ProcessExecRequestProcessor;
@@ -167,6 +168,7 @@ pub(crate) struct MessageProcessor {
     git_processor: GitRequestProcessor,
     initialize_processor: InitializeRequestProcessor,
     marketplace_processor: MarketplaceRequestProcessor,
+    #[cfg(feature = "mcp")]
     mcp_processor: McpRequestProcessor,
     plugin_processor: PluginRequestProcessor,
     search_processor: SearchRequestProcessor,
@@ -362,6 +364,7 @@ impl MessageProcessor {
             config_manager.clone(),
             Arc::clone(&thread_manager),
         );
+        #[cfg(feature = "mcp")]
         let mcp_processor = McpRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
@@ -470,6 +473,7 @@ impl MessageProcessor {
             git_processor,
             initialize_processor,
             marketplace_processor,
+            #[cfg(feature = "mcp")]
             mcp_processor,
             plugin_processor,
             search_processor,
@@ -1172,27 +1176,40 @@ impl MessageProcessor {
             ClientRequest::ReviewStart { params, .. } => {
                 self.turn_processor.review_start(&request_id, params).await
             }
+            #[cfg(feature = "mcp")]
             ClientRequest::McpServerOauthLogin { params, .. } => {
                 self.mcp_processor.mcp_server_oauth_login(params).await
             }
+            #[cfg(feature = "mcp")]
             ClientRequest::McpServerRefresh { params, .. } => {
                 self.mcp_processor.mcp_server_refresh(params).await
             }
+            #[cfg(feature = "mcp")]
             ClientRequest::McpServerStatusList { params, .. } => {
                 self.mcp_processor
                     .mcp_server_status_list(&request_id, params)
                     .await
             }
+            #[cfg(feature = "mcp")]
             ClientRequest::McpResourceRead { params, .. } => {
                 self.mcp_processor
                     .mcp_resource_read(&request_id, params)
                     .await
             }
+            #[cfg(feature = "mcp")]
             ClientRequest::McpServerToolCall { params, .. } => {
                 self.mcp_processor
                     .mcp_server_tool_call(&request_id, params)
                     .await
             }
+            #[cfg(not(feature = "mcp"))]
+            ClientRequest::McpServerOauthLogin { .. }
+            | ClientRequest::McpServerRefresh { .. }
+            | ClientRequest::McpServerStatusList { .. }
+            | ClientRequest::McpResourceRead { .. }
+            | ClientRequest::McpServerToolCall { .. } => Err(invalid_request(
+                "MCP support is not compiled into this binary",
+            )),
             ClientRequest::WindowsSandboxSetupStart { params, .. } => {
                 self.windows_sandbox_processor
                     .windows_sandbox_setup_start(&request_id, params)

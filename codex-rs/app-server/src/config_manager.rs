@@ -1,4 +1,5 @@
 use codex_arg0::Arg0DispatchPaths;
+#[cfg(feature = "cloud-requirements")]
 use codex_cloud_requirements::cloud_requirements_loader;
 use codex_config::CloudRequirementsLoader;
 use codex_config::ConfigLayerStack;
@@ -85,15 +86,21 @@ impl ConfigManager {
 
     pub(crate) fn replace_cloud_requirements_loader(
         &self,
-        auth_manager: Arc<AuthManager>,
+        #[cfg_attr(not(feature = "cloud-requirements"), allow(unused_variables))] auth_manager: Arc<
+            AuthManager,
+        >,
+        #[cfg_attr(not(feature = "cloud-requirements"), allow(unused_variables))]
         chatgpt_base_url: String,
     ) {
-        let loader =
-            cloud_requirements_loader(auth_manager, chatgpt_base_url, self.codex_home.clone());
-        if let Ok(mut guard) = self.cloud_requirements.write() {
-            *guard = loader;
-        } else {
-            warn!("failed to update cloud requirements loader");
+        #[cfg(feature = "cloud-requirements")]
+        {
+            let loader =
+                cloud_requirements_loader(auth_manager, chatgpt_base_url, self.codex_home.clone());
+            if let Ok(mut guard) = self.cloud_requirements.write() {
+                *guard = loader;
+            } else {
+                warn!("failed to update cloud requirements loader");
+            }
         }
     }
 

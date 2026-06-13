@@ -1,3 +1,5 @@
+#![cfg(feature = "memories-write")]
+
 use std::path::Path;
 
 use anyhow::Result;

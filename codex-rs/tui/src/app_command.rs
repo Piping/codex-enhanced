@@ -238,7 +238,7 @@ impl AppCommand {
         })
     }
 
-    #[cfg_attr(target_os = "linux", allow(dead_code))]
+    #[cfg_attr(not(feature = "voice"), allow(dead_code))]
     pub(crate) fn realtime_conversation_audio(frame: ThreadRealtimeAudioChunk) -> Self {
         Self::RealtimeConversationAudio(ConversationAudioParams {
             frame: frame.into(),

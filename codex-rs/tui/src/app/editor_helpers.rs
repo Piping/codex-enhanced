@@ -6,6 +6,7 @@ use crate::history_cell;
 use crate::tui;
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 pub(super) enum ExternalEditorErrorTarget {
     History,
     ErrorMessage,

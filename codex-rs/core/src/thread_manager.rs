@@ -6,6 +6,7 @@ use crate::config::ThreadStoreConfig;
 use crate::environment_selection::default_thread_environment_selections;
 use crate::environment_selection::resolve_environment_selections;
 use crate::file_watcher::FileWatcher;
+#[cfg(feature = "mcp")]
 use crate::mcp::McpManager;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
@@ -245,6 +246,7 @@ pub(crate) struct ThreadManagerState {
     environment_manager: Arc<EnvironmentManager>,
     skills_manager: Arc<SkillsManager>,
     plugins_manager: Arc<PluginsManager>,
+    #[cfg(feature = "mcp")]
     mcp_manager: Arc<McpManager>,
     skills_watcher: Arc<SkillsWatcher>,
     thread_store: Arc<dyn ThreadStore>,
@@ -300,6 +302,7 @@ impl ThreadManager {
             codex_home.to_path_buf(),
             restriction_product,
         ));
+        #[cfg(feature = "mcp")]
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_manager = Arc::new(SkillsManager::new_with_restriction_product(
             codex_home,
@@ -315,6 +318,7 @@ impl ThreadManager {
                 environment_manager,
                 skills_manager,
                 plugins_manager,
+                #[cfg(feature = "mcp")]
                 mcp_manager,
                 skills_watcher,
                 thread_store,
@@ -390,6 +394,7 @@ impl ThreadManager {
             codex_home.clone(),
             restriction_product,
         ));
+        #[cfg(feature = "mcp")]
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_manager = Arc::new(SkillsManager::new_with_restriction_product(
             skills_codex_home,
@@ -416,6 +421,7 @@ impl ThreadManager {
                 environment_manager,
                 skills_manager,
                 plugins_manager,
+                #[cfg(feature = "mcp")]
                 mcp_manager,
                 skills_watcher,
                 thread_store,
@@ -447,6 +453,7 @@ impl ThreadManager {
         self.state.plugins_manager.clone()
     }
 
+    #[cfg(feature = "mcp")]
     pub fn mcp_manager(&self) -> Arc<McpManager> {
         self.state.mcp_manager.clone()
     }
@@ -1297,6 +1304,7 @@ impl ThreadManagerState {
             environment_manager: Arc::clone(&self.environment_manager),
             skills_manager: Arc::clone(&self.skills_manager),
             plugins_manager: Arc::clone(&self.plugins_manager),
+            #[cfg(feature = "mcp")]
             mcp_manager: Arc::clone(&self.mcp_manager),
             skills_watcher: Arc::clone(&self.skills_watcher),
             conversation_history: initial_history,

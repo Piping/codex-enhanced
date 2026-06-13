@@ -1470,25 +1470,33 @@ impl ThreadRequestProcessor {
     }
 
     async fn memory_reset_response_inner(&self) -> Result<MemoryResetResponse, JSONRPCErrorError> {
-        let state_db = self
-            .state_db
-            .clone()
-            .ok_or_else(|| internal_error("sqlite state db unavailable for memory reset"))?;
+        #[cfg(not(feature = "memories-write"))]
+        return Err(internal_error(
+            "memory reset is unavailable because memories-write support is not compiled into this binary",
+        ));
 
-        state_db.clear_memory_data().await.map_err(|err| {
-            internal_error(format!("failed to clear memory rows in state db: {err}"))
-        })?;
+        #[cfg(feature = "memories-write")]
+        {
+            let state_db = self
+                .state_db
+                .clone()
+                .ok_or_else(|| internal_error("sqlite state db unavailable for memory reset"))?;
 
-        clear_memory_roots_contents(&self.config.codex_home)
-            .await
-            .map_err(|err| {
-                internal_error(format!(
-                    "failed to clear memory directories under {}: {err}",
-                    self.config.codex_home.display()
-                ))
+            state_db.clear_memory_data().await.map_err(|err| {
+                internal_error(format!("failed to clear memory rows in state db: {err}"))
             })?;
 
-        Ok(MemoryResetResponse {})
+            codex_memories_write::clear_memory_roots_contents(&self.config.codex_home)
+                .await
+                .map_err(|err| {
+                    internal_error(format!(
+                        "failed to clear memory directories under {}: {err}",
+                        self.config.codex_home.display()
+                    ))
+                })?;
+
+            Ok(MemoryResetResponse {})
+        }
     }
 
     async fn thread_metadata_update_response_inner(

@@ -53,7 +53,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_arg0::Arg0DispatchPaths;
-use codex_cloud_requirements::cloud_requirements_loader_for_storage;
+use codex_config::CloudRequirementsLoader;
 use codex_config::ConfigLoadError;
 use codex_config::LoaderOverrides;
 use codex_config::format_config_error_with_source;
@@ -95,8 +95,6 @@ use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
 use codex_utils_cli::SharedCliOptions;
-use codex_utils_oss::ensure_oss_provider_ready;
-use codex_utils_oss::get_default_model_for_oss_provider;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 pub use event_processor_with_jsonl_output::CodexStatus;
 pub use event_processor_with_jsonl_output::CollectedThreadEvents;
@@ -148,6 +146,68 @@ use tracing::field;
 use tracing::info;
 use tracing::info_span;
 use tracing::warn;
+
+#[cfg(feature = "cloud-requirements")]
+async fn cloud_requirements_loader_for_storage(
+    codex_home: std::path::PathBuf,
+    enable_codex_api_key_env: bool,
+    cli_auth_credentials_store: codex_config::types::AuthCredentialsStoreMode,
+    chatgpt_base_url: String,
+) -> CloudRequirementsLoader {
+    codex_cloud_requirements::cloud_requirements_loader_for_storage(
+        codex_home,
+        enable_codex_api_key_env,
+        cli_auth_credentials_store,
+        chatgpt_base_url,
+    )
+    .await
+}
+
+#[cfg(not(feature = "cloud-requirements"))]
+async fn cloud_requirements_loader_for_storage(
+    codex_home: std::path::PathBuf,
+    enable_codex_api_key_env: bool,
+    cli_auth_credentials_store: codex_config::types::AuthCredentialsStoreMode,
+    chatgpt_base_url: String,
+) -> CloudRequirementsLoader {
+    let _ = (
+        codex_home,
+        enable_codex_api_key_env,
+        cli_auth_credentials_store,
+        chatgpt_base_url,
+    );
+    CloudRequirementsLoader::default()
+}
+
+#[cfg(feature = "oss")]
+fn get_default_model_for_oss_provider(provider_id: &str) -> Option<&'static str> {
+    codex_utils_oss::get_default_model_for_oss_provider(provider_id)
+}
+
+#[cfg(not(feature = "oss"))]
+fn get_default_model_for_oss_provider(provider_id: &str) -> Option<&'static str> {
+    let _ = provider_id;
+    None
+}
+
+#[cfg(feature = "oss")]
+async fn ensure_oss_provider_ready(
+    provider_id: &str,
+    config: &Config,
+) -> Result<(), std::io::Error> {
+    codex_utils_oss::ensure_oss_provider_ready(provider_id, config).await
+}
+
+#[cfg(not(feature = "oss"))]
+async fn ensure_oss_provider_ready(
+    provider_id: &str,
+    config: &Config,
+) -> Result<(), std::io::Error> {
+    let _ = (provider_id, config);
+    Err(std::io::Error::other(
+        "OSS provider support is not compiled into this binary",
+    ))
+}
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 use uuid::Uuid;

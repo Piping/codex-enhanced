@@ -7,6 +7,7 @@ use crate::tools::TELEMETRY_PREVIEW_MAX_LINES;
 use crate::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::resolve_max_tokens;
+#[cfg(feature = "mcp")]
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -34,6 +35,7 @@ pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ToolCallSource {
     Direct,
+    #[cfg_attr(not(feature = "code-mode"), allow(dead_code))]
     CodeMode {
         /// Runtime cell that issued the nested tool request.
         cell_id: String,
@@ -70,6 +72,7 @@ pub enum ToolPayload {
     LocalShell {
         params: ShellToolCallParams,
     },
+    #[cfg(feature = "mcp")]
     Mcp {
         server: String,
         tool: String,
@@ -84,6 +87,7 @@ impl ToolPayload {
             ToolPayload::ToolSearch { arguments } => Cow::Owned(arguments.query.clone()),
             ToolPayload::Custom { input } => Cow::Borrowed(input),
             ToolPayload::LocalShell { params } => Cow::Owned(params.command.join(" ")),
+            #[cfg(feature = "mcp")]
             ToolPayload::Mcp { raw_arguments, .. } => Cow::Borrowed(raw_arguments),
         }
     }
@@ -112,6 +116,7 @@ pub trait ToolOutput: Send {
     }
 }
 
+#[cfg(feature = "mcp")]
 impl ToolOutput for CallToolResult {
     fn log_preview(&self) -> String {
         let output = self.as_function_call_output_payload();
@@ -137,6 +142,7 @@ impl ToolOutput for CallToolResult {
     }
 }
 
+#[cfg(feature = "mcp")]
 #[derive(Clone, Debug)]
 pub struct McpToolOutput {
     pub result: CallToolResult,
@@ -146,6 +152,7 @@ pub struct McpToolOutput {
     pub truncation_policy: TruncationPolicy,
 }
 
+#[cfg(feature = "mcp")]
 impl ToolOutput for McpToolOutput {
     fn log_preview(&self) -> String {
         let payload = self.response_payload();
@@ -178,6 +185,7 @@ impl ToolOutput for McpToolOutput {
     }
 }
 
+#[cfg(feature = "mcp")]
 impl McpToolOutput {
     fn response_payload(&self) -> FunctionCallOutputPayload {
         let mut payload = self.result.as_function_call_output_payload();
@@ -363,6 +371,7 @@ impl ToolOutput for AbortedToolOutput {
                 execution: "client".to_string(),
                 tools: Vec::new(),
             },
+            #[cfg(feature = "mcp")]
             ToolPayload::Mcp { .. } => ResponseInputItem::McpToolCallOutput {
                 call_id: call_id.to_string(),
                 output: CallToolResult::from_error_text(self.message.clone()),
@@ -514,6 +523,7 @@ pub(crate) fn response_input_to_code_mode_result(response: ResponseInputItem) ->
             }
         },
         ResponseInputItem::ToolSearchOutput { tools, .. } => JsonValue::Array(tools),
+        #[cfg(feature = "mcp")]
         ResponseInputItem::McpToolCallOutput { output, .. } => {
             output.code_mode_result(&ToolPayload::Mcp {
                 server: String::new(),
@@ -521,6 +531,11 @@ pub(crate) fn response_input_to_code_mode_result(response: ResponseInputItem) ->
                 raw_arguments: String::new(),
             })
         }
+        #[cfg(not(feature = "mcp"))]
+        ResponseInputItem::McpToolCallOutput { output, .. } => serde_json::to_value(output)
+            .unwrap_or_else(|err| {
+                JsonValue::String(format!("failed to serialize mcp result: {err}"))
+            }),
     }
 }
 

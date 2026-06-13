@@ -49,6 +49,7 @@ impl ToolCallRuntime {
         }
     }
 
+    #[cfg_attr(not(feature = "code-mode"), allow(dead_code))]
     pub(crate) fn find_spec(&self, tool_name: &codex_tools::ToolName) -> Option<ToolSpec> {
         self.router.find_spec(tool_name)
     }

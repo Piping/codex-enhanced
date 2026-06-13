@@ -6,8 +6,11 @@ mod dynamic;
 mod goal;
 pub(crate) mod goal_spec;
 mod grep_files;
+#[cfg(feature = "mcp")]
 mod mcp;
+#[cfg(feature = "mcp")]
 mod mcp_resource;
+#[cfg(feature = "mcp")]
 pub(crate) mod mcp_resource_spec;
 pub(crate) mod multi_agents;
 pub(crate) mod multi_agents_common;
@@ -17,6 +20,7 @@ mod plan;
 pub(crate) mod plan_spec;
 mod read_file;
 mod request_permissions;
+#[cfg(feature = "mcp")]
 mod request_plugin_install;
 pub(crate) mod request_plugin_install_spec;
 mod request_user_input;
@@ -46,7 +50,9 @@ use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
+#[cfg(feature = "code-mode")]
 pub(crate) use crate::tools::code_mode::CodeModeExecuteHandler;
+#[cfg(feature = "code-mode")]
 pub(crate) use crate::tools::code_mode::CodeModeWaitHandler;
 pub use apply_patch::ApplyPatchHandler;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -56,13 +62,18 @@ pub use goal::CreateGoalHandler;
 pub use goal::GetGoalHandler;
 pub use goal::UpdateGoalHandler;
 pub use grep_files::GrepFilesHandler;
+#[cfg(feature = "mcp")]
 pub use mcp::McpHandler;
+#[cfg(feature = "mcp")]
 pub use mcp_resource::ListMcpResourceTemplatesHandler;
+#[cfg(feature = "mcp")]
 pub use mcp_resource::ListMcpResourcesHandler;
+#[cfg(feature = "mcp")]
 pub use mcp_resource::ReadMcpResourceHandler;
 pub use plan::PlanHandler;
 pub use read_file::ReadFileHandler;
 pub use request_permissions::RequestPermissionsHandler;
+#[cfg(feature = "mcp")]
 pub use request_plugin_install::RequestPluginInstallHandler;
 pub use request_user_input::RequestUserInputHandler;
 pub use shell::ContainerExecHandler;

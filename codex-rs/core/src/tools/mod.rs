@@ -1,4 +1,9 @@
+#[cfg(feature = "code-mode")]
 pub(crate) mod code_mode;
+#[cfg(not(feature = "code-mode"))]
+pub(crate) mod code_mode_stub;
+#[cfg(not(feature = "code-mode"))]
+pub(crate) use code_mode_stub as code_mode;
 pub(crate) mod context;
 pub(crate) mod events;
 pub(crate) mod handlers;

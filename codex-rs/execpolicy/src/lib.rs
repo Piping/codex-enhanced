@@ -1,8 +1,10 @@
 pub(crate) mod amend;
 pub(crate) mod decision;
 pub(crate) mod error;
+#[cfg(feature = "starlark")]
 pub(crate) mod execpolicycheck;
 mod executable_name;
+#[cfg(feature = "starlark")]
 pub(crate) mod parser;
 pub(crate) mod policy;
 pub mod rule;
@@ -16,7 +18,9 @@ pub use error::ErrorLocation;
 pub use error::Result;
 pub use error::TextPosition;
 pub use error::TextRange;
+#[cfg(feature = "starlark")]
 pub use execpolicycheck::ExecPolicyCheckCommand;
+#[cfg(feature = "starlark")]
 pub use parser::PolicyParser;
 pub use policy::Evaluation;
 pub use policy::MatchOptions;

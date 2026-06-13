@@ -15,8 +15,6 @@ use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
-use crate::tools::code_mode::CodeModeWaitHandler;
-use crate::tools::code_mode::WAIT_TOOL_NAME;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
@@ -197,8 +195,12 @@ async fn dispatch_lifecycle_trace_records_incompatible_payload_failures() -> any
     Ok(())
 }
 
+#[cfg(feature = "code-mode")]
 #[tokio::test]
 async fn missing_code_mode_wait_traces_only_the_wait_tool_call() -> anyhow::Result<()> {
+    use crate::tools::code_mode::CodeModeWaitHandler;
+    use crate::tools::code_mode::WAIT_TOOL_NAME;
+
     let temp = TempDir::new()?;
     let (mut session, turn) = make_session_and_context().await;
     attach_test_trace(&mut session, &turn, temp.path())?;

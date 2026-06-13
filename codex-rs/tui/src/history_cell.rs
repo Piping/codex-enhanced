@@ -2039,31 +2039,39 @@ impl McpToolCallCell {
     }
 
     fn render_content_block(block: &serde_json::Value, width: usize) -> String {
-        let content = match serde_json::from_value::<rmcp::model::Content>(block.clone()) {
-            Ok(content) => content,
-            Err(_) => {
-                return format_and_truncate_tool_result(
-                    &block.to_string(),
-                    TOOL_CALL_MAX_LINES,
-                    width,
-                );
-            }
-        };
+        #[cfg(not(feature = "mcp"))]
+        {
+            return format_and_truncate_tool_result(&block.to_string(), TOOL_CALL_MAX_LINES, width);
+        }
 
-        match content.raw {
-            rmcp::model::RawContent::Text(text) => {
-                format_and_truncate_tool_result(&text.text, TOOL_CALL_MAX_LINES, width)
+        #[cfg(feature = "mcp")]
+        {
+            let content = match serde_json::from_value::<rmcp::model::Content>(block.clone()) {
+                Ok(content) => content,
+                Err(_) => {
+                    return format_and_truncate_tool_result(
+                        &block.to_string(),
+                        TOOL_CALL_MAX_LINES,
+                        width,
+                    );
+                }
+            };
+
+            match content.raw {
+                rmcp::model::RawContent::Text(text) => {
+                    format_and_truncate_tool_result(&text.text, TOOL_CALL_MAX_LINES, width)
+                }
+                rmcp::model::RawContent::Image(_) => "<image content>".to_string(),
+                rmcp::model::RawContent::Audio(_) => "<audio content>".to_string(),
+                rmcp::model::RawContent::Resource(resource) => {
+                    let uri = match resource.resource {
+                        rmcp::model::ResourceContents::TextResourceContents { uri, .. } => uri,
+                        rmcp::model::ResourceContents::BlobResourceContents { uri, .. } => uri,
+                    };
+                    format!("embedded resource: {uri}")
+                }
+                rmcp::model::RawContent::ResourceLink(link) => format!("link: {}", link.uri),
             }
-            rmcp::model::RawContent::Image(_) => "<image content>".to_string(),
-            rmcp::model::RawContent::Audio(_) => "<audio content>".to_string(),
-            rmcp::model::RawContent::Resource(resource) => {
-                let uri = match resource.resource {
-                    rmcp::model::ResourceContents::TextResourceContents { uri, .. } => uri,
-                    rmcp::model::ResourceContents::BlobResourceContents { uri, .. } => uri,
-                };
-                format!("embedded resource: {uri}")
-            }
-            rmcp::model::RawContent::ResourceLink(link) => format!("link: {}", link.uri),
         }
     }
 }
@@ -2399,37 +2407,46 @@ fn try_new_completed_mcp_tool_call_with_image_output(
 /// Returns `None` when the block is not an image, when base64 decoding fails, when the format
 /// cannot be inferred, or when the image decoder rejects the bytes.
 fn decode_mcp_image(block: &serde_json::Value) -> Option<DynamicImage> {
-    let content = serde_json::from_value::<rmcp::model::Content>(block.clone()).ok()?;
-    let rmcp::model::RawContent::Image(image) = content.raw else {
+    #[cfg(not(feature = "mcp"))]
+    {
+        let _ = block;
         return None;
-    };
-    let base64_data = if let Some(data_url) = image.data.strip_prefix("data:") {
-        data_url.split_once(',')?.1
-    } else {
-        image.data.as_str()
-    };
-    let raw_data = base64::engine::general_purpose::STANDARD
-        .decode(base64_data)
-        .map_err(|e| {
-            error!("Failed to decode image data: {e}");
-            e
-        })
-        .ok()?;
-    let reader = ImageReader::new(Cursor::new(raw_data))
-        .with_guessed_format()
-        .map_err(|e| {
-            error!("Failed to guess image format: {e}");
-            e
-        })
-        .ok()?;
+    }
 
-    reader
-        .decode()
-        .map_err(|e| {
-            error!("Image decoding failed: {e}");
-            e
-        })
-        .ok()
+    #[cfg(feature = "mcp")]
+    {
+        let content = serde_json::from_value::<rmcp::model::Content>(block.clone()).ok()?;
+        let rmcp::model::RawContent::Image(image) = content.raw else {
+            return None;
+        };
+        let base64_data = if let Some(data_url) = image.data.strip_prefix("data:") {
+            data_url.split_once(',')?.1
+        } else {
+            image.data.as_str()
+        };
+        let raw_data = base64::engine::general_purpose::STANDARD
+            .decode(base64_data)
+            .map_err(|e| {
+                error!("Failed to decode image data: {e}");
+                e
+            })
+            .ok()?;
+        let reader = ImageReader::new(Cursor::new(raw_data))
+            .with_guessed_format()
+            .map_err(|e| {
+                error!("Failed to guess image format: {e}");
+                e
+            })
+            .ok()?;
+
+        reader
+            .decode()
+            .map_err(|e| {
+                error!("Image decoding failed: {e}");
+                e
+            })
+            .ok()
+    }
 }
 
 #[allow(clippy::disallowed_methods)]

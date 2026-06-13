@@ -2,7 +2,6 @@ use crate::config::NetworkDomainPermission;
 use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
 use crate::config::ValidatedUnixSocketPath;
-use crate::mitm::MitmState;
 use crate::policy::Host;
 use crate::policy::is_loopback_host;
 use crate::policy::is_non_public_ip;
@@ -36,6 +35,9 @@ use tokio::time::timeout;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
+
+#[cfg(feature = "runtime")]
+use crate::mitm::MitmState;
 
 const MAX_BLOCKED_EVENTS: usize = 200;
 const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
@@ -158,6 +160,7 @@ pub struct ConfigState {
     pub config: NetworkProxyConfig,
     pub allow_set: GlobSet,
     pub deny_set: GlobSet,
+    #[cfg(feature = "runtime")]
     pub mitm: Option<Arc<MitmState>>,
     pub constraints: NetworkProxyConstraints,
     pub blocked: VecDeque<BlockedRequest>,
@@ -579,6 +582,7 @@ impl NetworkProxyState {
         }
     }
 
+    #[cfg(feature = "runtime")]
     pub async fn mitm_state(&self) -> Result<Option<Arc<MitmState>>> {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;

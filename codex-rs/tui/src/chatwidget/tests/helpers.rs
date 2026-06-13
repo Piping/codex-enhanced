@@ -312,6 +312,7 @@ pub(super) async fn make_chatwidget_manual(
         plan_item_active: false,
         turn_runtime_metrics: RuntimeMetricsSummary::default(),
         turn_activity_tracker: crate::session_activity::TurnActivityTracker::default(),
+        rendered_completed_item_ids: HashSet::new(),
         session_activity_summary: crate::session_activity::SessionActivitySummary::default(),
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),

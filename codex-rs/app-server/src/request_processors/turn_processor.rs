@@ -2,6 +2,7 @@ use super::*;
 
 #[derive(Clone)]
 pub(crate) struct TurnRequestProcessor {
+    #[cfg_attr(not(feature = "memories-write"), allow(dead_code))]
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
@@ -484,6 +485,7 @@ impl TurnRequestProcessor {
                 error
             })?;
 
+        #[cfg(feature = "memories-write")]
         if turn_has_input {
             let config_snapshot = thread.config_snapshot().await;
             codex_memories_write::start_memories_startup_task(
@@ -495,6 +497,8 @@ impl TurnRequestProcessor {
                 &config_snapshot.session_source,
             );
         }
+        #[cfg(not(feature = "memories-write"))]
+        let _ = (turn_has_input, &thread_id);
 
         self.outgoing
             .record_request_turn_id(&request_id, &turn_id)

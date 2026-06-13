@@ -7,9 +7,12 @@ use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::registry::ToolRegistryBuilder;
 use crate::tools::spec_plan::build_tool_registry_builder;
 use crate::tools::spec_plan_types::ToolNamespace;
+#[cfg(feature = "mcp")]
 use crate::tools::spec_plan_types::ToolRegistryBuildDeferredTool;
+#[cfg(feature = "mcp")]
 use crate::tools::spec_plan_types::ToolRegistryBuildMcpTool;
 use crate::tools::spec_plan_types::ToolRegistryBuildParams;
+#[cfg(feature = "mcp")]
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_tools::AdditionalProperties;
@@ -33,11 +36,13 @@ pub(crate) fn tool_user_shell_type(user_shell: &Shell) -> ToolUserShellType {
     }
 }
 
+#[cfg(feature = "mcp")]
 struct McpToolPlanInputs<'a> {
     mcp_tools: Vec<ToolRegistryBuildMcpTool<'a>>,
     tool_namespaces: HashMap<String, ToolNamespace>,
 }
 
+#[cfg(feature = "mcp")]
 fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanInputs<'_> {
     McpToolPlanInputs {
         mcp_tools: mcp_tools
@@ -64,8 +69,8 @@ fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanI
 
 pub(crate) fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
-    mcp_tools: Option<HashMap<String, ToolInfo>>,
-    deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
+    #[cfg(feature = "mcp")] mcp_tools: Option<HashMap<String, ToolInfo>>,
+    #[cfg(feature = "mcp")] deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
     unavailable_called_tools: Vec<ToolName>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
@@ -74,7 +79,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::unavailable_tool_message;
     use crate::tools::tool_search_entry::build_tool_search_entries_for_config;
 
+    #[cfg(feature = "mcp")]
     let mcp_tool_plan_inputs = mcp_tools.as_ref().map(map_mcp_tools_for_plan);
+    #[cfg(not(feature = "mcp"))]
+    let tool_namespaces: Option<&HashMap<String, ToolNamespace>> = None;
+    #[cfg(feature = "mcp")]
     let deferred_mcp_tool_sources = deferred_mcp_tools.as_ref().map(|tools| {
         tools
             .values()
@@ -105,19 +114,31 @@ pub(crate) fn build_specs_with_discoverable_tools(
         .collect::<Vec<_>>();
     let tool_search_entries = build_tool_search_entries_for_config(
         config,
+        #[cfg(feature = "mcp")]
         deferred_mcp_tools.as_ref(),
         &deferred_dynamic_tools,
     );
     let mut builder = build_tool_registry_builder(
         config,
         ToolRegistryBuildParams {
+            #[cfg(feature = "mcp")]
             mcp_tools: mcp_tool_plan_inputs
                 .as_ref()
                 .map(|inputs| inputs.mcp_tools.as_slice()),
+            #[cfg(feature = "mcp")]
             deferred_mcp_tools: deferred_mcp_tool_sources.as_deref(),
-            tool_namespaces: mcp_tool_plan_inputs
-                .as_ref()
-                .map(|inputs| &inputs.tool_namespaces),
+            tool_namespaces: {
+                #[cfg(feature = "mcp")]
+                {
+                    mcp_tool_plan_inputs
+                        .as_ref()
+                        .map(|inputs| &inputs.tool_namespaces)
+                }
+                #[cfg(not(feature = "mcp"))]
+                {
+                    tool_namespaces
+                }
+            },
             discoverable_tools: discoverable_tools.as_deref(),
             dynamic_tools,
             default_agent_type_description: &default_agent_type_description,

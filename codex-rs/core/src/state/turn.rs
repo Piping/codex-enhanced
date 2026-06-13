@@ -14,8 +14,10 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
+#[cfg(feature = "mcp")]
 use codex_rmcp_client::ElicitationResponse;
 use codex_utils_absolute_path::AbsolutePathBuf;
+#[cfg(feature = "mcp")]
 use rmcp::model::RequestId;
 use tokio::sync::oneshot;
 
@@ -111,6 +113,7 @@ pub(crate) struct TurnState {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_request_permissions: HashMap<String, PendingRequestPermissions>,
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
+    #[cfg(feature = "mcp")]
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<ResponseInputItem>,
@@ -148,6 +151,7 @@ impl TurnState {
         self.pending_approvals.clear();
         self.pending_request_permissions.clear();
         self.pending_user_input.clear();
+        #[cfg(feature = "mcp")]
         self.pending_elicitations.clear();
         self.pending_dynamic_tools.clear();
         self.pending_input.clear();
@@ -184,6 +188,7 @@ impl TurnState {
         self.pending_user_input.remove(key)
     }
 
+    #[cfg(feature = "mcp")]
     pub(crate) fn insert_pending_elicitation(
         &mut self,
         server_name: String,
@@ -194,6 +199,7 @@ impl TurnState {
             .insert((server_name, request_id), tx)
     }
 
+    #[cfg(feature = "mcp")]
     pub(crate) fn remove_pending_elicitation(
         &mut self,
         server_name: &str,
