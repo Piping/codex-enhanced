@@ -192,7 +192,7 @@ impl AccountRequestProcessor {
 
     fn spawn_effective_plugins_changed_task(
         thread_manager: Arc<ThreadManager>,
-        config_manager: ConfigManager,
+        _config_manager: ConfigManager,
     ) {
         tokio::spawn(async move {
             thread_manager.plugins_manager().clear_cache();
@@ -200,10 +200,6 @@ impl AccountRequestProcessor {
             if thread_manager.list_thread_ids().await.is_empty() {
                 return;
             }
-            #[cfg(feature = "mcp")]
-            crate::mcp_refresh::queue_best_effort_refresh(&thread_manager, &config_manager).await;
-            #[cfg(not(feature = "mcp"))]
-            let _ = config_manager;
         });
     }
 

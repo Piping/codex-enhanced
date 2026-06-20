@@ -14,7 +14,6 @@ workspace = true
 [features]
 default = []
 cloud-requirements = ["codex-app-server/cloud-requirements"]
-mcp = ["codex-app-server/mcp", "codex-core/mcp"]
 
 [dependencies]
 codex-app-server = { workspace = true }

@@ -1,8 +1,5 @@
 use codex_app_server_protocol::AppInfo;
-#[cfg(feature = "mcp")]
-use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 
-#[cfg(not(feature = "mcp"))]
 const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
 use codex_protocol::protocol::APPS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::APPS_INSTRUCTIONS_OPEN_TAG;

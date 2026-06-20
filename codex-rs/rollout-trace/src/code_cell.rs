@@ -20,10 +20,6 @@ use crate::raw_event::RawTraceEventContext;
 use crate::raw_event::RawTraceEventPayload;
 use crate::writer::TraceWriter;
 
-#[cfg(feature = "code-mode")]
-pub use codex_code_mode::RuntimeResponse as CodeModeRuntimeResponse;
-
-#[cfg(not(feature = "code-mode"))]
 #[derive(Serialize)]
 pub enum CodeModeRuntimeResponse {}
 
@@ -138,24 +134,6 @@ impl CodeCellTraceContext {
     }
 }
 
-#[cfg(feature = "code-mode")]
-fn code_cell_status_for_runtime_response(
-    response: &CodeModeRuntimeResponse,
-) -> CodeCellRuntimeStatus {
-    match response {
-        CodeModeRuntimeResponse::Yielded { .. } => CodeCellRuntimeStatus::Yielded,
-        CodeModeRuntimeResponse::Terminated { .. } => CodeCellRuntimeStatus::Terminated,
-        CodeModeRuntimeResponse::Result { error_text, .. } => {
-            if error_text.is_some() {
-                CodeCellRuntimeStatus::Failed
-            } else {
-                CodeCellRuntimeStatus::Completed
-            }
-        }
-    }
-}
-
-#[cfg(not(feature = "code-mode"))]
 fn code_cell_status_for_runtime_response(
     response: &CodeModeRuntimeResponse,
 ) -> CodeCellRuntimeStatus {

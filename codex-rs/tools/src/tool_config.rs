@@ -173,7 +173,7 @@ impl ToolsConfig {
             ..
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
-        let include_code_mode = cfg!(feature = "code-mode") && features.enabled(Feature::CodeMode);
+        let include_code_mode = false;
         let include_code_mode_only = include_code_mode && features.enabled(Feature::CodeModeOnly);
         let include_goal_tools = features.enabled(Feature::Goals);
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);

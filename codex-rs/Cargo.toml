@@ -487,6 +487,7 @@ ignored = [
 # Keep line tables/backtraces while avoiding expensive full variable debug info
 # across local dev builds.
 debug = 1
+strip = "symbols"
 
 [profile.dev-small]
 inherits = "dev"

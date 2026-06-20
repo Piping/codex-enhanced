@@ -22,8 +22,8 @@ workspace = true
 [features]
 default = []
 cloud-requirements = ["dep:codex-cloud-requirements"]
+external-agent-migration = ["dep:codex-external-agent-migration"]
 memories-write = ["dep:codex-memories-write"]
-mcp = ["dep:codex-mcp", "dep:codex-rmcp-client", "codex-core/mcp"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -43,7 +43,7 @@ codex-core = { workspace = true }
 codex-core-plugins = { workspace = true }
 codex-device-key = { workspace = true }
 codex-exec-server = { workspace = true }
-codex-external-agent-migration = { workspace = true }
+codex-external-agent-migration = { workspace = true, optional = true }
 codex-external-agent-sessions = { workspace = true }
 codex-features = { workspace = true }
 codex-git-utils = { workspace = true }
@@ -58,14 +58,12 @@ codex-file-search = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-login = { workspace = true }
 codex-memories-write = { workspace = true, optional = true }
-codex-mcp = { workspace = true, optional = true }
 codex-model-provider = { workspace = true }
 codex-models-manager = { workspace = true }
 codex-protocol = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-app-server-transport = { workspace = true }
 codex-feedback = { workspace = true }
-codex-rmcp-client = { workspace = true, optional = true }
 codex-rollout = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }

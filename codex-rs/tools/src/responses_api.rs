@@ -1,6 +1,5 @@
 use crate::JsonSchema;
 use crate::ToolDefinition;
-use crate::ToolName;
 use crate::parse_dynamic_tool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use serde::Deserialize;
@@ -118,28 +117,6 @@ pub fn coalesce_loadable_tool_specs(
     coalesced_specs
 }
 
-#[cfg(feature = "mcp")]
-pub fn mcp_tool_to_responses_api_tool(
-    tool_name: &ToolName,
-    tool: &rmcp::model::Tool,
-) -> Result<ResponsesApiTool, serde_json::Error> {
-    Ok(tool_definition_to_responses_api_tool(
-        parse_mcp_tool(tool)?.renamed(tool_name.name.clone()),
-    ))
-}
-
-#[cfg(feature = "mcp")]
-pub fn mcp_tool_to_deferred_responses_api_tool(
-    tool_name: &ToolName,
-    tool: &rmcp::model::Tool,
-) -> Result<ResponsesApiTool, serde_json::Error> {
-    Ok(tool_definition_to_responses_api_tool(
-        parse_mcp_tool(tool)?
-            .renamed(tool_name.name.clone())
-            .into_deferred(),
-    ))
-}
-
 pub fn tool_definition_to_responses_api_tool(tool_definition: ToolDefinition) -> ResponsesApiTool {
     ResponsesApiTool {
         name: tool_definition.name,
@@ -154,5 +131,3 @@ pub fn tool_definition_to_responses_api_tool(tool_definition: ToolDefinition) ->
 #[cfg(test)]
 #[path = "responses_api_tests.rs"]
 mod tests;
-#[cfg(feature = "mcp")]
-use crate::parse_mcp_tool;

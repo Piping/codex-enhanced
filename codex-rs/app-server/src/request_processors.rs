@@ -73,10 +73,6 @@ use codex_app_server_protocol::HooksListResponse;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
-#[cfg(feature = "mcp")]
-use codex_app_server_protocol::ListMcpServerStatusParams;
-#[cfg(feature = "mcp")]
-use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::LoginApiKeyParams;
@@ -89,26 +85,6 @@ use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::MarketplaceUpgradeErrorInfo;
 use codex_app_server_protocol::MarketplaceUpgradeParams;
 use codex_app_server_protocol::MarketplaceUpgradeResponse;
-#[cfg(feature = "mcp")]
-use codex_app_server_protocol::McpResourceReadParams;
-#[cfg(feature = "mcp")]
-use codex_app_server_protocol::McpResourceReadResponse;
-#[cfg(feature = "mcp")]
-use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
-#[cfg(feature = "mcp")]
-use codex_app_server_protocol::McpServerOauthLoginParams;
-#[cfg(feature = "mcp")]
-use codex_app_server_protocol::McpServerOauthLoginResponse;
-#[cfg(feature = "mcp")]
-use codex_app_server_protocol::McpServerRefreshResponse;
-#[cfg(feature = "mcp")]
-use codex_app_server_protocol::McpServerStatus;
-#[cfg(feature = "mcp")]
-use codex_app_server_protocol::McpServerStatusDetail;
-#[cfg(feature = "mcp")]
-use codex_app_server_protocol::McpServerToolCallParams;
-#[cfg(feature = "mcp")]
-use codex_app_server_protocol::McpServerToolCallResponse;
 use codex_app_server_protocol::MemoryResetResponse;
 use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::MockExperimentalMethodResponse;
@@ -264,8 +240,6 @@ use codex_config::CloudRequirementsLoadError;
 use codex_config::CloudRequirementsLoadErrorCode;
 use codex_config::ConfigLayerStack;
 use codex_config::loader::project_trust_key;
-#[cfg(feature = "mcp")]
-use codex_config::types::McpServerTransportConfig;
 use codex_core::CodexThread;
 use codex_core::CodexThreadTurnContextOverrides;
 use codex_core::ExternalGoalPreviousStatus;
@@ -304,7 +278,6 @@ use codex_core_plugins::PluginLoadOutcome;
 use codex_core_plugins::PluginReadRequest;
 use codex_core_plugins::PluginUninstallError as CorePluginUninstallError;
 use codex_core_plugins::loader::load_plugin_apps;
-use codex_core_plugins::loader::load_plugin_mcp_servers;
 use codex_core_plugins::loader::plugin_telemetry_metadata_from_root;
 use codex_core_plugins::manifest::PluginManifestInterface;
 use codex_core_plugins::marketplace::MarketplaceError;
@@ -343,22 +316,6 @@ use codex_login::complete_device_code_login;
 use codex_login::login_with_api_key;
 use codex_login::request_device_code;
 use codex_login::run_login_server;
-#[cfg(feature = "mcp")]
-use codex_mcp::McpRuntimeEnvironment;
-#[cfg(feature = "mcp")]
-use codex_mcp::McpServerStatusSnapshot;
-#[cfg(feature = "mcp")]
-use codex_mcp::McpSnapshotDetail;
-#[cfg(feature = "mcp")]
-use codex_mcp::collect_mcp_server_status_snapshot_with_detail;
-#[cfg(feature = "mcp")]
-use codex_mcp::discover_supported_scopes;
-#[cfg(feature = "mcp")]
-use codex_mcp::effective_mcp_servers;
-#[cfg(feature = "mcp")]
-use codex_mcp::read_mcp_resource as read_mcp_resource_without_thread;
-#[cfg(feature = "mcp")]
-use codex_mcp::resolve_oauth_scopes;
 use codex_model_provider::ProviderAccountError;
 use codex_model_provider::create_model_provider;
 use codex_models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
@@ -384,8 +341,6 @@ use codex_protocol::protocol::EventMsg;
 #[cfg(test)]
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::InitialHistory;
-#[cfg(feature = "mcp")]
-use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RealtimeVoicesList;
@@ -402,8 +357,6 @@ use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
-#[cfg(feature = "mcp")]
-use codex_rmcp_client::perform_oauth_login_return_url;
 use codex_rollout::EventPersistenceMode;
 use codex_rollout::is_persisted_rollout_item;
 use codex_rollout::state_db::StateDbHandle;
@@ -458,14 +411,15 @@ mod catalog_processor;
 mod command_exec_processor;
 mod config_processor;
 mod device_key_processor;
+#[cfg(feature = "external-agent-migration")]
 mod external_agent_config_processor;
+#[cfg(not(feature = "external-agent-migration"))]
+mod external_agent_config_processor_stub;
 mod feedback_processor;
 mod fs_processor;
 mod git_processor;
 mod initialize_processor;
 mod marketplace_processor;
-#[cfg(feature = "mcp")]
-mod mcp_processor;
 mod plugins;
 mod process_exec_processor;
 mod search;
@@ -480,14 +434,15 @@ pub(crate) use catalog_processor::CatalogRequestProcessor;
 pub(crate) use command_exec_processor::CommandExecRequestProcessor;
 pub(crate) use config_processor::ConfigRequestProcessor;
 pub(crate) use device_key_processor::DeviceKeyRequestProcessor;
+#[cfg(feature = "external-agent-migration")]
 pub(crate) use external_agent_config_processor::ExternalAgentConfigRequestProcessor;
+#[cfg(not(feature = "external-agent-migration"))]
+pub(crate) use external_agent_config_processor_stub::ExternalAgentConfigRequestProcessor;
 pub(crate) use feedback_processor::FeedbackRequestProcessor;
 pub(crate) use fs_processor::FsRequestProcessor;
 pub(crate) use git_processor::GitRequestProcessor;
 pub(crate) use initialize_processor::InitializeRequestProcessor;
 pub(crate) use marketplace_processor::MarketplaceRequestProcessor;
-#[cfg(feature = "mcp")]
-pub(crate) use mcp_processor::McpRequestProcessor;
 pub(crate) use plugins::PluginRequestProcessor;
 pub(crate) use process_exec_processor::ProcessExecRequestProcessor;
 pub(crate) use search::SearchRequestProcessor;

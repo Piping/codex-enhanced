@@ -3,24 +3,13 @@ use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallPolicy;
-#[cfg(feature = "mcp")]
-use codex_config::types::McpServerConfig;
 use codex_core_plugins::remote::is_valid_remote_plugin_id;
 use codex_core_plugins::remote::validate_remote_plugin_id;
-#[cfg(feature = "mcp")]
-use codex_mcp::McpOAuthLoginSupport;
-#[cfg(feature = "mcp")]
-use codex_mcp::oauth_login_support;
-#[cfg(feature = "mcp")]
-use codex_mcp::should_retry_without_scopes;
-#[cfg(feature = "mcp")]
-use codex_rmcp_client::perform_oauth_login_silent;
 
 #[derive(Clone)]
 pub(crate) struct PluginRequestProcessor {
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
-    outgoing: Arc<OutgoingMessageSender>,
     analytics_events_client: AnalyticsEventsClient,
     config_manager: ConfigManager,
     workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
@@ -184,7 +173,7 @@ impl PluginRequestProcessor {
     pub(crate) fn new(
         auth_manager: Arc<AuthManager>,
         thread_manager: Arc<ThreadManager>,
-        outgoing: Arc<OutgoingMessageSender>,
+        _outgoing: Arc<OutgoingMessageSender>,
         analytics_events_client: AnalyticsEventsClient,
         config_manager: ConfigManager,
         workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
@@ -192,7 +181,6 @@ impl PluginRequestProcessor {
         Self {
             auth_manager,
             thread_manager,
-            outgoing,
             analytics_events_client,
             config_manager,
             workspace_settings_cache,
@@ -300,7 +288,7 @@ impl PluginRequestProcessor {
 
     fn spawn_effective_plugins_changed_task(
         thread_manager: Arc<ThreadManager>,
-        config_manager: ConfigManager,
+        _config_manager: ConfigManager,
     ) {
         tokio::spawn(async move {
             thread_manager.plugins_manager().clear_cache();
@@ -308,10 +296,6 @@ impl PluginRequestProcessor {
             if thread_manager.list_thread_ids().await.is_empty() {
                 return;
             }
-            #[cfg(feature = "mcp")]
-            crate::mcp_refresh::queue_best_effort_refresh(&thread_manager, &config_manager).await;
-            #[cfg(not(feature = "mcp"))]
-            let _ = config_manager;
         });
     }
 
@@ -917,14 +901,6 @@ impl PluginRequestProcessor {
 
         self.on_effective_plugins_changed();
 
-        #[cfg(feature = "mcp")]
-        let plugin_mcp_servers = load_plugin_mcp_servers(result.installed_path.as_path()).await;
-        #[cfg(feature = "mcp")]
-        if !plugin_mcp_servers.is_empty() {
-            self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
-                .await;
-        }
-
         let plugin_apps = load_plugin_apps(result.installed_path.as_path()).await;
         let auth = self.auth_manager.auth().await;
         let apps_needing_auth = self
@@ -1035,14 +1011,6 @@ impl PluginRequestProcessor {
         self.analytics_events_client
             .track_plugin_installed(plugin_metadata);
 
-        #[cfg(feature = "mcp")]
-        let plugin_mcp_servers = load_plugin_mcp_servers(result.installed_path.as_path()).await;
-        #[cfg(feature = "mcp")]
-        if !plugin_mcp_servers.is_empty() {
-            self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
-                .await;
-        }
-
         let plugin_apps = load_plugin_apps(result.installed_path.as_path()).await;
         let apps_needing_auth = self
             .plugin_apps_needing_auth_for_install(
@@ -1121,85 +1089,6 @@ impl PluginRequestProcessor {
             plugin_apps,
             codex_apps_ready,
         )
-    }
-
-    #[cfg(feature = "mcp")]
-    async fn start_plugin_mcp_oauth_logins(
-        &self,
-        config: &Config,
-        plugin_mcp_servers: HashMap<String, McpServerConfig>,
-    ) {
-        for (name, server) in plugin_mcp_servers {
-            let oauth_config = match oauth_login_support(&server.transport).await {
-                McpOAuthLoginSupport::Supported(config) => config,
-                McpOAuthLoginSupport::Unsupported => continue,
-                McpOAuthLoginSupport::Unknown(err) => {
-                    warn!(
-                        "MCP server may or may not require login for plugin install {name}: {err}"
-                    );
-                    continue;
-                }
-            };
-
-            let resolved_scopes = resolve_oauth_scopes(
-                /*explicit_scopes*/ None,
-                server.scopes.clone(),
-                oauth_config.discovered_scopes.clone(),
-            );
-
-            let store_mode = config.mcp_oauth_credentials_store_mode;
-            let callback_port = config.mcp_oauth_callback_port;
-            let callback_url = config.mcp_oauth_callback_url.clone();
-            let outgoing = Arc::clone(&self.outgoing);
-            let notification_name = name.clone();
-
-            tokio::spawn(async move {
-                let first_attempt = perform_oauth_login_silent(
-                    &name,
-                    &oauth_config.url,
-                    store_mode,
-                    oauth_config.http_headers.clone(),
-                    oauth_config.env_http_headers.clone(),
-                    &resolved_scopes.scopes,
-                    server.oauth_resource.as_deref(),
-                    callback_port,
-                    callback_url.as_deref(),
-                )
-                .await;
-
-                let final_result = match first_attempt {
-                    Err(err) if should_retry_without_scopes(&resolved_scopes, &err) => {
-                        perform_oauth_login_silent(
-                            &name,
-                            &oauth_config.url,
-                            store_mode,
-                            oauth_config.http_headers,
-                            oauth_config.env_http_headers,
-                            &[],
-                            server.oauth_resource.as_deref(),
-                            callback_port,
-                            callback_url.as_deref(),
-                        )
-                        .await
-                    }
-                    result => result,
-                };
-
-                let (success, error) = match final_result {
-                    Ok(()) => (true, None),
-                    Err(err) => (false, Some(err.to_string())),
-                };
-
-                let notification = ServerNotification::McpServerOauthLoginCompleted(
-                    McpServerOauthLoginCompletedNotification {
-                        name: notification_name,
-                        success,
-                        error,
-                    },
-                );
-                outgoing.send_server_notification(notification).await;
-            });
-        }
     }
 
     async fn plugin_uninstall_response(

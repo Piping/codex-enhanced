@@ -6,12 +6,11 @@ license.workspace = true
 autobins = false
 
 [features]
-default = ["realtime-webrtc"]
+default = []
 cloud-requirements = ["codex-app-server-client/cloud-requirements", "dep:codex-cloud-requirements"]
 oss = ["dep:codex-utils-oss"]
 voice = ["dep:cpal"]
 realtime-webrtc = ["dep:codex-realtime-webrtc"]
-mcp = ["codex-app-server-client/mcp", "dep:rmcp"]
 
 [[bin]]
 name = "codex-tui"
@@ -97,7 +96,6 @@ ratatui = { workspace = true, features = [
 ratatui-macros = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
-rmcp = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 serde_yaml = { workspace = true }

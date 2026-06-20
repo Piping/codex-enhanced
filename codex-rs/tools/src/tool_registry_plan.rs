@@ -36,15 +36,9 @@ use crate::create_js_repl_reset_tool;
 use crate::create_js_repl_tool;
 use crate::create_list_agents_tool;
 use crate::create_list_dir_tool;
-#[cfg(feature = "mcp")]
-use crate::create_list_mcp_resource_templates_tool;
-#[cfg(feature = "mcp")]
-use crate::create_list_mcp_resources_tool;
 use crate::create_local_shell_tool;
 use crate::create_question_tool;
 use crate::create_read_file_tool;
-#[cfg(feature = "mcp")]
-use crate::create_read_mcp_resource_tool;
 use crate::create_report_agent_job_result_tool;
 use crate::create_request_permissions_tool;
 use crate::create_request_user_input_tool;
@@ -68,8 +62,6 @@ use crate::create_web_search_tool;
 use crate::create_write_stdin_tool;
 use crate::default_namespace_description;
 use crate::dynamic_tool_to_responses_api_tool;
-#[cfg(feature = "mcp")]
-use crate::mcp_tool_to_responses_api_tool;
 use crate::question_tool_description;
 use crate::request_permissions_tool_description;
 use crate::request_user_input_tool_description;
@@ -198,28 +190,6 @@ pub fn build_tool_registry_plan(
         plan.register_handler("container.exec", ToolHandlerKind::Shell);
         plan.register_handler("local_shell", ToolHandlerKind::Shell);
         plan.register_handler("shell_command", ToolHandlerKind::ShellCommand);
-    }
-
-    #[cfg(feature = "mcp")]
-    if params.mcp_tools.is_some() {
-        plan.push_spec(
-            create_list_mcp_resources_tool(),
-            /*supports_parallel_tool_calls*/ true,
-            config.code_mode_enabled,
-        );
-        plan.push_spec(
-            create_list_mcp_resource_templates_tool(),
-            /*supports_parallel_tool_calls*/ true,
-            config.code_mode_enabled,
-        );
-        plan.push_spec(
-            create_read_mcp_resource_tool(),
-            /*supports_parallel_tool_calls*/ true,
-            config.code_mode_enabled,
-        );
-        plan.register_handler("list_mcp_resources", ToolHandlerKind::McpResource);
-        plan.register_handler("list_mcp_resource_templates", ToolHandlerKind::McpResource);
-        plan.register_handler("read_mcp_resource", ToolHandlerKind::McpResource);
     }
 
     plan.push_spec(
@@ -520,70 +490,6 @@ pub fn build_tool_registry_plan(
                 config.code_mode_enabled,
             );
             plan.register_handler("report_agent_job_result", ToolHandlerKind::AgentJobs);
-        }
-    }
-
-    #[cfg(feature = "mcp")]
-    if let Some(mcp_tools) = params.mcp_tools {
-        let mut entries = mcp_tools.to_vec();
-        entries.sort_by_key(|tool| tool.name.display());
-        let mut namespace_entries = BTreeMap::new();
-
-        for tool in entries {
-            let Some(namespace) = tool.name.namespace.as_ref() else {
-                let tool_name = &tool.name;
-                tracing::error!("Skipping MCP tool `{tool_name}`: MCP tools must be namespaced");
-                continue;
-            };
-            namespace_entries
-                .entry(namespace.clone())
-                .or_insert_with(Vec::new)
-                .push(tool);
-        }
-
-        for (namespace, mut entries) in namespace_entries {
-            entries.sort_by_key(|tool| tool.name.name.clone());
-            let tool_namespace = params
-                .tool_namespaces
-                .and_then(|namespaces| namespaces.get(&namespace));
-            let description = tool_namespace
-                .and_then(|namespace| namespace.description.as_deref())
-                .map(str::trim)
-                .filter(|description| !description.is_empty())
-                .map(str::to_string)
-                .unwrap_or_else(|| {
-                    let namespace_name = tool_namespace
-                        .map(|namespace| namespace.name.as_str())
-                        .unwrap_or(namespace.as_str());
-                    default_namespace_description(namespace_name)
-                });
-            let mut tools = Vec::new();
-            for tool in entries {
-                match mcp_tool_to_responses_api_tool(&tool.name, tool.tool) {
-                    Ok(converted_tool) => {
-                        tools.push(ResponsesApiNamespaceTool::Function(converted_tool));
-                        plan.register_handler(tool.name, ToolHandlerKind::Mcp);
-                    }
-                    Err(error) => {
-                        let tool_name = &tool.name;
-                        tracing::error!(
-                            "Failed to convert `{tool_name}` MCP tool to OpenAI tool: {error:?}"
-                        );
-                    }
-                }
-            }
-
-            if !tools.is_empty() {
-                plan.push_spec(
-                    ToolSpec::Namespace(ResponsesApiNamespace {
-                        name: namespace,
-                        description,
-                        tools,
-                    }),
-                    /*supports_parallel_tool_calls*/ false,
-                    config.code_mode_enabled,
-                );
-            }
         }
     }
 

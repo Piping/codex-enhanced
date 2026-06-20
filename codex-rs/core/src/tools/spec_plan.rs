@@ -5,20 +5,10 @@ use crate::tools::handlers::DynamicToolHandler;
 use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::GetGoalHandler;
 use crate::tools::handlers::GrepFilesHandler;
-#[cfg(feature = "mcp")]
-use crate::tools::handlers::ListMcpResourceTemplatesHandler;
-#[cfg(feature = "mcp")]
-use crate::tools::handlers::ListMcpResourcesHandler;
 use crate::tools::handlers::LocalShellHandler;
-#[cfg(feature = "mcp")]
-use crate::tools::handlers::McpHandler;
 use crate::tools::handlers::PlanHandler;
 use crate::tools::handlers::ReadFileHandler;
-#[cfg(feature = "mcp")]
-use crate::tools::handlers::ReadMcpResourceHandler;
 use crate::tools::handlers::RequestPermissionsHandler;
-#[cfg(feature = "mcp")]
-use crate::tools::handlers::RequestPluginInstallHandler;
 use crate::tools::handlers::RequestUserInputHandler;
 use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellHandler;
@@ -36,12 +26,6 @@ use crate::tools::handlers::apply_patch_spec::create_apply_patch_json_tool;
 use crate::tools::handlers::goal_spec::create_create_goal_tool;
 use crate::tools::handlers::goal_spec::create_get_goal_tool;
 use crate::tools::handlers::goal_spec::create_update_goal_tool;
-#[cfg(feature = "mcp")]
-use crate::tools::handlers::mcp_resource_spec::create_list_mcp_resource_templates_tool;
-#[cfg(feature = "mcp")]
-use crate::tools::handlers::mcp_resource_spec::create_list_mcp_resources_tool;
-#[cfg(feature = "mcp")]
-use crate::tools::handlers::mcp_resource_spec::create_read_mcp_resource_tool;
 use crate::tools::handlers::multi_agents::CloseAgentHandler;
 use crate::tools::handlers::multi_agents::ResumeAgentHandler;
 use crate::tools::handlers::multi_agents::SendInputHandler;
@@ -66,8 +50,6 @@ use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHa
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
 use crate::tools::handlers::plan_spec::create_update_plan_tool;
-#[cfg(feature = "mcp")]
-use crate::tools::handlers::request_plugin_install_spec::create_request_plugin_install_tool;
 use crate::tools::handlers::request_user_input_spec::QUESTION_TOOL_NAME;
 use crate::tools::handlers::request_user_input_spec::REQUEST_USER_INPUT_TOOL_NAME;
 use crate::tools::handlers::request_user_input_spec::create_question_tool;
@@ -98,14 +80,6 @@ use crate::tools::spec_plan_types::agent_type_description;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
-#[cfg(feature = "code-mode")]
-use codex_tools::CodeModeToolDefinition;
-#[cfg(feature = "code-mode")]
-use codex_tools::CodeModeToolNamespaceDescription;
-#[cfg(feature = "mcp")]
-use codex_tools::ResponsesApiNamespace;
-#[cfg(feature = "mcp")]
-use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::TOOL_SEARCH_DEFAULT_LIMIT;
 use codex_tools::ToolEnvironmentMode;
 use codex_tools::ToolName;
@@ -114,27 +88,9 @@ use codex_tools::ToolSearchSourceInfo;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
 use codex_tools::coalesce_loadable_tool_specs;
-#[cfg(feature = "code-mode")]
-use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
-#[cfg(feature = "mcp")]
-use codex_tools::collect_request_plugin_install_entries;
 use codex_tools::collect_tool_search_source_infos;
-#[cfg(feature = "mcp")]
-use codex_tools::default_namespace_description;
 use codex_tools::dynamic_tool_to_loadable_tool_spec;
-#[cfg(feature = "mcp")]
-use codex_tools::mcp_tool_to_responses_api_tool;
-use std::collections::BTreeMap;
 use std::sync::Arc;
-
-#[cfg(feature = "code-mode")]
-use crate::tools::code_mode::execute_spec::create_code_mode_tool;
-#[cfg(feature = "code-mode")]
-use crate::tools::code_mode::wait_spec::create_wait_tool;
-#[cfg(feature = "code-mode")]
-use crate::tools::handlers::CodeModeExecuteHandler;
-#[cfg(feature = "code-mode")]
-use crate::tools::handlers::CodeModeWaitHandler;
 
 pub fn build_tool_registry_builder(
     config: &ToolsConfig,
@@ -142,62 +98,6 @@ pub fn build_tool_registry_builder(
 ) -> ToolRegistryBuilder {
     let mut builder = ToolRegistryBuilder::new();
     let exec_permission_approvals_enabled = config.exec_permission_approvals_enabled;
-
-    #[cfg(feature = "code-mode")]
-    if config.code_mode_enabled {
-        let namespace_descriptions = params
-            .tool_namespaces
-            .into_iter()
-            .flatten()
-            .map(|(namespace, detail)| {
-                (
-                    namespace.clone(),
-                    CodeModeToolNamespaceDescription {
-                        name: detail.name.clone(),
-                        description: detail.description.clone().unwrap_or_default(),
-                    },
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        let nested_config = config.for_code_mode_nested_tools();
-        let nested_builder = build_tool_registry_builder(
-            &nested_config,
-            ToolRegistryBuildParams {
-                discoverable_tools: None,
-                ..params
-            },
-        );
-        let mut enabled_tools = collect_code_mode_exec_prompt_tool_definitions(
-            nested_builder
-                .specs()
-                .iter()
-                .map(|configured_tool| &configured_tool.spec),
-        );
-        enabled_tools
-            .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
-        builder.push_spec(
-            create_code_mode_tool(
-                &enabled_tools,
-                &namespace_descriptions,
-                config.code_mode_only_enabled,
-                config.search_tool
-                    && params
-                        .deferred_mcp_tools
-                        .is_some_and(|tools| !tools.is_empty()),
-            ),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        #[cfg(feature = "code-mode")]
-        builder.register_handler(Arc::new(CodeModeExecuteHandler));
-        builder.push_spec(
-            create_wait_tool(),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        #[cfg(feature = "code-mode")]
-        builder.register_handler(Arc::new(CodeModeWaitHandler));
-    }
 
     if config.environment_mode.has_environment() {
         let include_environment_id =
@@ -262,28 +162,6 @@ pub fn build_tool_registry_builder(
         builder.register_handler(Arc::new(ShellCommandHandler::from(
             config.shell_command_backend,
         )));
-    }
-
-    #[cfg(feature = "mcp")]
-    if params.mcp_tools.is_some() {
-        builder.push_spec(
-            create_list_mcp_resources_tool(),
-            /*supports_parallel_tool_calls*/ true,
-            config.code_mode_enabled,
-        );
-        builder.push_spec(
-            create_list_mcp_resource_templates_tool(),
-            /*supports_parallel_tool_calls*/ true,
-            config.code_mode_enabled,
-        );
-        builder.push_spec(
-            create_read_mcp_resource_tool(),
-            /*supports_parallel_tool_calls*/ true,
-            config.code_mode_enabled,
-        );
-        builder.register_handler(Arc::new(ListMcpResourcesHandler));
-        builder.register_handler(Arc::new(ListMcpResourceTemplatesHandler));
-        builder.register_handler(Arc::new(ReadMcpResourceHandler));
     }
 
     builder.push_spec(
@@ -352,41 +230,7 @@ pub fn build_tool_registry_builder(
         .iter()
         .filter(|tool| tool.defer_loading && (config.namespace_tools || tool.namespace.is_none()))
         .collect::<Vec<_>>();
-    #[cfg(feature = "mcp")]
-    let deferred_mcp_tools_for_search = if config.namespace_tools {
-        params.deferred_mcp_tools
-    } else {
-        None
-    };
-    #[cfg(not(feature = "mcp"))]
-    let deferred_mcp_tools_for_search: Option<&[()]> = None;
-
-    let has_deferred_mcp_tools_for_search = {
-        #[cfg(feature = "mcp")]
-        {
-            deferred_mcp_tools_for_search.is_some()
-        }
-        #[cfg(not(feature = "mcp"))]
-        {
-            false
-        }
-    };
-    if config.search_tool
-        && (has_deferred_mcp_tools_for_search || !deferred_dynamic_tools.is_empty())
-    {
-        #[cfg(feature = "mcp")]
-        let mut search_source_infos = deferred_mcp_tools_for_search
-            .map(|deferred_mcp_tools| {
-                collect_tool_search_source_infos(deferred_mcp_tools.iter().map(|tool| {
-                    ToolSearchSource {
-                        server_name: tool.server_name,
-                        connector_name: tool.connector_name,
-                        description: tool.description,
-                    }
-                }))
-            })
-            .unwrap_or_default();
-        #[cfg(not(feature = "mcp"))]
+    if config.search_tool && !deferred_dynamic_tools.is_empty() {
         let mut search_source_infos = Vec::new();
 
         if !deferred_dynamic_tools.is_empty() {
@@ -404,21 +248,6 @@ pub fn build_tool_registry_builder(
         builder.register_handler(Arc::new(ToolSearchHandler::new(
             params.tool_search_entries.to_vec(),
         )));
-    }
-
-    #[cfg(feature = "mcp")]
-    if config.tool_suggest
-        && let Some(discoverable_tools) =
-            params.discoverable_tools.filter(|tools| !tools.is_empty())
-    {
-        builder.push_spec(
-            create_request_plugin_install_tool(&collect_request_plugin_install_entries(
-                discoverable_tools,
-            )),
-            /*supports_parallel_tool_calls*/ true,
-            /*code_mode_enabled*/ false,
-        );
-        builder.register_handler(Arc::new(RequestPluginInstallHandler));
     }
 
     if config.environment_mode.has_environment()
@@ -620,70 +449,6 @@ pub fn build_tool_registry_builder(
         }
     }
 
-    #[cfg(feature = "mcp")]
-    if let Some(mcp_tools) = params.mcp_tools {
-        let mut entries = mcp_tools.to_vec();
-        entries.sort_by_key(|tool| tool.name.display());
-        let mut namespace_entries = BTreeMap::new();
-
-        for tool in entries {
-            let Some(namespace) = tool.name.namespace.as_ref() else {
-                let tool_name = &tool.name;
-                tracing::error!("Skipping MCP tool `{tool_name}`: MCP tools must be namespaced");
-                continue;
-            };
-            namespace_entries
-                .entry(namespace.clone())
-                .or_insert_with(Vec::new)
-                .push(tool);
-        }
-
-        for (namespace, mut entries) in namespace_entries {
-            entries.sort_by_key(|tool| tool.name.name.clone());
-            let tool_namespace = params
-                .tool_namespaces
-                .and_then(|namespaces| namespaces.get(&namespace));
-            let description = tool_namespace
-                .and_then(|namespace| namespace.description.as_deref())
-                .map(str::trim)
-                .filter(|description| !description.is_empty())
-                .map(str::to_string)
-                .unwrap_or_else(|| {
-                    let namespace_name = tool_namespace
-                        .map(|namespace| namespace.name.as_str())
-                        .unwrap_or(namespace.as_str());
-                    default_namespace_description(namespace_name)
-                });
-            let mut tools = Vec::new();
-            for tool in entries {
-                match mcp_tool_to_responses_api_tool(&tool.name, tool.tool) {
-                    Ok(converted_tool) => {
-                        tools.push(ResponsesApiNamespaceTool::Function(converted_tool));
-                        builder.register_handler(Arc::new(McpHandler::new(tool.name)));
-                    }
-                    Err(error) => {
-                        let tool_name = &tool.name;
-                        tracing::error!(
-                            "Failed to convert `{tool_name}` MCP tool to OpenAI tool: {error:?}"
-                        );
-                    }
-                }
-            }
-
-            if config.namespace_tools && !tools.is_empty() {
-                builder.push_spec(
-                    ToolSpec::Namespace(ResponsesApiNamespace {
-                        name: namespace,
-                        description,
-                        tools,
-                    }),
-                    /*supports_parallel_tool_calls*/ false,
-                    config.code_mode_enabled,
-                );
-            }
-        }
-    }
-
     let mut dynamic_tool_specs = Vec::new();
     for tool in params.dynamic_tools {
         match dynamic_tool_to_loadable_tool_spec(tool) {
@@ -711,46 +476,7 @@ pub fn build_tool_registry_builder(
         }
     }
 
-    #[cfg(feature = "mcp")]
-    if let Some(deferred_mcp_tools) = params.deferred_mcp_tools {
-        for tool in deferred_mcp_tools {
-            let registered_directly = params
-                .mcp_tools
-                .is_some_and(|mcp_tools| mcp_tools.iter().any(|direct| direct.name == tool.name));
-            if !registered_directly {
-                builder.register_handler(Arc::new(McpHandler::new(tool.name.clone())));
-            }
-        }
-    }
-
     builder
-}
-
-#[cfg(feature = "code-mode")]
-fn compare_code_mode_tools(
-    left: &CodeModeToolDefinition,
-    right: &CodeModeToolDefinition,
-    namespace_descriptions: &BTreeMap<String, CodeModeToolNamespaceDescription>,
-) -> std::cmp::Ordering {
-    let left_namespace = code_mode_namespace_name(left, namespace_descriptions);
-    let right_namespace = code_mode_namespace_name(right, namespace_descriptions);
-
-    left_namespace
-        .cmp(&right_namespace)
-        .then_with(|| left.tool_name.name.cmp(&right.tool_name.name))
-        .then_with(|| left.name.cmp(&right.name))
-}
-
-#[cfg(feature = "code-mode")]
-fn code_mode_namespace_name<'a>(
-    tool: &CodeModeToolDefinition,
-    namespace_descriptions: &'a BTreeMap<String, CodeModeToolNamespaceDescription>,
-) -> Option<&'a str> {
-    tool.tool_name
-        .namespace
-        .as_ref()
-        .and_then(|namespace| namespace_descriptions.get(namespace))
-        .map(|namespace_description| namespace_description.name.as_str())
 }
 
 #[cfg(test)]

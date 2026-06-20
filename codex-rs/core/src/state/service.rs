@@ -8,10 +8,7 @@ use crate::config::StartedNetworkProxy;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianRejection;
 use crate::guardian::GuardianRejectionCircuitBreaker;
-#[cfg(feature = "mcp")]
-use crate::mcp::McpManager;
 use crate::skills_watcher::SkillsWatcher;
-use crate::tools::code_mode::CodeModeService;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
@@ -21,8 +18,6 @@ use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
 use codex_hooks::Hooks;
 use codex_login::AuthManager;
-#[cfg(feature = "mcp")]
-use codex_mcp::McpConnectionManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_otel::SessionTelemetry;
 use codex_rollout::state_db::StateDbHandle;
@@ -32,17 +27,9 @@ use codex_thread_store::ThreadStore;
 use std::path::PathBuf;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
-#[cfg(feature = "mcp")]
-use tokio::sync::RwLock;
 use tokio::sync::watch;
-#[cfg(feature = "mcp")]
-use tokio_util::sync::CancellationToken;
 
 pub(crate) struct SessionServices {
-    #[cfg(feature = "mcp")]
-    pub(crate) mcp_connection_manager: Arc<RwLock<McpConnectionManager>>,
-    #[cfg(feature = "mcp")]
-    pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
     #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) shell_zsh_path: Option<PathBuf>,
@@ -64,8 +51,6 @@ pub(crate) struct SessionServices {
     pub(crate) runtime_handle: Handle,
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
-    #[cfg(feature = "mcp")]
-    pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) skills_watcher: Arc<SkillsWatcher>,
     pub(crate) agent_control: AgentControl,
     pub(crate) network_proxy: Option<StartedNetworkProxy>,
@@ -75,7 +60,6 @@ pub(crate) struct SessionServices {
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
-    pub(crate) code_mode_service: CodeModeService,
     /// Shared process-level environment registry. Sessions carry an `Arc` handle so they can pass
     /// the same manager through child-thread spawn paths without reconstructing it.
     pub(crate) environment_manager: Arc<EnvironmentManager>,

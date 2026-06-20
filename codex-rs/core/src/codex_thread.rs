@@ -14,8 +14,6 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
-#[cfg(feature = "mcp")]
-use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
@@ -40,8 +38,6 @@ use codex_thread_store::ThreadMetadataPatch;
 use codex_thread_store::ThreadStoreError;
 use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
-#[cfg(feature = "mcp")]
-use rmcp::model::ReadResourceRequestParams;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -464,41 +460,6 @@ impl CodexThread {
 
     pub async fn config(&self) -> Arc<crate::config::Config> {
         self.codex.session.get_config().await
-    }
-
-    #[cfg(feature = "mcp")]
-    pub async fn read_mcp_resource(
-        &self,
-        server: &str,
-        uri: &str,
-    ) -> anyhow::Result<serde_json::Value> {
-        let result = self
-            .codex
-            .session
-            .read_resource(
-                server,
-                ReadResourceRequestParams {
-                    meta: None,
-                    uri: uri.to_string(),
-                },
-            )
-            .await?;
-
-        Ok(serde_json::to_value(result)?)
-    }
-
-    #[cfg(feature = "mcp")]
-    pub async fn call_mcp_tool(
-        &self,
-        server: &str,
-        tool: &str,
-        arguments: Option<serde_json::Value>,
-        meta: Option<serde_json::Value>,
-    ) -> anyhow::Result<CallToolResult> {
-        self.codex
-            .session
-            .call_tool(server, tool, arguments, meta)
-            .await
     }
 
     pub fn enabled(&self, feature: Feature) -> bool {

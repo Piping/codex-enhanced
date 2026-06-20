@@ -195,7 +195,6 @@ async fn dispatch_lifecycle_trace_records_incompatible_payload_failures() -> any
     Ok(())
 }
 
-#[cfg(feature = "code-mode")]
 #[tokio::test]
 async fn missing_code_mode_wait_traces_only_the_wait_tool_call() -> anyhow::Result<()> {
     use crate::tools::code_mode::CodeModeWaitHandler;

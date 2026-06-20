@@ -52,14 +52,10 @@ mod app_cmd;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod desktop_app;
 mod marketplace_cmd;
-#[cfg(feature = "mcp")]
-mod mcp_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
 use crate::marketplace_cmd::MarketplaceCli;
-#[cfg(feature = "mcp")]
-use crate::mcp_cmd::McpCli;
 
 use codex_core::build_models_manager;
 use codex_core::config::Config;
@@ -123,21 +119,8 @@ enum Subcommand {
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
 
-    /// Manage external MCP servers for Codex.
-    #[cfg(feature = "mcp")]
-    Mcp(McpCli),
-
     /// Manage Codex plugins.
     Plugin(PluginCli),
-
-    /// Start Codex as an MCP server (stdio).
-    #[cfg(feature = "mcp-server")]
-    McpServer,
-
-    /// Internal: start a Codex-shipped MCP server (stdio).
-    #[cfg(feature = "mcp-server")]
-    #[clap(hide = true, name = "builtin-mcp")]
-    BuiltinMcp(BuiltinMcpCommand),
 
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
@@ -193,14 +176,6 @@ enum Subcommand {
 
     /// Inspect feature flags.
     Features(FeaturesCli),
-}
-
-#[derive(Debug, Args)]
-#[cfg(feature = "mcp-server")]
-struct BuiltinMcpCommand {
-    name: String,
-    #[arg(long)]
-    codex_home: PathBuf,
 }
 
 #[derive(Debug, Parser)]
@@ -1022,36 +997,6 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 root_config_overrides.clone(),
             );
             codex_exec::run_main(exec_cli, arg0_paths.clone()).await?;
-        }
-        #[cfg(feature = "mcp-server")]
-        Some(Subcommand::McpServer) => {
-            reject_remote_mode_for_subcommand(
-                root_remote.as_deref(),
-                root_remote_auth_token_env.as_deref(),
-                "mcp-server",
-            )?;
-            codex_mcp_server::run_main(arg0_paths.clone(), root_config_overrides).await?;
-        }
-        #[cfg(feature = "mcp-server")]
-        Some(Subcommand::BuiltinMcp(command)) => {
-            reject_remote_mode_for_subcommand(
-                root_remote.as_deref(),
-                root_remote_auth_token_env.as_deref(),
-                "builtin-mcp",
-            )?;
-            let codex_home = AbsolutePathBuf::try_from(command.codex_home)?;
-            codex_builtin_mcps::run_builtin_mcp_server(&command.name, &codex_home).await?;
-        }
-        #[cfg(feature = "mcp")]
-        Some(Subcommand::Mcp(mut mcp_cli)) => {
-            reject_remote_mode_for_subcommand(
-                root_remote.as_deref(),
-                root_remote_auth_token_env.as_deref(),
-                "mcp",
-            )?;
-            // Propagate any root-level config overrides (e.g. `-c key=value`).
-            prepend_config_flags(&mut mcp_cli.config_overrides, root_config_overrides.clone());
-            mcp_cli.run().await?;
         }
         Some(Subcommand::Plugin(plugin_cli)) => {
             reject_remote_mode_for_subcommand(

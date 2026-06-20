@@ -33,8 +33,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::InterAgentCommunication;
-#[cfg(feature = "mcp")]
-use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeConversationListVoicesResponseEvent;
 use codex_protocol::protocol::RealtimeVoicesList;
@@ -54,13 +52,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::items::UserMessageItem;
-#[cfg(feature = "mcp")]
-use codex_protocol::mcp::RequestId as ProtocolRequestId;
 use codex_protocol::user_input::UserInput;
-#[cfg(feature = "mcp")]
-use codex_rmcp_client::ElicitationAction;
-#[cfg(feature = "mcp")]
-use codex_rmcp_client::ElicitationResponse;
 use serde_json::Value;
 use std::sync::Arc;
 use tracing::debug;
@@ -259,12 +251,6 @@ pub(super) async fn user_input_or_turn_inner(
                     .set_responsesapi_client_metadata(responsesapi_client_metadata);
             }
             current_context.session_telemetry.user_prompt(&items);
-            #[cfg(feature = "mcp")]
-            sess.refresh_mcp_servers_if_requested(
-                &current_context,
-                Some(sess.mcp_elicitation_reviewer()),
-            )
-            .await;
             let accepted_items = items.clone();
             sess.spawn_task(
                 Arc::clone(&current_context),
@@ -352,47 +338,6 @@ pub async fn run_user_shell_command(sess: &Arc<Session>, sub_id: String, command
     .await;
 }
 
-#[cfg(feature = "mcp")]
-pub async fn resolve_elicitation(
-    sess: &Arc<Session>,
-    server_name: String,
-    request_id: ProtocolRequestId,
-    decision: codex_protocol::approvals::ElicitationAction,
-    content: Option<Value>,
-    meta: Option<Value>,
-) {
-    let action = match decision {
-        codex_protocol::approvals::ElicitationAction::Accept => ElicitationAction::Accept,
-        codex_protocol::approvals::ElicitationAction::Decline => ElicitationAction::Decline,
-        codex_protocol::approvals::ElicitationAction::Cancel => ElicitationAction::Cancel,
-    };
-    let content = match action {
-        // Preserve the legacy fallback for clients that only send an action.
-        ElicitationAction::Accept => Some(content.unwrap_or_else(|| serde_json::json!({}))),
-        ElicitationAction::Decline | ElicitationAction::Cancel => None,
-    };
-    let response = ElicitationResponse {
-        action,
-        content,
-        meta,
-    };
-    let request_id = match request_id {
-        ProtocolRequestId::String(value) => {
-            rmcp::model::NumberOrString::String(std::sync::Arc::from(value))
-        }
-        ProtocolRequestId::Integer(value) => rmcp::model::NumberOrString::Number(value),
-    };
-    if let Err(err) = sess
-        .resolve_elicitation(server_name, request_id, response)
-        .await
-    {
-        warn!(
-            error = %err,
-            "failed to resolve elicitation request in session"
-        );
-    }
-}
-
 /// Propagate a user's exec approval decision to the session.
 /// Also optionally applies an execpolicy amendment.
 pub async fn exec_approval(
@@ -465,12 +410,6 @@ pub async fn request_permissions_response(
 
 pub async fn dynamic_tool_response(sess: &Arc<Session>, id: String, response: DynamicToolResponse) {
     sess.notify_dynamic_tool_response(&id, response).await;
-}
-
-#[cfg(feature = "mcp")]
-pub async fn refresh_mcp_servers(sess: &Arc<Session>, refresh_config: McpServerRefreshConfig) {
-    let mut guard = sess.pending_mcp_server_refresh_config.lock().await;
-    *guard = Some(refresh_config);
 }
 
 pub async fn reload_user_config(sess: &Arc<Session>) {
@@ -631,13 +570,6 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         .unified_exec_manager
         .terminate_all_processes()
         .await;
-    #[cfg(feature = "mcp")]
-    let mcp_shutdown = {
-        let mut manager = sess.services.mcp_connection_manager.write().await;
-        manager.begin_shutdown()
-    };
-    #[cfg(feature = "mcp")]
-    mcp_shutdown.await;
     sess.guardian_review_session.shutdown().await;
     info!("Shutting down Codex instance");
     let history = sess.clone_history().await;
@@ -690,9 +622,6 @@ pub async fn review(
 ) {
     let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
     sess.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
-        .await;
-    #[cfg(feature = "mcp")]
-    sess.refresh_mcp_servers_if_requested(&turn_context, Some(sess.mcp_elicitation_reviewer()))
         .await;
     match resolve_review_request(review_request, &turn_context.cwd) {
         Ok(resolved) => {
@@ -846,12 +775,6 @@ pub(super) async fn submission_loop(
                     dynamic_tool_response(&sess, id, response).await;
                     false
                 }
-                #[cfg(feature = "mcp")]
-                Op::RefreshMcpServers { config } => {
-                    refresh_mcp_servers(&sess, config).await;
-                    false
-                }
-                #[cfg(not(feature = "mcp"))]
                 Op::RefreshMcpServers { .. } => false,
                 Op::ReloadUserConfig => {
                     reload_user_config(&sess).await;
@@ -873,19 +796,6 @@ pub(super) async fn submission_loop(
                     run_user_shell_command(&sess, sub.id.clone(), command).await;
                     false
                 }
-                #[cfg(feature = "mcp")]
-                Op::ResolveElicitation {
-                    server_name,
-                    request_id,
-                    decision,
-                    content,
-                    meta,
-                } => {
-                    resolve_elicitation(&sess, server_name, request_id, decision, content, meta)
-                        .await;
-                    false
-                }
-                #[cfg(not(feature = "mcp"))]
                 Op::ResolveElicitation { .. } => false,
                 Op::Shutdown => shutdown(&sess, sub.id.clone()).await,
                 Op::Review { review_request } => {
@@ -912,13 +822,6 @@ pub(super) async fn submission_loop(
         .unified_exec_manager
         .terminate_all_processes()
         .await;
-    #[cfg(feature = "mcp")]
-    let mcp_shutdown = {
-        let mut manager = sess.services.mcp_connection_manager.write().await;
-        manager.begin_shutdown()
-    };
-    #[cfg(feature = "mcp")]
-    mcp_shutdown.await;
     // Also drain cached guardian state on this implicit shutdown path.
     sess.guardian_review_session.shutdown().await;
     debug!("Agent loop exited");

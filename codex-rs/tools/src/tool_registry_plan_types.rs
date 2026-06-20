@@ -23,8 +23,6 @@ pub enum ToolHandlerKind {
     JsReplReset,
     ListAgentsV2,
     ListDir,
-    Mcp,
-    McpResource,
     Plan,
     ReadFile,
     RequestPermissions,
@@ -59,8 +57,6 @@ pub struct ToolRegistryPlan {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ToolRegistryPlanParams<'a> {
-    #[cfg(feature = "mcp")]
-    pub mcp_tools: Option<&'a [ToolRegistryPlanMcpTool<'a>]>,
     pub deferred_mcp_tools: Option<&'a [ToolRegistryPlanDeferredTool<'a>]>,
     pub tool_namespaces: Option<&'a HashMap<String, ToolNamespace>>,
     pub discoverable_tools: Option<&'a [DiscoverableTool]>,
@@ -73,16 +69,6 @@ pub struct ToolRegistryPlanParams<'a> {
 pub struct ToolNamespace {
     pub name: String,
     pub description: Option<String>,
-}
-
-/// Direct MCP tool metadata needed to expose the Responses API namespace tool
-/// while registering its runtime handler with the canonical namespace/name
-/// identity.
-#[cfg(feature = "mcp")]
-#[derive(Debug, Clone)]
-pub struct ToolRegistryPlanMcpTool<'a> {
-    pub name: ToolName,
-    pub tool: &'a rmcp::model::Tool,
 }
 
 #[derive(Debug, Clone)]

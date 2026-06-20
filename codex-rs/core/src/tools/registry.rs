@@ -53,8 +53,6 @@ pub trait ToolHandler: Send + Sync {
         match (self.kind(), payload) {
             (ToolKind::Function, ToolPayload::Function { .. })
             | (ToolKind::Function, ToolPayload::ToolSearch { .. }) => true,
-            #[cfg(feature = "mcp")]
-            (ToolKind::Mcp, ToolPayload::Mcp { .. }) => true,
             _ => false,
         }
     }
@@ -126,7 +124,6 @@ impl AnyToolResult {
         result.to_response_item(&call_id, &payload)
     }
 
-    #[cfg_attr(not(feature = "code-mode"), allow(dead_code))]
     pub(crate) fn code_mode_result(self) -> serde_json::Value {
         let Self {
             payload, result, ..
@@ -287,20 +284,7 @@ impl ToolRegistry {
                 ),
             ),
         ];
-        let (mcp_server, mcp_server_origin) = match &invocation.payload {
-            #[cfg(feature = "mcp")]
-            ToolPayload::Mcp { server, .. } => {
-                let manager = invocation
-                    .session
-                    .services
-                    .mcp_connection_manager
-                    .read()
-                    .await;
-                let origin = manager.server_origin(server).map(str::to_owned);
-                (Some(server.clone()), origin)
-            }
-            _ => (Option::<String>::None, Option::<String>::None),
-        };
+        let (mcp_server, mcp_server_origin) = (Option::<String>::None, Option::<String>::None);
         let mcp_server_ref = mcp_server.as_deref();
         let mcp_server_origin_ref = mcp_server_origin.as_deref();
 
@@ -605,16 +589,6 @@ impl From<&ToolPayload> for HookToolInput {
                     prefix_rule: params.prefix_rule.clone(),
                     justification: params.justification.clone(),
                 },
-            },
-            #[cfg(feature = "mcp")]
-            ToolPayload::Mcp {
-                server,
-                tool,
-                raw_arguments,
-            } => HookToolInput::Mcp {
-                server: server.clone(),
-                tool: tool.clone(),
-                arguments: raw_arguments.clone(),
             },
         }
     }

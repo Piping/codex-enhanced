@@ -7,8 +7,6 @@ use crate::tools::TELEMETRY_PREVIEW_MAX_LINES;
 use crate::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::resolve_max_tokens;
-#[cfg(feature = "mcp")]
-use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -35,7 +33,6 @@ pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ToolCallSource {
     Direct,
-    #[cfg_attr(not(feature = "code-mode"), allow(dead_code))]
     CodeMode {
         /// Runtime cell that issued the nested tool request.
         cell_id: String,
@@ -60,24 +57,10 @@ pub struct ToolInvocation {
 
 #[derive(Clone, Debug)]
 pub enum ToolPayload {
-    Function {
-        arguments: String,
-    },
-    ToolSearch {
-        arguments: SearchToolCallParams,
-    },
-    Custom {
-        input: String,
-    },
-    LocalShell {
-        params: ShellToolCallParams,
-    },
-    #[cfg(feature = "mcp")]
-    Mcp {
-        server: String,
-        tool: String,
-        raw_arguments: String,
-    },
+    Function { arguments: String },
+    ToolSearch { arguments: SearchToolCallParams },
+    Custom { input: String },
+    LocalShell { params: ShellToolCallParams },
 }
 
 impl ToolPayload {
@@ -87,8 +70,6 @@ impl ToolPayload {
             ToolPayload::ToolSearch { arguments } => Cow::Owned(arguments.query.clone()),
             ToolPayload::Custom { input } => Cow::Borrowed(input),
             ToolPayload::LocalShell { params } => Cow::Owned(params.command.join(" ")),
-            #[cfg(feature = "mcp")]
-            ToolPayload::Mcp { raw_arguments, .. } => Cow::Borrowed(raw_arguments),
         }
     }
 }
@@ -113,109 +94,6 @@ pub trait ToolOutput: Send {
 
     fn code_mode_result(&self, payload: &ToolPayload) -> JsonValue {
         response_input_to_code_mode_result(self.to_response_item("", payload))
-    }
-}
-
-#[cfg(feature = "mcp")]
-impl ToolOutput for CallToolResult {
-    fn log_preview(&self) -> String {
-        let output = self.as_function_call_output_payload();
-        let preview = output.body.to_text().unwrap_or_else(|| output.to_string());
-        telemetry_preview(&preview)
-    }
-
-    fn success_for_logging(&self) -> bool {
-        self.success()
-    }
-
-    fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
-        ResponseInputItem::McpToolCallOutput {
-            call_id: call_id.to_string(),
-            output: self.clone(),
-        }
-    }
-
-    fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
-        serde_json::to_value(self).unwrap_or_else(|err| {
-            JsonValue::String(format!("failed to serialize mcp result: {err}"))
-        })
-    }
-}
-
-#[cfg(feature = "mcp")]
-#[derive(Clone, Debug)]
-pub struct McpToolOutput {
-    pub result: CallToolResult,
-    pub tool_input: JsonValue,
-    pub wall_time: Duration,
-    pub original_image_detail_supported: bool,
-    pub truncation_policy: TruncationPolicy,
-}
-
-#[cfg(feature = "mcp")]
-impl ToolOutput for McpToolOutput {
-    fn log_preview(&self) -> String {
-        let payload = self.response_payload();
-        let preview = payload.body.to_text().unwrap_or_else(|| {
-            serde_json::to_string(&self.result.content)
-                .unwrap_or_else(|err| format!("failed to serialize mcp result: {err}"))
-        });
-        telemetry_preview(&preview)
-    }
-
-    fn success_for_logging(&self) -> bool {
-        self.result.success()
-    }
-
-    fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
-        ResponseInputItem::FunctionCallOutput {
-            call_id: call_id.to_string(),
-            output: self.response_payload(),
-        }
-    }
-
-    fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
-        serde_json::to_value(&self.result).unwrap_or_else(|err| {
-            JsonValue::String(format!("failed to serialize mcp result: {err}"))
-        })
-    }
-
-    fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
-        serde_json::to_value(&self.result).ok()
-    }
-}
-
-#[cfg(feature = "mcp")]
-impl McpToolOutput {
-    fn response_payload(&self) -> FunctionCallOutputPayload {
-        let mut payload = self.result.as_function_call_output_payload();
-        if let Some(items) = payload.content_items_mut() {
-            sanitize_original_image_detail(self.original_image_detail_supported, items);
-        }
-
-        let wall_time_seconds = self.wall_time.as_secs_f64();
-        let header = format!("Wall time: {wall_time_seconds:.4} seconds\nOutput:");
-
-        match &mut payload.body {
-            FunctionCallOutputBody::Text(text) => {
-                if text.is_empty() {
-                    *text = header;
-                } else {
-                    *text = format!("{header}\n{text}");
-                }
-            }
-            FunctionCallOutputBody::ContentItems(items) => {
-                items.insert(0, FunctionCallOutputContentItem::InputText { text: header });
-            }
-        }
-
-        // This is the context-injection form, so keep it aligned with the
-        // function-call output truncation that conversation history already
-        // applies. Code-mode consumers still get the raw `CallToolResult`.
-        //
-        // The text is serialized again inside the Responses payload, so allow
-        // a small buffer for JSON escaping and wrapper overhead.
-        truncate_function_output_payload(&payload, self.truncation_policy * 1.2)
     }
 }
 
@@ -371,11 +249,6 @@ impl ToolOutput for AbortedToolOutput {
                 execution: "client".to_string(),
                 tools: Vec::new(),
             },
-            #[cfg(feature = "mcp")]
-            ToolPayload::Mcp { .. } => ResponseInputItem::McpToolCallOutput {
-                call_id: call_id.to_string(),
-                output: CallToolResult::from_error_text(self.message.clone()),
-            },
             _ => function_tool_response(
                 call_id,
                 payload,
@@ -523,19 +396,7 @@ pub(crate) fn response_input_to_code_mode_result(response: ResponseInputItem) ->
             }
         },
         ResponseInputItem::ToolSearchOutput { tools, .. } => JsonValue::Array(tools),
-        #[cfg(feature = "mcp")]
-        ResponseInputItem::McpToolCallOutput { output, .. } => {
-            output.code_mode_result(&ToolPayload::Mcp {
-                server: String::new(),
-                tool: String::new(),
-                raw_arguments: String::new(),
-            })
-        }
-        #[cfg(not(feature = "mcp"))]
-        ResponseInputItem::McpToolCallOutput { output, .. } => serde_json::to_value(output)
-            .unwrap_or_else(|err| {
-                JsonValue::String(format!("failed to serialize mcp result: {err}"))
-            }),
+        ResponseInputItem::McpToolCallOutput { .. } => JsonValue::Null,
     }
 }
 

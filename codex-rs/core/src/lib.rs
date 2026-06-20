@@ -4,10 +4,7 @@
 // user-visible output must go through the appropriate abstraction (e.g.,
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
-#![cfg_attr(
-    not(feature = "mcp"),
-    allow(dead_code, unused_imports, unused_variables)
-)]
+#![allow(dead_code, unused_imports, unused_variables)]
 
 mod apply_patch;
 mod apps;
@@ -50,29 +47,13 @@ mod hook_runtime;
 mod installation_id;
 pub(crate) mod landlock;
 pub use landlock::spawn_command_under_linux_sandbox;
-#[cfg(feature = "mcp")]
-pub(crate) mod mcp;
-#[cfg(feature = "mcp")]
-mod mcp_skill_dependencies;
-#[cfg(feature = "mcp")]
-mod mcp_tool_approval_templates;
-#[cfg(feature = "mcp")]
-mod mcp_tool_exposure;
 mod network_policy_decision;
 pub(crate) mod network_proxy_loader;
-#[cfg(feature = "mcp")]
-pub use mcp::McpManager;
 pub use network_proxy_loader::MtimeConfigReloader;
 pub use network_proxy_loader::build_network_proxy_state;
 pub use network_proxy_loader::build_network_proxy_state_and_reloader;
-mod original_image_detail;
-#[cfg(feature = "mcp")]
-pub use codex_mcp::SandboxState;
-#[cfg(feature = "mcp")]
-mod mcp_openai_file;
-#[cfg(feature = "mcp")]
-mod mcp_tool_call;
 pub(crate) mod mention_syntax;
+mod original_image_detail;
 pub(crate) mod utils;
 pub use mention_syntax::PLUGIN_TEXT_MENTION_SIGIL;
 pub use mention_syntax::TOOL_MENTION_SIGIL;

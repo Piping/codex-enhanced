@@ -11,9 +11,6 @@ path = "src/lib.rs"
 
 [features]
 default = []
-builtin-mcps = ["mcp", "codex-mcp/builtin-mcps"]
-code-mode = ["dep:codex-code-mode", "codex-rollout-trace/code-mode", "codex-tools/code-mode"]
-mcp = ["dep:codex-mcp", "dep:codex-rmcp-client", "dep:rmcp", "codex-tools/mcp"]
 starlark-execpolicy = ["codex-execpolicy/starlark"]
 
 [[bin]]
@@ -37,7 +34,6 @@ codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
 codex-async-utils = { workspace = true }
-codex-code-mode = { workspace = true, optional = true }
 codex-connectors = { workspace = true }
 codex-config = { workspace = true }
 codex-core-plugins = { workspace = true }
@@ -47,7 +43,6 @@ codex-features = { workspace = true }
 codex-feedback = { workspace = true }
 codex-login = { workspace = true }
 codex-memories-read = { workspace = true }
-codex-mcp = { workspace = true, optional = true }
 codex-model-provider-info = { workspace = true }
 codex-models-manager = { workspace = true }
 codex-shell-command = { workspace = true }
@@ -62,7 +57,6 @@ codex-protocol = { workspace = true }
 codex-response-debug-context = { workspace = true }
 codex-rollout = { workspace = true }
 codex-rollout-trace = { workspace = true }
-codex-rmcp-client = { workspace = true, optional = true }
 codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
 codex-terminal-detection = { workspace = true }
@@ -97,12 +91,6 @@ once_cell = { workspace = true }
 rand = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
-rmcp = { workspace = true, optional = true, default-features = false, features = [
-    "base64",
-    "macros",
-    "schemars",
-    "server",
-] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha1 = { workspace = true }

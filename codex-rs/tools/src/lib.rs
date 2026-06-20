@@ -1,14 +1,10 @@
 //! Shared tool definitions and Responses API tool primitives that can live
 //! outside `codex-core`.
-#![cfg_attr(not(feature = "mcp"), allow(unused_imports))]
-
 mod chat_completions;
-mod code_mode;
+mod code_mode_stub;
 mod dynamic_tool;
 mod image_detail;
 mod json_schema;
-#[cfg(feature = "mcp")]
-mod mcp_tool;
 mod messages;
 mod request_plugin_install;
 mod responses_api;
@@ -18,17 +14,17 @@ mod tool_discovery;
 mod tool_spec;
 
 pub use chat_completions::create_tools_json_for_chat_completions_api;
-pub use code_mode::CODE_MODE_EXEC_TOOL_NAME;
-pub use code_mode::CODE_MODE_WAIT_TOOL_NAME;
-pub use code_mode::CodeModeToolDefinition;
-pub use code_mode::CodeModeToolKind;
-pub use code_mode::CodeModeToolNamespaceDescription;
-pub use code_mode::augment_tool_spec_for_code_mode;
-pub use code_mode::code_mode_name_for_tool_name;
-pub use code_mode::collect_code_mode_exec_prompt_tool_definitions;
-pub use code_mode::collect_code_mode_tool_definitions;
-pub use code_mode::is_code_mode_nested_tool;
-pub use code_mode::tool_spec_to_code_mode_tool_definition;
+pub use code_mode_stub::CODE_MODE_EXEC_TOOL_NAME;
+pub use code_mode_stub::CODE_MODE_WAIT_TOOL_NAME;
+pub use code_mode_stub::CodeModeToolDefinition;
+pub use code_mode_stub::CodeModeToolKind;
+pub use code_mode_stub::CodeModeToolNamespaceDescription;
+pub use code_mode_stub::augment_tool_spec_for_code_mode;
+pub use code_mode_stub::code_mode_name_for_tool_name;
+pub use code_mode_stub::collect_code_mode_exec_prompt_tool_definitions;
+pub use code_mode_stub::collect_code_mode_tool_definitions;
+pub use code_mode_stub::is_code_mode_nested_tool;
+pub use code_mode_stub::tool_spec_to_code_mode_tool_definition;
 pub use codex_protocol::ToolName;
 pub use dynamic_tool::parse_dynamic_tool;
 pub use image_detail::can_request_original_image_detail;
@@ -39,10 +35,6 @@ pub use json_schema::JsonSchema;
 pub use json_schema::JsonSchemaPrimitiveType;
 pub use json_schema::JsonSchemaType;
 pub use json_schema::parse_tool_input_schema;
-#[cfg(feature = "mcp")]
-pub use mcp_tool::mcp_call_tool_result_output_schema;
-#[cfg(feature = "mcp")]
-pub use mcp_tool::parse_mcp_tool;
 pub use messages::create_tools_json_for_messages_api;
 pub use request_plugin_install::REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE;
 pub use request_plugin_install::REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE;
@@ -63,10 +55,6 @@ pub use responses_api::coalesce_loadable_tool_specs;
 pub use responses_api::default_namespace_description;
 pub use responses_api::dynamic_tool_to_loadable_tool_spec;
 pub use responses_api::dynamic_tool_to_responses_api_tool;
-#[cfg(feature = "mcp")]
-pub use responses_api::mcp_tool_to_deferred_responses_api_tool;
-#[cfg(feature = "mcp")]
-pub use responses_api::mcp_tool_to_responses_api_tool;
 pub use responses_api::tool_definition_to_responses_api_tool;
 pub use tool_config::ShellCommandBackendConfig;
 pub use tool_config::ToolEnvironmentMode;
@@ -85,15 +73,11 @@ pub use tool_discovery::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
 pub use tool_discovery::RequestPluginInstallEntry;
 pub use tool_discovery::TOOL_SEARCH_DEFAULT_LIMIT;
 pub use tool_discovery::TOOL_SEARCH_TOOL_NAME;
-#[cfg(feature = "mcp")]
-pub use tool_discovery::ToolSearchResultSource;
 pub use tool_discovery::ToolSearchSource;
 pub use tool_discovery::ToolSearchSourceInfo;
 pub use tool_discovery::collect_request_plugin_install_entries;
 pub use tool_discovery::collect_tool_search_source_infos;
 pub use tool_discovery::filter_request_plugin_install_discoverable_tools_for_client;
-#[cfg(feature = "mcp")]
-pub use tool_discovery::tool_search_result_source_to_loadable_tool_spec;
 pub use tool_spec::ConfiguredToolSpec;
 pub use tool_spec::ResponsesApiWebSearchFilters;
 pub use tool_spec::ResponsesApiWebSearchUserLocation;

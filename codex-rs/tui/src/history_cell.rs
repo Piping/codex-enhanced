@@ -48,7 +48,6 @@ use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 use crate::wrapping::adaptive_wrap_lines;
-use base64::Engine;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::McpAuthStatus;
 use codex_app_server_protocol::McpServerStatus;
@@ -81,7 +80,6 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::format_env_display;
 use codex_utils_elapsed::format_duration;
 use image::DynamicImage;
-use image::ImageReader;
 use ratatui::prelude::*;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
@@ -93,12 +91,10 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::any::Any;
 use std::collections::HashMap;
-use std::io::Cursor;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
-use tracing::error;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 use url::Url;
@@ -2039,40 +2035,7 @@ impl McpToolCallCell {
     }
 
     fn render_content_block(block: &serde_json::Value, width: usize) -> String {
-        #[cfg(not(feature = "mcp"))]
-        {
-            return format_and_truncate_tool_result(&block.to_string(), TOOL_CALL_MAX_LINES, width);
-        }
-
-        #[cfg(feature = "mcp")]
-        {
-            let content = match serde_json::from_value::<rmcp::model::Content>(block.clone()) {
-                Ok(content) => content,
-                Err(_) => {
-                    return format_and_truncate_tool_result(
-                        &block.to_string(),
-                        TOOL_CALL_MAX_LINES,
-                        width,
-                    );
-                }
-            };
-
-            match content.raw {
-                rmcp::model::RawContent::Text(text) => {
-                    format_and_truncate_tool_result(&text.text, TOOL_CALL_MAX_LINES, width)
-                }
-                rmcp::model::RawContent::Image(_) => "<image content>".to_string(),
-                rmcp::model::RawContent::Audio(_) => "<audio content>".to_string(),
-                rmcp::model::RawContent::Resource(resource) => {
-                    let uri = match resource.resource {
-                        rmcp::model::ResourceContents::TextResourceContents { uri, .. } => uri,
-                        rmcp::model::ResourceContents::BlobResourceContents { uri, .. } => uri,
-                    };
-                    format!("embedded resource: {uri}")
-                }
-                rmcp::model::RawContent::ResourceLink(link) => format!("link: {}", link.uri),
-            }
-        }
+        format_and_truncate_tool_result(&block.to_string(), TOOL_CALL_MAX_LINES, width)
     }
 }
 
@@ -2407,46 +2370,8 @@ fn try_new_completed_mcp_tool_call_with_image_output(
 /// Returns `None` when the block is not an image, when base64 decoding fails, when the format
 /// cannot be inferred, or when the image decoder rejects the bytes.
 fn decode_mcp_image(block: &serde_json::Value) -> Option<DynamicImage> {
-    #[cfg(not(feature = "mcp"))]
-    {
-        let _ = block;
-        return None;
-    }
-
-    #[cfg(feature = "mcp")]
-    {
-        let content = serde_json::from_value::<rmcp::model::Content>(block.clone()).ok()?;
-        let rmcp::model::RawContent::Image(image) = content.raw else {
-            return None;
-        };
-        let base64_data = if let Some(data_url) = image.data.strip_prefix("data:") {
-            data_url.split_once(',')?.1
-        } else {
-            image.data.as_str()
-        };
-        let raw_data = base64::engine::general_purpose::STANDARD
-            .decode(base64_data)
-            .map_err(|e| {
-                error!("Failed to decode image data: {e}");
-                e
-            })
-            .ok()?;
-        let reader = ImageReader::new(Cursor::new(raw_data))
-            .with_guessed_format()
-            .map_err(|e| {
-                error!("Failed to guess image format: {e}");
-                e
-            })
-            .ok()?;
-
-        reader
-            .decode()
-            .map_err(|e| {
-                error!("Image decoding failed: {e}");
-                e
-            })
-            .ok()
-    }
+    let _ = block;
+    None
 }
 
 #[allow(clippy::disallowed_methods)]

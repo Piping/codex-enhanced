@@ -9,8 +9,6 @@ use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::spec::build_specs_with_discoverable_tools;
-#[cfg(feature = "mcp")]
-use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseItem;
@@ -41,18 +39,10 @@ pub struct ToolRouter {
     registry: ToolRegistry,
     specs: Vec<ConfiguredToolSpec>,
     model_visible_specs: Vec<ToolSpec>,
-    #[cfg(feature = "mcp")]
-    parallel_mcp_server_names: HashSet<String>,
 }
 
 pub(crate) struct ToolRouterParams<'a> {
-    #[cfg(feature = "mcp")]
-    pub(crate) mcp_tools: Option<HashMap<String, ToolInfo>>,
-    #[cfg(feature = "mcp")]
-    pub(crate) deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
     pub(crate) unavailable_called_tools: Vec<ToolName>,
-    #[cfg(feature = "mcp")]
-    pub(crate) parallel_mcp_server_names: HashSet<String>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
 }
@@ -60,22 +50,12 @@ pub(crate) struct ToolRouterParams<'a> {
 impl ToolRouter {
     pub fn from_config(config: &ToolsConfig, params: ToolRouterParams<'_>) -> Self {
         let ToolRouterParams {
-            #[cfg(feature = "mcp")]
-            mcp_tools,
-            #[cfg(feature = "mcp")]
-            deferred_mcp_tools,
             unavailable_called_tools,
-            #[cfg(feature = "mcp")]
-            parallel_mcp_server_names,
             discoverable_tools,
             dynamic_tools,
         } = params;
         let builder = build_specs_with_discoverable_tools(
             config,
-            #[cfg(feature = "mcp")]
-            mcp_tools,
-            #[cfg(feature = "mcp")]
-            deferred_mcp_tools,
             unavailable_called_tools,
             discoverable_tools,
             dynamic_tools,
@@ -106,12 +86,9 @@ impl ToolRouter {
             registry,
             specs,
             model_visible_specs,
-            #[cfg(feature = "mcp")]
-            parallel_mcp_server_names,
         }
     }
 
-    #[cfg_attr(not(feature = "code-mode"), allow(dead_code))]
     pub fn specs(&self) -> Vec<ToolSpec> {
         self.specs
             .iter()
@@ -123,7 +100,6 @@ impl ToolRouter {
         self.model_visible_specs.clone()
     }
 
-    #[cfg_attr(not(feature = "code-mode"), allow(dead_code))]
     pub fn find_spec(&self, tool_name: &ToolName) -> Option<ToolSpec> {
         self.specs.iter().find_map(|config| match &config.spec {
             ToolSpec::Function(tool)
@@ -180,8 +156,6 @@ impl ToolRouter {
             // MCP parallel support is configured per server, including for deferred
             // tools that may not have a matching spec entry. Use the parsed payload
             // server so similarly named servers/tools cannot collide.
-            #[cfg(feature = "mcp")]
-            ToolPayload::Mcp { server, .. } => self.parallel_mcp_server_names.contains(server),
             _ => self.configured_tool_supports_parallel(&call.tool_name),
         }
     }
@@ -200,18 +174,6 @@ impl ToolRouter {
                 ..
             } => {
                 let tool_name = ToolName::new(namespace, name);
-                #[cfg(feature = "mcp")]
-                if let Some(tool_info) = session.resolve_mcp_tool_info(&tool_name).await {
-                    return Ok(Some(ToolCall {
-                        tool_name: tool_info.canonical_tool_name(),
-                        call_id,
-                        payload: ToolPayload::Mcp {
-                            server: tool_info.server_name,
-                            tool: tool_info.tool.name.to_string(),
-                            raw_arguments: arguments,
-                        },
-                    }));
-                }
                 Ok(Some(ToolCall {
                     tool_name,
                     call_id,
