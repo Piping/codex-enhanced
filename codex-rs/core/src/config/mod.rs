@@ -14,6 +14,7 @@ use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::ConstrainedWithSource;
+use codex_config::DEFAULT_SKILLS_SCAN_MAX_DEPTH;
 use codex_config::FeatureRequirementsToml;
 use codex_config::LoaderOverrides;
 use codex_config::McpServerIdentity;
@@ -466,6 +467,9 @@ pub struct Config {
 
     /// Whether to inject the `<skills_instructions>` developer block.
     pub include_skill_instructions: bool,
+
+    /// Maximum directory depth to traverse when discovering skills under a skills root.
+    pub skills_scan_max_depth: usize,
 
     /// Whether to inject the `<environment_context>` user block.
     pub include_environment_context: bool,
@@ -2736,6 +2740,11 @@ impl Config {
             .as_ref()
             .and_then(|skills| skills.include_instructions)
             .unwrap_or(true);
+        let skills_scan_max_depth = cfg
+            .skills
+            .as_ref()
+            .and_then(|skills| skills.scan_max_depth)
+            .unwrap_or(DEFAULT_SKILLS_SCAN_MAX_DEPTH);
         let include_environment_context = config_profile
             .include_environment_context
             .or(cfg.include_environment_context)
@@ -2952,6 +2961,7 @@ impl Config {
             include_permissions_instructions,
             include_apps_instructions,
             include_skill_instructions,
+            skills_scan_max_depth,
             include_environment_context,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.

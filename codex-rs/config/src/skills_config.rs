@@ -9,6 +9,8 @@ const fn default_enabled() -> bool {
     true
 }
 
+pub const DEFAULT_SKILLS_SCAN_MAX_DEPTH: usize = 1;
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct SkillConfig {
@@ -30,6 +32,10 @@ pub struct SkillsConfig {
     /// Whether turns receive the automatic skills instructions block.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_instructions: Option<bool>,
+
+    /// Maximum directory depth to traverse when discovering skills under a skills root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_max_depth: Option<usize>,
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config: Vec<SkillConfig>,

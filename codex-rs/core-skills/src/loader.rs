@@ -118,8 +118,6 @@ const MAX_DEPENDENCY_VALUE_LEN: usize = MAX_DESCRIPTION_LEN;
 const MAX_DEPENDENCY_DESCRIPTION_LEN: usize = MAX_DESCRIPTION_LEN;
 const MAX_DEPENDENCY_COMMAND_LEN: usize = MAX_DESCRIPTION_LEN;
 const MAX_DEPENDENCY_URL_LEN: usize = MAX_DESCRIPTION_LEN;
-// Traversal depth from the skills root.
-const MAX_SCAN_DEPTH: usize = 6;
 const MAX_SKILLS_DIRS_PER_ROOT: usize = 2000;
 
 #[derive(Debug)]
@@ -156,7 +154,7 @@ pub struct SkillRoot {
     pub plugin_id: Option<String>,
 }
 
-pub async fn load_skills_from_roots<I>(roots: I) -> SkillLoadOutcome
+pub async fn load_skills_from_roots<I>(roots: I, scan_max_depth: usize) -> SkillLoadOutcome
 where
     I: IntoIterator<Item = SkillRoot>,
 {
@@ -174,6 +172,7 @@ where
             &root_path,
             root.scope,
             root.plugin_id.as_deref(),
+            scan_max_depth,
             &mut outcome,
         )
         .await;
@@ -458,6 +457,7 @@ async fn discover_skills_under_root(
     root: &AbsolutePathBuf,
     scope: SkillScope,
     plugin_id: Option<&str>,
+    scan_max_depth: usize,
     outcome: &mut SkillLoadOutcome,
 ) {
     let root = canonicalize_for_skill_identity(root);
@@ -478,8 +478,9 @@ async fn discover_skills_under_root(
         truncated_by_dir_limit: &mut bool,
         path: AbsolutePathBuf,
         depth: usize,
+        scan_max_depth: usize,
     ) {
-        if depth > MAX_SCAN_DEPTH {
+        if depth > scan_max_depth {
             return;
         }
         if visited_dirs.len() >= MAX_SKILLS_DIRS_PER_ROOT {
@@ -540,6 +541,7 @@ async fn discover_skills_under_root(
                             &mut truncated_by_dir_limit,
                             resolved_dir,
                             depth + 1,
+                            scan_max_depth,
                         );
                     }
                     Err(err)
@@ -565,6 +567,7 @@ async fn discover_skills_under_root(
                     &mut truncated_by_dir_limit,
                     resolved_dir,
                     depth + 1,
+                    scan_max_depth,
                 );
                 continue;
             }

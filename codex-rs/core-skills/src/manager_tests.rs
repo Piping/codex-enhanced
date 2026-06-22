@@ -275,7 +275,7 @@ async fn skills_for_cwd_reuses_cached_entry_even_when_entry_has_extra_roots() {
     let _ = skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]).await;
 
     write_user_skill(&extra_root, "x", "extra-skill", "from extra root");
-    let extra_root_path = extra_root.path().abs();
+    let extra_root_path = extra_root.path().join("skills").abs();
     let base_input = SkillsLoadInput::new(
         cwd.path().abs(),
         Vec::new(),
@@ -369,7 +369,7 @@ async fn skills_for_cwd_loads_repo_user_and_extra_roots_with_local_fs() {
         .skills_for_cwd_with_extra_user_roots(
             &skills_input,
             /*force_reload*/ true,
-            &[extra_root.path().abs()],
+            &[extra_root.path().join("skills").abs()],
             Some(Arc::clone(&LOCAL_FS)),
         )
         .await;
@@ -514,7 +514,7 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
     write_user_skill(&extra_root_a, "x", "extra-skill-a", "from extra root a");
     write_user_skill(&extra_root_b, "x", "extra-skill-b", "from extra root b");
 
-    let extra_root_a_path = extra_root_a.path().abs();
+    let extra_root_a_path = extra_root_a.path().join("skills").abs();
     let base_input = SkillsLoadInput::new(
         cwd.path().abs(),
         Vec::new(),
@@ -542,7 +542,7 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
             .all(|skill| skill.name != "extra-skill-b")
     );
 
-    let extra_root_b_path = extra_root_b.path().abs();
+    let extra_root_b_path = extra_root_b.path().join("skills").abs();
     let outcome_b = skills_manager
         .skills_for_cwd_with_extra_user_roots(
             &base_input,

@@ -9,6 +9,7 @@ use crate::remote::RemoteInstalledPlugin;
 use crate::store::PluginStore;
 use crate::store::plugin_version_for_source;
 use codex_config::ConfigLayerStack;
+use codex_config::DEFAULT_SKILLS_SCAN_MAX_DEPTH;
 use codex_config::HooksFile;
 use codex_config::types::McpServerConfig;
 use codex_config::types::PluginConfig;
@@ -662,7 +663,7 @@ pub async fn load_plugin_skills(
             plugin_id: Some(plugin_id.as_key()),
         })
         .collect::<Vec<_>>();
-    let outcome = load_skills_from_roots(roots).await;
+    let outcome = load_skills_from_roots(roots, DEFAULT_SKILLS_SCAN_MAX_DEPTH).await;
     let had_errors = !outcome.errors.is_empty();
     let skills = outcome
         .skills

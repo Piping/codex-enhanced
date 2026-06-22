@@ -6,6 +6,17 @@ For advanced configuration instructions, see [this documentation](https://develo
 
 For a full configuration reference, see [this documentation](https://developers.openai.com/codex/config-reference).
 
+## Skills
+
+You can limit how deep Codex scans under each skills root when discovering `SKILL.md` files:
+
+```toml
+[skills]
+scan_max_depth = 1
+```
+
+The default is `1`, which scans the skills root itself and its immediate child directories. Increase this when you intentionally keep skills nested more deeply.
+
 ## Commit attribution
 
 Codex can add a [git trailer](https://git-scm.com/docs/git-interpret-trailers) to

@@ -4,6 +4,7 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
+use codex_config::DEFAULT_SKILLS_SCAN_MAX_DEPTH;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
@@ -118,6 +119,13 @@ async fn make_config_for_cwd(codex_home: &TempDir, cwd: PathBuf) -> TestConfig {
 }
 
 async fn load_skills_for_test(config: &TestConfig) -> SkillLoadOutcome {
+    load_skills_for_test_with_depth(config, DEFAULT_SKILLS_SCAN_MAX_DEPTH).await
+}
+
+async fn load_skills_for_test_with_depth(
+    config: &TestConfig,
+    scan_max_depth: usize,
+) -> SkillLoadOutcome {
     // Keep unit tests hermetic by never scanning the real `$HOME/.agents/skills`.
     super::load_skills_from_roots(
         super::skill_roots_from_layer_stack(
@@ -127,6 +135,7 @@ async fn load_skills_for_test(config: &TestConfig) -> SkillLoadOutcome {
             /*home_dir*/ None,
         )
         .await,
+        scan_max_depth,
     )
     .await
 }
@@ -305,7 +314,7 @@ async fn loads_skills_from_home_agents_dir_for_user_scope() -> anyhow::Result<()
         Some(&home_folder_abs),
     )
     .await;
-    let outcome = load_skills_from_roots(roots).await;
+    let outcome = load_skills_from_roots(roots, DEFAULT_SKILLS_SCAN_MAX_DEPTH).await;
     assert!(
         outcome.errors.is_empty(),
         "unexpected errors: {:?}",
@@ -847,7 +856,7 @@ async fn loads_skills_via_symlinked_subdir_for_user_scope() {
     symlink_dir(shared.path(), &codex_home.path().join("skills/shared"));
 
     let cfg = make_config(&codex_home).await;
-    let outcome = load_skills_for_test(&cfg).await;
+    let outcome = load_skills_for_test_with_depth(&cfg, 2).await;
 
     assert!(
         outcome.errors.is_empty(),
@@ -907,7 +916,7 @@ async fn does_not_loop_on_symlink_cycle_for_user_scope() {
     let skill_path = write_skill_at(&cycle_dir, "demo", "cycle-skill", "still loads");
 
     let cfg = make_config(&codex_home).await;
-    let outcome = load_skills_for_test(&cfg).await;
+    let outcome = load_skills_for_test_with_depth(&cfg, 2).await;
 
     assert!(
         outcome.errors.is_empty(),
@@ -941,12 +950,15 @@ async fn loads_skills_via_symlinked_subdir_for_admin_scope() {
     fs::create_dir_all(admin_root.path()).unwrap();
     symlink_dir(shared.path(), &admin_root.path().join("shared"));
 
-    let outcome = load_skills_from_roots([SkillRoot {
-        path: admin_root.path().abs(),
-        scope: SkillScope::Admin,
-        file_system: Arc::clone(&LOCAL_FS),
-        plugin_id: None,
-    }])
+    let outcome = load_skills_from_roots(
+        [SkillRoot {
+            path: admin_root.path().abs(),
+            scope: SkillScope::Admin,
+            file_system: Arc::clone(&LOCAL_FS),
+            plugin_id: None,
+        }],
+        2,
+    )
     .await;
 
     assert!(
@@ -987,7 +999,7 @@ async fn loads_skills_via_symlinked_subdir_for_repo_scope() {
     symlink_dir(shared.path(), &repo_skills_root.join("shared"));
 
     let cfg = make_config_for_cwd(&codex_home, repo_dir.path().to_path_buf()).await;
-    let outcome = load_skills_for_test(&cfg).await;
+    let outcome = load_skills_for_test_with_depth(&cfg, 2).await;
 
     assert!(
         outcome.errors.is_empty(),
@@ -1022,12 +1034,15 @@ async fn system_scope_ignores_symlinked_subdir() {
     fs::create_dir_all(&system_root).unwrap();
     symlink_dir(shared.path(), &system_root.join("shared"));
 
-    let outcome = load_skills_from_roots([SkillRoot {
-        path: system_root.abs(),
-        scope: SkillScope::System,
-        file_system: Arc::clone(&LOCAL_FS),
-        plugin_id: None,
-    }])
+    let outcome = load_skills_from_roots(
+        [SkillRoot {
+            path: system_root.abs(),
+            scope: SkillScope::System,
+            file_system: Arc::clone(&LOCAL_FS),
+            plugin_id: None,
+        }],
+        DEFAULT_SKILLS_SCAN_MAX_DEPTH,
+    )
     .await;
     assert!(
         outcome.errors.is_empty(),
@@ -1038,29 +1053,67 @@ async fn system_scope_ignores_symlinked_subdir() {
 }
 
 #[tokio::test]
-async fn respects_max_scan_depth_for_user_scope() {
+async fn respects_default_scan_max_depth_for_user_scope() {
     let codex_home = tempfile::tempdir().expect("tempdir");
 
-    let within_depth_path = write_skill(
-        &codex_home,
-        "d0/d1/d2/d3/d4/d5",
-        "within-depth-skill",
-        "loads",
+    let within_depth_path = write_skill(&codex_home, "d0", "within-depth-skill", "loads");
+    let _too_deep_path = write_skill(&codex_home, "d0/d1", "too-deep-skill", "should not load");
+
+    let skills_root = codex_home.path().join("skills");
+    let outcome = load_skills_from_roots(
+        [SkillRoot {
+            path: skills_root.abs(),
+            scope: SkillScope::User,
+            file_system: Arc::clone(&LOCAL_FS),
+            plugin_id: None,
+        }],
+        DEFAULT_SKILLS_SCAN_MAX_DEPTH,
+    )
+    .await;
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
     );
+    assert_eq!(
+        outcome.skills,
+        vec![SkillMetadata {
+            name: "within-depth-skill".to_string(),
+            description: "loads".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: normalized(&within_depth_path),
+            scope: SkillScope::User,
+            plugin_id: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn respects_configured_scan_max_depth_for_user_scope() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+
+    let within_depth_path = write_skill(&codex_home, "d0/d1/d2", "within-depth-skill", "loads");
     let _too_deep_path = write_skill(
         &codex_home,
-        "d0/d1/d2/d3/d4/d5/d6",
+        "d0/d1/d2/d3",
         "too-deep-skill",
         "should not load",
     );
 
     let skills_root = codex_home.path().join("skills");
-    let outcome = load_skills_from_roots([SkillRoot {
-        path: skills_root.abs(),
-        scope: SkillScope::User,
-        file_system: Arc::clone(&LOCAL_FS),
-        plugin_id: None,
-    }])
+    let outcome = load_skills_from_roots(
+        [SkillRoot {
+            path: skills_root.abs(),
+            scope: SkillScope::User,
+            file_system: Arc::clone(&LOCAL_FS),
+            plugin_id: None,
+        }],
+        3,
+    )
     .await;
 
     assert!(
@@ -1161,12 +1214,15 @@ async fn namespaces_plugin_skills_using_plugin_name() {
     )
     .unwrap();
 
-    let outcome = load_skills_from_roots([SkillRoot {
-        path: plugin_root.join("skills").abs(),
-        scope: SkillScope::User,
-        file_system: Arc::clone(&LOCAL_FS),
-        plugin_id: Some("sample@test".to_string()),
-    }])
+    let outcome = load_skills_from_roots(
+        [SkillRoot {
+            path: plugin_root.join("skills").abs(),
+            scope: SkillScope::User,
+            file_system: Arc::clone(&LOCAL_FS),
+            plugin_id: Some("sample@test".to_string()),
+        }],
+        DEFAULT_SKILLS_SCAN_MAX_DEPTH,
+    )
     .await;
 
     assert!(
@@ -1482,20 +1538,23 @@ async fn deduplicates_by_path_preferring_first_root() {
 
     let skill_path = write_skill_at(root.path(), "dupe", "dupe-skill", "from repo");
 
-    let outcome = load_skills_from_roots([
-        SkillRoot {
-            path: root.path().abs(),
-            scope: SkillScope::Repo,
-            file_system: Arc::clone(&LOCAL_FS),
-            plugin_id: None,
-        },
-        SkillRoot {
-            path: root.path().abs(),
-            scope: SkillScope::User,
-            file_system: Arc::clone(&LOCAL_FS),
-            plugin_id: None,
-        },
-    ])
+    let outcome = load_skills_from_roots(
+        [
+            SkillRoot {
+                path: root.path().abs(),
+                scope: SkillScope::Repo,
+                file_system: Arc::clone(&LOCAL_FS),
+                plugin_id: None,
+            },
+            SkillRoot {
+                path: root.path().abs(),
+                scope: SkillScope::User,
+                file_system: Arc::clone(&LOCAL_FS),
+                plugin_id: None,
+            },
+        ],
+        DEFAULT_SKILLS_SCAN_MAX_DEPTH,
+    )
     .await;
 
     assert!(

@@ -4,6 +4,8 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use codex_config::ConfigLayerStack;
+use codex_config::DEFAULT_SKILLS_SCAN_MAX_DEPTH;
+use codex_config::SkillsConfig;
 use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
@@ -22,7 +24,6 @@ use crate::loader::load_skills_from_roots;
 use crate::loader::skill_roots;
 use crate::system::install_system_skills;
 use crate::system::uninstall_system_skills;
-use codex_config::SkillsConfig;
 
 #[derive(Debug, Clone)]
 pub struct SkillsLoadInput {
@@ -30,6 +31,7 @@ pub struct SkillsLoadInput {
     pub effective_skill_roots: Vec<PluginSkillRoot>,
     pub config_layer_stack: ConfigLayerStack,
     pub bundled_skills_enabled: bool,
+    pub scan_max_depth: usize,
 }
 
 impl SkillsLoadInput {
@@ -39,11 +41,19 @@ impl SkillsLoadInput {
         config_layer_stack: ConfigLayerStack,
         bundled_skills_enabled: bool,
     ) -> Self {
+        let scan_max_depth = config_layer_stack
+            .effective_config()
+            .as_table()
+            .and_then(|table| table.get("skills"))
+            .and_then(|skills| skills.clone().try_into().ok())
+            .and_then(|skills: SkillsConfig| skills.scan_max_depth)
+            .unwrap_or(DEFAULT_SKILLS_SCAN_MAX_DEPTH);
         Self {
             cwd,
             effective_skill_roots,
             config_layer_stack,
             bundled_skills_enabled,
+            scan_max_depth,
         }
     }
 }
@@ -94,12 +104,14 @@ impl SkillsManager {
     ) -> SkillLoadOutcome {
         let roots = self.skill_roots_for_config(input, fs).await;
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
-        let cache_key = config_skills_cache_key(&roots, &skill_config_rules);
+        let cache_key = config_skills_cache_key(&roots, &skill_config_rules, input.scan_max_depth);
         if let Some(outcome) = self.cached_outcome_for_config(&cache_key) {
             return outcome;
         }
 
-        let outcome = self.build_skill_outcome(roots, &skill_config_rules).await;
+        let outcome = self
+            .build_skill_outcome(roots, &skill_config_rules, input.scan_max_depth)
+            .await;
         let mut cache = self
             .cache_by_config
             .write()
@@ -174,7 +186,9 @@ impl SkillsManager {
             );
         }
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
-        let outcome = self.build_skill_outcome(roots, &skill_config_rules).await;
+        let outcome = self
+            .build_skill_outcome(roots, &skill_config_rules, input.scan_max_depth)
+            .await;
         if use_cwd_cache {
             let mut cache = self
                 .cache_by_cwd
@@ -189,9 +203,10 @@ impl SkillsManager {
         &self,
         roots: Vec<SkillRoot>,
         skill_config_rules: &SkillConfigRules,
+        scan_max_depth: usize,
     ) -> SkillLoadOutcome {
         let outcome = crate::filter_skill_load_outcome_for_product(
-            load_skills_from_roots(roots).await,
+            load_skills_from_roots(roots, scan_max_depth).await,
             self.restriction_product,
         );
         let disabled_paths = resolve_disabled_skill_paths(&outcome.skills, skill_config_rules);
@@ -243,6 +258,7 @@ impl SkillsManager {
 struct ConfigSkillsCacheKey {
     roots: Vec<(AbsolutePathBuf, u8, Option<String>)>,
     skill_config_rules: SkillConfigRules,
+    scan_max_depth: usize,
 }
 
 pub fn bundled_skills_enabled_from_stack(
@@ -270,6 +286,7 @@ pub fn bundled_skills_enabled_from_stack(
 fn config_skills_cache_key(
     roots: &[SkillRoot],
     skill_config_rules: &SkillConfigRules,
+    scan_max_depth: usize,
 ) -> ConfigSkillsCacheKey {
     ConfigSkillsCacheKey {
         roots: roots
@@ -285,6 +302,7 @@ fn config_skills_cache_key(
             })
             .collect(),
         skill_config_rules: skill_config_rules.clone(),
+        scan_max_depth,
     }
 }
 

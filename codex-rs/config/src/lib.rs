@@ -109,6 +109,7 @@ pub use requirements_exec_policy::RequirementsExecPolicyPatternTokenToml;
 pub use requirements_exec_policy::RequirementsExecPolicyPrefixRuleToml;
 pub use requirements_exec_policy::RequirementsExecPolicyToml;
 pub use skills_config::BundledSkillsConfig;
+pub use skills_config::DEFAULT_SKILLS_SCAN_MAX_DEPTH;
 pub use skills_config::SkillConfig;
 pub use skills_config::SkillsConfig;
 pub use state::ConfigLayerEntry;

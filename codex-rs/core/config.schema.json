@@ -2319,6 +2319,12 @@
         "include_instructions": {
           "description": "Whether turns receive the automatic skills instructions block.",
           "type": "boolean"
+        },
+        "scan_max_depth": {
+          "description": "Maximum directory depth to traverse when discovering skills under a skills root.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
         }
       },
       "type": "object"

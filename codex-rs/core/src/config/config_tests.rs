@@ -7,6 +7,7 @@ use crate::config::edit::apply_blocking;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
+use codex_config::DEFAULT_SKILLS_SCAN_MAX_DEPTH;
 use codex_config::RequirementSource;
 use codex_config::config_toml::AgentRoleToml;
 use codex_config::config_toml::AgentsToml;
@@ -343,6 +344,7 @@ fn parses_bundled_skills_config() {
         r#"
 [skills]
 include_instructions = false
+scan_max_depth = 3
 
 [skills.bundled]
 enabled = false
@@ -355,6 +357,7 @@ enabled = false
         Some(SkillsConfig {
             bundled: Some(BundledSkillsConfig { enabled: false }),
             include_instructions: Some(false),
+            scan_max_depth: Some(3),
             config: Vec::new(),
         })
     );
@@ -7035,6 +7038,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
             agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
+            skills_scan_max_depth: DEFAULT_SKILLS_SCAN_MAX_DEPTH,
             agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
@@ -7295,6 +7299,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tool_output_token_limit: None,
         agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
         agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
+        skills_scan_max_depth: DEFAULT_SKILLS_SCAN_MAX_DEPTH,
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
@@ -7454,6 +7459,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tool_output_token_limit: None,
         agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
         agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
+        skills_scan_max_depth: DEFAULT_SKILLS_SCAN_MAX_DEPTH,
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
@@ -7598,6 +7604,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tool_output_token_limit: None,
         agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
         agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
+        skills_scan_max_depth: DEFAULT_SKILLS_SCAN_MAX_DEPTH,
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
