@@ -2223,6 +2223,140 @@ async fn completed_turn_history_renders_timestamp_separator_snapshot() {
 }
 
 #[tokio::test]
+async fn completed_turn_history_separator_includes_reasoning_tokens() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    complete_user_message(&mut chat, "msg-user", "Explain the result");
+    complete_assistant_message(
+        &mut chat,
+        "msg-assistant",
+        "Reasoning rendered.",
+        /*phase*/ None,
+    );
+    handle_token_count(
+        &mut chat,
+        Some(TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                output_tokens: 20,
+                reasoning_output_tokens: 321,
+                total_tokens: 20,
+                ..TokenUsage::default()
+            },
+            last_token_usage: TokenUsage {
+                output_tokens: 20,
+                reasoning_output_tokens: 321,
+                total_tokens: 20,
+                ..TokenUsage::default()
+            },
+            model_context_window: Some(200_000),
+        }),
+    );
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: Some("Reasoning rendered.".into()),
+            completed_at: Some(2),
+            duration_ms: Some(2_000),
+            time_to_first_token_ms: None,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+
+    assert!(combined.contains("Reasoning 321 tokens"));
+}
+
+#[tokio::test]
+async fn multiple_completed_turns_show_reasoning_tokens_per_turn() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    complete_user_message(&mut chat, "msg-user-1", "First turn");
+    complete_assistant_message(
+        &mut chat,
+        "msg-assistant-1",
+        "Turn one.",
+        /*phase*/ None,
+    );
+    handle_token_count(
+        &mut chat,
+        Some(TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                output_tokens: 10,
+                reasoning_output_tokens: 111,
+                total_tokens: 10,
+                ..TokenUsage::default()
+            },
+            last_token_usage: TokenUsage {
+                output_tokens: 10,
+                reasoning_output_tokens: 111,
+                total_tokens: 10,
+                ..TokenUsage::default()
+            },
+            model_context_window: Some(200_000),
+        }),
+    );
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: Some("Turn one.".into()),
+            completed_at: Some(2),
+            duration_ms: Some(2_000),
+            time_to_first_token_ms: None,
+        }),
+    });
+
+    complete_user_message(&mut chat, "msg-user-2", "Second turn");
+    complete_assistant_message(
+        &mut chat,
+        "msg-assistant-2",
+        "Turn two.",
+        /*phase*/ None,
+    );
+    handle_token_count(
+        &mut chat,
+        Some(TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                output_tokens: 22,
+                reasoning_output_tokens: 333,
+                total_tokens: 22,
+                ..TokenUsage::default()
+            },
+            last_token_usage: TokenUsage {
+                output_tokens: 12,
+                reasoning_output_tokens: 222,
+                total_tokens: 12,
+                ..TokenUsage::default()
+            },
+            model_context_window: Some(200_000),
+        }),
+    );
+    chat.handle_codex_event(Event {
+        id: "turn-2".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-2".to_string(),
+            last_agent_message: Some("Turn two.".into()),
+            completed_at: Some(4),
+            duration_ms: Some(1_000),
+            time_to_first_token_ms: None,
+        }),
+    });
+
+    let combined = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+
+    assert!(combined.contains("Reasoning 111 tokens"), "{combined}");
+    assert!(combined.contains("Reasoning 222 tokens"), "{combined}");
+}
+
+#[tokio::test]
 async fn deltas_then_same_final_message_are_rendered_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

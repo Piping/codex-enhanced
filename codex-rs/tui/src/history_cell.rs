@@ -71,6 +71,7 @@ use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceTemplate;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::local_image_label_text;
+use codex_protocol::num_format::format_with_separators;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
@@ -3429,6 +3430,7 @@ pub struct FinalMessageSeparator {
     timestamp_label: Option<String>,
     turn_duration: Option<std::time::Duration>,
     elapsed_seconds: Option<u64>,
+    reasoning_output_tokens: Option<i64>,
     activity_summary: Option<SessionActivitySummary>,
     runtime_metrics: Option<RuntimeMetricsSummary>,
 }
@@ -3438,6 +3440,7 @@ impl FinalMessageSeparator {
         timestamp_label: Option<String>,
         turn_duration: Option<std::time::Duration>,
         elapsed_seconds: Option<u64>,
+        reasoning_output_tokens: Option<i64>,
         activity_summary: Option<SessionActivitySummary>,
         runtime_metrics: Option<RuntimeMetricsSummary>,
     ) -> Self {
@@ -3445,6 +3448,7 @@ impl FinalMessageSeparator {
             timestamp_label,
             turn_duration,
             elapsed_seconds,
+            reasoning_output_tokens,
             activity_summary,
             runtime_metrics,
         }
@@ -3464,6 +3468,15 @@ impl HistoryCell for FinalMessageSeparator {
             .map(super::status_indicator_widget::fmt_elapsed_compact)
         {
             label_parts.push(format!("Worked for {elapsed_seconds}"));
+        }
+        if let Some(reasoning_output_tokens) =
+            self.reasoning_output_tokens.filter(|tokens| *tokens > 0)
+        {
+            let noun = pluralize(reasoning_output_tokens as u64, "token", "tokens");
+            label_parts.push(format!(
+                "Reasoning {} {noun}",
+                format_with_separators(reasoning_output_tokens)
+            ));
         }
         if let Some(activity_label) = self
             .activity_summary
@@ -3498,6 +3511,15 @@ impl HistoryCell for FinalMessageSeparator {
             .map(super::status_indicator_widget::fmt_elapsed_compact)
         {
             label_parts.push(format!("Worked for {elapsed_seconds}"));
+        }
+        if let Some(reasoning_output_tokens) =
+            self.reasoning_output_tokens.filter(|tokens| *tokens > 0)
+        {
+            let noun = pluralize(reasoning_output_tokens as u64, "token", "tokens");
+            label_parts.push(format!(
+                "Reasoning {} {noun}",
+                format_with_separators(reasoning_output_tokens)
+            ));
         }
         if let Some(activity_label) = self
             .activity_summary
@@ -3664,7 +3686,6 @@ mod tests {
     use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::mcp::Tool;
-    use rmcp::model::Content;
 
     const SMALL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
     async fn test_config() -> Config {
@@ -3790,12 +3811,18 @@ mod tests {
     }
 
     fn image_block(data: &str) -> serde_json::Value {
-        serde_json::to_value(Content::image(data.to_string(), "image/png"))
-            .expect("image content should serialize")
+        json!({
+            "type": "image",
+            "data": data,
+            "mimeType": "image/png",
+        })
     }
 
     fn text_block(text: &str) -> serde_json::Value {
-        serde_json::to_value(Content::text(text)).expect("text content should serialize")
+        json!({
+            "type": "text",
+            "text": text,
+        })
     }
 
     fn resource_link_block(
@@ -3804,17 +3831,17 @@ mod tests {
         title: Option<&str>,
         description: Option<&str>,
     ) -> serde_json::Value {
-        serde_json::to_value(Content::resource_link(rmcp::model::RawResource {
-            uri: uri.to_string(),
-            name: name.to_string(),
-            title: title.map(str::to_string),
-            description: description.map(str::to_string),
-            mime_type: None,
-            size: None,
-            icons: None,
-            meta: None,
-        }))
-        .expect("resource link content should serialize")
+        json!({
+            "type": "resource_link",
+            "uri": uri,
+            "name": name,
+            "title": title,
+            "description": description,
+            "mimeType": serde_json::Value::Null,
+            "size": serde_json::Value::Null,
+            "icons": serde_json::Value::Null,
+            "_meta": serde_json::Value::Null,
+        })
     }
 
     #[test]
@@ -4126,6 +4153,7 @@ mod tests {
             None,
             /*turn_duration*/ None,
             Some(12),
+            /*reasoning_output_tokens*/ None,
             None,
             Some(summary),
         );
@@ -4150,6 +4178,7 @@ mod tests {
             None,
             /*turn_duration*/ None,
             Some(61),
+            /*reasoning_output_tokens*/ None,
             None,
             /*runtime_metrics*/ None,
         );
@@ -4165,6 +4194,7 @@ mod tests {
             None,
             Some(std::time::Duration::from_millis(2_000)),
             Some(61),
+            /*reasoning_output_tokens*/ None,
             None,
             /*runtime_metrics*/ None,
         );
@@ -4180,6 +4210,7 @@ mod tests {
             Some("2026-04-08 03:04:05 +08:00".to_string()),
             /*turn_duration*/ None,
             /*elapsed_seconds*/ None,
+            /*reasoning_output_tokens*/ None,
             None,
             /*runtime_metrics*/ None,
         );
@@ -4195,6 +4226,7 @@ mod tests {
             None,
             Some(std::time::Duration::from_secs(2)),
             Some(61),
+            /*reasoning_output_tokens*/ None,
             Some(SessionActivitySummary {
                 interaction_rounds: 3,
                 tool_calls: 5,
@@ -4205,6 +4237,27 @@ mod tests {
 
         assert_eq!(rendered.len(), 1);
         assert!(rendered[0].contains("3 interaction rounds • 5 tool calls"));
+    }
+
+    #[test]
+    fn final_message_separator_includes_reasoning_tokens() {
+        let cell = FinalMessageSeparator::new(
+            Some("2026-04-08 03:04:05 +08:00".to_string()),
+            Some(std::time::Duration::from_secs(2)),
+            Some(61),
+            Some(1_234),
+            None,
+            /*runtime_metrics*/ None,
+        );
+        let rendered = render_lines(&cell.display_lines(/*width*/ 200));
+        let raw = render_lines(&cell.raw_lines());
+
+        assert_eq!(rendered.len(), 1);
+        assert!(rendered[0].contains("Reasoning 1,234 tokens"));
+        assert_eq!(
+            raw,
+            vec!["Worked for 1m 01s • Reasoning 1,234 tokens".to_string()]
+        );
     }
 
     #[test]

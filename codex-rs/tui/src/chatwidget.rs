@@ -2648,6 +2648,9 @@ impl ChatWidget {
                     turn_duration_ms
                         .map(|duration_ms| Duration::from_millis(duration_ms.max(0) as u64)),
                     elapsed_seconds,
+                    self.token_info
+                        .as_ref()
+                        .map(|info| info.last_token_usage.reasoning_output_tokens),
                     (!turn_activity_summary.is_empty()).then_some(turn_activity_summary),
                     runtime_metrics,
                 ));
@@ -4527,6 +4530,7 @@ impl ChatWidget {
                     None,
                     None,
                     elapsed_seconds,
+                    None,
                     None,
                     None,
                 ));
